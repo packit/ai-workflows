@@ -1,10 +1,10 @@
-"""Konflux validates scratch refs before publishing the live MR branch.
+"""Build publication ordering and inheritance fallback workflow tests.
 
 Copr (default) builds from a local SRPM and pushes only after a green build;
 Konflux builds from a pushed git ref, so the backport workflow must commit and
 push a scratch ref, build from it, and publish the MR branch afterwards. These
 tests drive the real workflow routing (via ``set_start`` + handler overrides,
-mirroring test_backport_build_logs.py) and assert the ordering.
+mirroring test_backport_build_logs.py) and assert ordering and fallback comments.
 """
 
 from contextlib import asynccontextmanager
@@ -15,7 +15,13 @@ from flexmock import flexmock
 
 from ymir.agents import backport_agent
 from ymir.agents import tasks as agent_tasks
-from ymir.common.models import BackportOutputSchema, BuildOutputSchema, LogOutputSchema
+from ymir.agents.ystream_inherit import BrewSource, IntegratedChange
+from ymir.common.models import (
+    BackportOutputSchema,
+    BuildOutputSchema,
+    LogOutputSchema,
+    ShippedZStreamCandidate,
+)
 
 
 def _prepare_common_mocks(monkeypatch):
@@ -55,6 +61,27 @@ def _base_state(state, *, local_clone):
         status="Backported",
         srpm_path=local_clone / "expat.src.rpm",
         error=None,
+    )
+
+
+def _inherited_source(state):
+    state.inherit_mr_description = "Inherited fix"
+    state.inherit_candidate = ShippedZStreamCandidate(
+        issue_key="RHEL-456",
+        fixed_in_build="expat-1.0-1.el10",
+        fix_versions=["rhel-10.0.z"],
+    )
+    state.inherit_source = BrewSource(
+        nvr="expat-1.0-1.el10",
+        repository_url="https://gitlab.example/expat",
+        commit_sha="c" * 40,
+        epoch=0,
+        version="1.0",
+    )
+    state.inherit_change = IntegratedChange(
+        commit_sha="d" * 40,
+        commit_message="Inherited fix",
+        changed_files=["expat.spec"],
     )
 
 
@@ -164,6 +191,7 @@ async def test_inherit_build_validates_scratch_commit(monkeypatch, tmp_path, dry
 
     def start_at(workflow, state, options=None):
         _base_state(state, local_clone=local_clone)
+        _inherited_source(state)
         state.inherit_local_commit = "b" * 40
         state.inherit_build_attempts = 1
         workflow.set_start("validate_inherited_build")
@@ -177,7 +205,7 @@ async def test_inherit_build_validates_scratch_commit(monkeypatch, tmp_path, dry
         return run_workflow(workflow, state, options)
 
     monkeypatch.setattr(Workflow, "run", start_at)
-    await backport_agent.run_workflow(
+    state = await backport_agent.run_workflow(
         package="expat",
         dist_git_branch="c10s",
         upstream_patches=["https://example/patch.patch"],
@@ -188,6 +216,7 @@ async def test_inherit_build_validates_scratch_commit(monkeypatch, tmp_path, dry
     )
 
     assert "build" in calls
+    assert (state.inherited_publication_checkpoint is not None) is build_success
     assert pushes[0].startswith("ymir-RHEL-123-ymir-konflux-build-")
     if dry_run or not build_success:
         assert "ymir-RHEL-123" not in pushes
@@ -197,6 +226,72 @@ async def test_inherit_build_validates_scratch_commit(monkeypatch, tmp_path, dry
     else:
         assert pushes[1] == "ymir-RHEL-123"
         assert "open_mr" in calls
+
+
+@pytest.mark.asyncio
+async def test_failed_inherited_build_falls_back_without_inherited_jira_comment(monkeypatch, tmp_path):
+    monkeypatch.setenv("BUILD_BACKEND", "copr")
+    local_clone = tmp_path / "expat"
+    local_clone.mkdir()
+    comments = []
+
+    async def _commit(*_args):
+        return "a" * 40
+
+    async def _build(**_kwargs):
+        return BuildOutputSchema(success=False, error="inherited build failed")
+
+    async def _git(*_args, **_kwargs):
+        return "", ""
+
+    async def _reset(*_args):
+        return None
+
+    async def _comment(**kwargs):
+        comments.append(kwargs["comment_text"])
+
+    flexmock(agent_tasks).should_receive("commit_changes").replace_with(_commit).once()
+    flexmock(backport_agent).should_receive("run_build").replace_with(_build).once()
+    flexmock(backport_agent).should_receive("check_subprocess").replace_with(_git).twice()
+    flexmock(backport_agent).should_receive("reset_inherit_attempt").replace_with(_reset).once()
+    flexmock(agent_tasks).should_receive("comment_in_jira").replace_with(_comment).once()
+    _prepare_common_mocks(monkeypatch)
+
+    run_workflow = Workflow.run
+
+    def start_at(workflow, state, options=None):
+        _base_state(state, local_clone=local_clone)
+        _inherited_source(state)
+        state.inherit_saved_head = "b" * 40
+        state.inherit_build_attempts = 1
+        state.inherit_commit_message = "Inherited fix"
+        workflow.set_start("commit_inherited_change")
+
+        async def normal_backport(state):
+            state.backport_result = BackportOutputSchema(
+                success=True, status="Normal backport succeeded", srpm_path=None, error=None
+            )
+            state.merge_request_url = "https://mr.example/normal"
+            return "comment_in_jira"
+
+        workflow.steps["prepare_normal_backport"].handler = normal_backport
+        return run_workflow(workflow, state, options)
+
+    monkeypatch.setattr(Workflow, "run", start_at)
+    state = await backport_agent.run_workflow(
+        package="expat",
+        dist_git_branch="c10s",
+        upstream_patches=["https://example/patch.patch"],
+        jira_issue="RHEL-123",
+        cve_id=None,
+        dry_run=False,
+        max_build_attempts=1,
+        backport_agent_factory=lambda *_: None,
+    )
+
+    assert state.inheritance_disabled
+    assert comments == ["https://mr.example/normal"]
+    assert state.inherited_publication_checkpoint is None
 
 
 @pytest.mark.asyncio

@@ -138,9 +138,11 @@ URLs. Any other pre-push source failure also resets the checkout and starts the
 normal backport; only an environmental cleanup failure permits one fresh-clone
 retry of the same leading source. An already-present fix is a routing error, not
 a successful no-op. After a push, recovery never creates a second fallback
-backport. The queue task stores a publication checkpoint and a retry verifies the
-fork branch still points at the validated commit before it resumes at MR
-creation. Routing-invariant failures are terminal and are not requeued.
+backport. The publication checkpoint is created only after build validation
+succeeds and is cleared if inheritance is abandoned. The queue task stores it,
+and a retry verifies that the fork branch still points at the validated commit
+before it resumes at MR creation. Routing-invariant failures are terminal and
+are not requeued.
 
 
 ### Build validation

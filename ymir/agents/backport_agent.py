@@ -701,8 +701,10 @@ def _disable_ystream_inheritance(
 ) -> None:
     """Make normal backport fallback durable across clone and queue retries."""
     state.inheritance_disabled = True
+    state.inherited_publication_checkpoint = None
     if task_metadata is not None:
         task_metadata[_YSTREAM_INHERITANCE_DISABLED] = True
+        task_metadata.pop(_INHERITED_PUBLICATION_CHECKPOINT, None)
 
 
 def _inherit_prep_error(
@@ -1510,7 +1512,15 @@ async def run_workflow(
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
                 )
-            if build_result.success or build_result.is_timeout:
+            if build_result.success:
+                try:
+                    state.inherited_publication_checkpoint = _build_inherited_publication_checkpoint(state)
+                except Exception as error:
+                    logger.warning("Could not checkpoint validated inherited commit: %s", error)
+                    if not await cleanup_inherit_attempt(state):
+                        return handle_inherit_cleanup_failure(state)
+                    _disable_ystream_inheritance(state, task_metadata)
+                    return "prepare_normal_backport"
                 if dry_run:
                     return "submit_consolidation_job"
                 return "push_inherited_change"
@@ -1716,7 +1726,6 @@ async def run_workflow(
                     state.local_clone,
                     state.inherit_commit_message,
                 )
-                state.inherited_publication_checkpoint = _build_inherited_publication_checkpoint(state)
             except Exception as error:
                 logger.warning("Could not create inherited commit: %s", error)
                 if not await cleanup_inherit_attempt(state):

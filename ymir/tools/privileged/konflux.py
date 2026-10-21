@@ -59,6 +59,7 @@ DEFAULT_TIMEOUT = (20, 60)
 # Tekton PipelineRun status reasons.
 # https://github.com/tektoncd/pipeline/blob/main/pkg/apis/pipeline/v1/pipelinerun_types.go
 SUCCESSFUL_STATES = frozenset({"Succeeded", "Completed"})
+PIPELINERUN_TIMEOUT_REASON = "PipelineRunTimeout"
 
 # Single-arch scratch validation. Use this preference order while respecting
 # the SRPM's ExclusiveArch and ExcludeArch tags.
@@ -607,18 +608,23 @@ class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         tag = _sanitize_tag(f"{tool_input.package_name}-{short_sha}-{run_id}")
         ocistorage = f"{config.container_image}:{tag}"
 
-        with tool_error_context(
-            "Failed to create the Konflux git-auth secret",
-            package=tool_input.package_name,
-            git_url=tool_input.git_url,
-        ):
-            secret_body = _git_auth_secret_body(tool_input.git_url, config.gitlab_token)
-            secret_name = await asyncio.to_thread(client.create_secret, secret_body)
-
+        secret_name: str | None = None
+        secret_creation: asyncio.Task[str] | None = None
         run_to_cleanup: str | None = None
         submission: asyncio.Task[str] | None = None
         run_terminal = False
         try:
+            with tool_error_context(
+                "Failed to create the Konflux git-auth secret",
+                package=tool_input.package_name,
+                git_url=tool_input.git_url,
+            ):
+                secret_body = _git_auth_secret_body(tool_input.git_url, config.gitlab_token)
+                # The API request may complete after cancellation. Keep the
+                # task so cleanup can wait for its returned Secret name.
+                secret_creation = asyncio.create_task(asyncio.to_thread(client.create_secret, secret_body))
+                secret_name = await asyncio.shield(secret_creation)
+
             build_target_branch = await _map_centos_build_target(tool_input.target_branch)
             body = _pipelinerun_body(
                 config=config,
@@ -652,10 +658,14 @@ class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 submitted_name,
                 ocistorage,
             )
-            result = await self._poll_to_completion(client, submitted_name, config)
-            run_terminal = not result.result.is_timeout
+            result, run_terminal = await self._poll_to_completion(client, submitted_name, config)
             return result
         finally:
+            if secret_creation is not None and secret_name is None:
+                try:
+                    secret_name = await asyncio.shield(secret_creation)
+                except Exception as error:
+                    logger.warning("Konflux git-auth Secret creation did not return a name: %s", error)
             if submission is not None:
                 try:
                     run_to_cleanup = await asyncio.shield(submission)
@@ -667,7 +677,10 @@ class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                         run_name,
                         error,
                     )
-            await asyncio.shield(self._cleanup_git_auth(client, secret_name, run_to_cleanup, run_terminal))
+            if secret_name is not None:
+                await asyncio.shield(
+                    self._cleanup_git_auth(client, secret_name, run_to_cleanup, run_terminal)
+                )
 
     async def _cleanup_git_auth(
         self,
@@ -721,7 +734,8 @@ class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         client: KonfluxClient,
         run_name: str,
         config: KonfluxConfig,
-    ) -> BuildPackageToolOutput:
+    ) -> tuple[BuildPackageToolOutput, bool]:
+        """Return the build result and whether Tekton reached a terminal state."""
         start = time.monotonic()
         while time.monotonic() - start < KONFLUX_BUILD_TIMEOUT + KONFLUX_TIMEOUT_GRACE_PERIOD:
             pipelinerun = await asyncio.to_thread(client.get_pipelinerun, run_name)
@@ -731,22 +745,27 @@ class KonfluxBuildTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 continue
             if status in SUCCESSFUL_STATES:
                 logger.info("Konflux build %s succeeded", run_name)
-                return BuildPackageToolOutput(result=BuildResult(success=True))
+                return BuildPackageToolOutput(result=BuildResult(success=True)), True
             message = _pipelinerun_message(pipelinerun) or status
             logger.info("Konflux build %s failed: %s (%s)", run_name, status, message)
             log_urls = await asyncio.to_thread(_collect_failure_log_urls, client, pipelinerun or {}, config)
-            return BuildPackageToolOutput(
-                result=BuildResult(
-                    success=False,
-                    error_message=f"PipelineRun {run_name} finished as {status}: {message}",
-                    artifacts_urls=log_urls or None,
-                )
+            return (
+                BuildPackageToolOutput(
+                    result=BuildResult(
+                        success=False,
+                        is_timeout=status == PIPELINERUN_TIMEOUT_REASON,
+                        error_message=f"PipelineRun {run_name} finished as {status}: {message}",
+                        artifacts_urls=log_urls or None,
+                    )
+                ),
+                True,
             )
 
         message = f"Reached timeout for Konflux build {run_name}"
         logger.info(message)
-        return BuildPackageToolOutput(
-            result=BuildResult(success=False, is_timeout=True, error_message=message)
+        return (
+            BuildPackageToolOutput(result=BuildResult(success=False, is_timeout=True, error_message=message)),
+            False,
         )
 
 

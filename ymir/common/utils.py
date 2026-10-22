@@ -27,6 +27,7 @@ from specfile.sources import Patches, Sources
 from specfile.utils import EVR
 
 from ymir.common.base_utils import is_cs_branch
+from ymir.common.config import current_rhel_config_override
 from ymir.common.constants import BREWHUB_URL, CENTOS_STREAM_KOJIHUB_URL
 from ymir.common.logging_setup import get_trajectory_writeable
 from ymir.common.version_utils import (
@@ -178,6 +179,10 @@ async def mcp_tools(
             such as ``{"jira_issue": "RHEL-12345"}`` so that the
             gateway can scope operations per-caller.
     """
+    if (override := current_rhel_config_override.get()) is not None:
+        call_meta = call_meta.copy() if call_meta else {}
+        call_meta["rhel_config_override"] = override
+
     connected = False
     for attempt in range(max_retries):
         try:

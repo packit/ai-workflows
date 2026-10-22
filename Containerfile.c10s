@@ -33,6 +33,7 @@ RUN dnf -y install --allowerasing \
       rpm-build \
       rpmdevtools \
       rpmlint \
+      tmt \
       autoconf \
       automake \
       gettext-devel \
@@ -55,6 +56,7 @@ RUN dnf -y install --allowerasing \
       python-srpm-macros \
       pyproject-srpm-macros \
       rust-toolset-srpm-macros \
+      cargo-rpm-macros \
       perl-srpm-macros \
       perl-ExtUtils-MakeMaker \
       javapackages-tools \
@@ -73,9 +75,8 @@ COPY openinference-reasoning.patch /tmp
 COPY openinference-streaming.patch /tmp
 
 RUN pip3 install --no-cache-dir \
-      "litellm!=1.82.7,!=1.82.8,!=1.92.0" \
-      beeai-framework[vertexai,mcp,duckduckgo]==0.1.83 \
-      "mcp<1.30" \
+      "litellm<1.106.0,!=1.82.7,!=1.82.8,!=1.92.0" \
+      beeai-framework[vertexai,mcp,duckduckgo]==0.1.85 \
       google-cloud-aiplatform \
       openinference-instrumentation-beeai==0.1.21 \
       arize-phoenix-otel \

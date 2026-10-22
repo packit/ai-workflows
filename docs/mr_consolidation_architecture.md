@@ -84,6 +84,14 @@ ordering, stale-HEAD filtering, and per-commit consolidation need no special
 case. Inheritance provenance (source Jira key, Brew NVR, and commit SHA) remains
 in the original MR description.
 
+Each new consolidated MR includes a link to its own execution trace before
+the shared footer. Source MR descriptions are collapsed by default and retain
+their trace links. When a source is an earlier consolidation, its description
+and child MRs stay nested inside that dropdown. The current run's link does
+not depend on Jira keys in commit footers; it is omitted when tracing or
+`TRACE_VIEWER_URL` is unavailable. Existing issue-overview links in source MRs
+are preserved.
+
 **`pick_next_job()`** — Prioritizes `recovery` over `pending`, then atomically
 deletes the selected field and creates the canonical `active` field. The same
 Lua script also initializes the heartbeat. Multiple concurrent workers cannot

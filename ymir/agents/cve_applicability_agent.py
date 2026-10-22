@@ -78,13 +78,13 @@ def build_applicability_prompt(
             f"\nCheck whether '{package}' actually uses the affected API/module "
             f"of '{dep_component}' (e.g. check Go imports, C includes, "
             f"Python imports, linked libraries)."
-            f"\n\nREBUILD CAUTION: The bar for declaring a rebuild 'not affected' "
-            f"is very high. A false negative means skipping a security rebuild "
-            f"entirely. Only classify as not affected if you have strong, concrete "
-            f"evidence — e.g. the package provably does not import/link/use the "
-            f"affected module at all. If there is any ambiguity — transitive "
-            f"dependencies, conditional imports, build-time usage, or you simply "
-            f"cannot verify the full dependency chain — classify as 'Inconclusive'.\n"
+            f"\n\nREBUILD CAUTION: Require concrete source/build evidence for 'not affected'. "
+            f"If that evidence establishes that the vulnerable operation cannot execute, "
+            f"use 'Vulnerable Code not in Execute Path', even with a transitive dependency. "
+            f"Trace relevant direct/transitive calls, conditional features and build-time "
+            f"usage against the CVE's trigger conditions. A CLI label or absence of direct "
+            f"imports alone is insufficient. If relevant paths or trigger conditions "
+            f"remain unverified, classify as 'Inconclusive'.\n"
         )
 
     if patch_files:
@@ -169,8 +169,8 @@ def build_applicability_prompt(
            the specific affected API/module of the dependency. Check
            direct imports, linked libraries, and build dependencies.
            Remember: transitive dependencies and build-time usage
-           also count — a package that vendors or bundles the
-           dependency is affected even without a direct import.
+           also count. Vendoring or bundling establishes presence;
+           determine whether the vulnerable operation can execute.
 
         Classify using Red Hat justification categories:
         - "Component not Present" — the affected component/subcomponent

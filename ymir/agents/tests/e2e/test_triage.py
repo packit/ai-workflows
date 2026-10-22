@@ -4,6 +4,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 from tabulate import tabulate
@@ -11,13 +12,21 @@ from tabulate import tabulate
 from ymir.agents.metrics_middleware import MetricsMiddleware
 from ymir.agents.observability import setup_observability
 from ymir.agents.triage_agent import TriageState, create_triage_agent, run_workflow
+from ymir.common.config import rhel_config_override
 from ymir.common.mock_repos import (
     apply_zstream_override,
     cleanup_mock_gitconfig,
     load_all_fixture_configs,
     setup_mock_repos,
 )
-from ymir.common.models import BackportData, NotAffectedData, RebaseData, Resolution, TriageOutputSchema
+from ymir.common.models import (
+    BackportData,
+    NotAffectedData,
+    PostponedData,
+    RebaseData,
+    Resolution,
+    TriageOutputSchema,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +41,7 @@ class TriageAgentTestCase:
     finished_state: TriageState | None = None
     error: BaseException | None = None
     zstream_override: dict[str, str] | None = None
+    rhel_config_override: dict[str, Any] | None = None
     skip_reason: str | None = None
 
     async def run(self) -> None:
@@ -49,7 +59,10 @@ class TriageAgentTestCase:
             return triage_agent
 
         try:
-            with _span_processor.jira_issue_context(self.input):
+            with (
+                rhel_config_override(self.rhel_config_override),
+                _span_processor.jira_issue_context(self.input),
+            ):
                 self.finished_state = await run_workflow(self.input, False, testing_factory)
         except BaseException as e:
             self.error = e
@@ -61,6 +74,36 @@ class TriageAgentTestCase:
 
 
 test_cases = [
+    # A TLS server must retain its rebuild for the same CVE as the butane case.
+    TriageAgentTestCase(
+        input="RHEL-285393",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.POSTPONED_DEPENDENCY,
+            data=PostponedData(
+                summary="Rebuild waiting for the golang fix for the TLS server vulnerability.",
+                pending_issues=["RHEL-285391"],
+                jira_issue="RHEL-285393",
+                package="opentelemetry-collector",
+                fix_version="rhel-10.3.z",
+                cve_id="CVE-2026-97031",
+                dependency_issue="RHEL-285391",
+                dependency_component="golang",
+            ),
+        ),
+    ),
+    TriageAgentTestCase(
+        input="RHEL-278652",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.NOT_AFFECTED,
+            data=NotAffectedData(
+                package="butane",
+                jira_issue="RHEL-278652",
+                cve_id="CVE-2026-97031",
+                explanation="Server-side TLS vulnerability is not reachable from butane.",
+                justification_category="Vulnerable Code not in Execute Path",
+            ),
+        ),
+    ),
     TriageAgentTestCase(
         input="RHEL-29712",
         expected_output=TriageOutputSchema(
@@ -308,26 +351,33 @@ def mock_centos_stream_repos(tmp_path_factory):
     else:
         repo_dir = tmp_path_factory.mktemp("centos_stream_repos")
 
-    for issue_key, config in configs.items():
-        repos = config.get("repos", [])
-        if not repos:
-            continue
+    try:
+        for issue_key, config in configs.items():
+            rhel_override = config.get("rhel_config_override")
 
-        setup_mock_repos(repos, issue_key, repo_dir)
+            for tc in test_cases:
+                if tc.input == issue_key:
+                    tc.zstream_override = config.get("zstream_override")
+                    tc.rhel_config_override = rhel_override
+                    break
 
-        for tc in test_cases:
-            if tc.input == issue_key:
-                tc.zstream_override = config.get("zstream_override")
-                break
+            if not (repos := config.get("repos", [])):
+                continue
 
-    yield
+            setup_mock_repos(repos, issue_key, repo_dir)
 
-    cleanup_mock_gitconfig()
+        yield
+    finally:
+        cleanup_mock_gitconfig()
 
 
 @pytest.fixture(scope="session", autouse=True)
-def run_test_cases_concurrently(request, mock_centos_stream_repos):
-    """Execute selected triage test cases concurrently via asyncio.gather, then collect metrics."""
+def run_test_cases_concurrently(request, mock_centos_stream_repos, observability_fixture):
+    """Execute selected triage test cases concurrently via asyncio.gather, then collect metrics.
+
+    ``observability_fixture`` is an ordering dependency: test cases need its
+    initialized span processor before their workflows start.
+    """
     selected = {
         item.callspec.params["test_case"]
         for item in request.session.items
@@ -393,3 +443,21 @@ def test_triage_agent(test_case: TriageAgentTestCase, observability_fixture):
         assert isinstance(real_output.data, NotAffectedData)
         assert real_output.data.explanation
         assert real_output.data.justification_category
+        if expected_output.data.justification_category:
+            assert real_output.data.justification_category == expected_output.data.justification_category
+        if expected_output.data.package:
+            assert real_output.data.package == expected_output.data.package
+        if expected_output.data.cve_id:
+            assert real_output.data.cve_id == expected_output.data.cve_id
+    elif expected_output.resolution == Resolution.POSTPONED_DEPENDENCY:
+        assert isinstance(real_output.data, PostponedData)
+        # Retaining a rebuild because analysis failed does not verify applicability.
+        assert test_case.finished_state.target_branch
+        assert not test_case.finished_state.applicability_check_skipped
+        assert not test_case.finished_state.applicability_used_fallback
+        assert real_output.data.package == expected_output.data.package
+        assert real_output.data.fix_version == expected_output.data.fix_version
+        assert real_output.data.cve_id == expected_output.data.cve_id
+        assert real_output.data.pending_issues == expected_output.data.pending_issues
+        assert real_output.data.dependency_issue == expected_output.data.dependency_issue
+        assert real_output.data.dependency_component == expected_output.data.dependency_component

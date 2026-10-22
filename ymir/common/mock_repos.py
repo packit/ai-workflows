@@ -23,6 +23,9 @@ Each JSON file contains::
 
     {
         "zstream_override": {"9": "rhel-9.2.z"},   // optional
+        "rhel_config_override": {                    // optional
+            "current_y_streams": {"10": "rhel-10.2"}
+        },
         "zstream_build_ref": "a983ca344462...",     // optional fixed E2E Brew baseline
         "input": {
             "shipped_zstream_candidates": [        // optional; Y-stream inherit e2e

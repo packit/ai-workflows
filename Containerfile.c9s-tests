@@ -16,6 +16,7 @@ RUN dnf -y install --allowerasing \
       rpmdevtools \
       rpmautospec-rpm-macros \
       rpmlint \
+      tmt \
       python3.11 \
       python3.11-pip \
       python3.11-devel \
@@ -25,9 +26,8 @@ RUN dnf -y install --allowerasing \
 RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
     && /opt/beeai-venv/bin/pip install --upgrade pip \
     && /opt/beeai-venv/bin/pip install --no-cache-dir \
-       "litellm!=1.82.7,!=1.82.8" \
-       beeai-framework[vertexai,mcp,duckduckgo]==0.1.83 \
-       "mcp<1.30" \
+       "litellm<1.106.0,!=1.82.7,!=1.82.8" \
+       beeai-framework[vertexai,mcp,duckduckgo]==0.1.85 \
        openinference-instrumentation-beeai==0.1.21 \
        arize-phoenix-otel \
        aiohttp>=3.12.15 \

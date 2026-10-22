@@ -74,11 +74,15 @@ def get_chat_model() -> ChatModel:
         settings=settings,
         allow_parallel_tool_calls=bool(reasoning_effort),
     )
-    # beeai uses "vertexai" as the litellm provider ID, but litellm only
-    # recognizes "vertex_ai" for adaptive thinking detection (Claude 4.6+).
-    # Without this, litellm sends thinking.type=enabled which opus-4-8 rejects.
-    if hasattr(model, "_litellm_provider_id") and model._litellm_provider_id == "vertexai":
+    if getattr(model, "_litellm_provider_id", None) == "vertexai":
+        # BeeAI uses "vertexai" as the litellm provider ID, but litellm only
+        # recognizes "vertex_ai" for adaptive thinking detection (Claude 4.6+).
+        # Without this, litellm sends thinking.type=enabled which opus-4-8 rejects.
         model._litellm_provider_id = "vertex_ai"
+        if "claude" in chat_model.lower():
+            # Preserve caching for Anthropic models accessed through Vertex AI.
+            # BeeAI 0.1.84 disables it by default for all Vertex models.
+            model.allow_prompt_caching = True
     if "gemini" in chat_model:
         # disable `required` for Gemini models
         model.tool_choice_support = {"single", "none", "auto"}

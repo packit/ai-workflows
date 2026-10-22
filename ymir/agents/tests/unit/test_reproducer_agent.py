@@ -22,6 +22,8 @@ from ymir.agents.reproducer_agent import (
     _match_regression_sibling_mr,
     _needs_merge_request,
     _prepare_reproducer_branch,
+    _render_fmf_templates,
+    _render_prompt,
     _reproducer_mr_title_tags,
     _resolve_reproducer_mr_target,
     _resolve_test_dir,
@@ -33,7 +35,13 @@ from ymir.agents.reproducer_agent import (
 from ymir.agents.tasks import InvalidReproducerConfigError, fetch_reproducer_config
 from ymir.common.base_utils import check_subprocess
 from ymir.common.constants import JiraLabels
-from ymir.common.models import MergeRequestDetails, ReproducerInputSchema, ReproducerOutputSchema, Task
+from ymir.common.models import (
+    MergeRequestDetails,
+    PackageReproducerConfig,
+    ReproducerInputSchema,
+    ReproducerOutputSchema,
+    Task,
+)
 
 
 def _output(**overrides) -> ReproducerOutputSchema:
@@ -47,6 +55,18 @@ def _output(**overrides) -> ReproducerOutputSchema:
     }
     data.update(overrides)
     return ReproducerOutputSchema(**data)
+
+
+@pytest.mark.parametrize("result_issue", ["RHEL-12345", "RHEL-99999"])
+def test_reproducer_description_links_to_input_issue_traces(monkeypatch, result_issue):
+    monkeypatch.setenv("TRACE_VIEWER_URL", "https://trace.example")
+    result = _output(jira_issue=result_issue)
+    input_data = ReproducerInputSchema(jira_issue="RHEL-12345", package=result.package)
+
+    description = r_agent._build_mr_description(result, input_data)
+
+    assert "[View all traces for RHEL-12345](https://trace.example/#/issues/RHEL-12345)" in description
+    assert "https://trace.example/#/issues/RHEL-99999" not in description
 
 
 @pytest.mark.parametrize(
@@ -890,6 +910,43 @@ async def test_process_task_proceeds_when_no_terminal_labels(
 
 
 @pytest.mark.asyncio
+async def test_process_task_passes_reproducer_config_to_workflow(_mock_env_vars, _mock_workflow_lock):
+    config = PackageReproducerConfig(
+        enabled=True,
+        fmf={"require": ["runtime-package"]},
+    )
+
+    async def _mock_config(*_args, **_kwargs):
+        return config
+
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [], "New"
+
+    captured = {}
+
+    async def _mock_workflow(*_args, **kwargs):
+        captured.update(kwargs)
+        result = flexmock(success=True, retryable_error=False, lock_deferred=False, summary="ok")
+        result.should_receive("model_dump_json").and_return("{}")
+        return flexmock(result=result)
+
+    @contextlib.asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    flexmock(agent_tasks).should_receive("fetch_reproducer_config").replace_with(_mock_config)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
+    flexmock(r_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(r_agent).should_receive("run_workflow").once().replace_with(_mock_workflow)
+
+    await _run_process_task(_make_reproducer_payload())
+
+    assert captured["reproducer_config"] is config
+
+
+@pytest.mark.asyncio
 async def test_process_task_blocks_when_workflow_lock_busy(_mock_env_vars, _mock_reproducer_config_enabled):
     """Busy create/adapt locks park the task until the holder releases."""
 
@@ -941,6 +998,81 @@ async def test_fetch_reproducer_config_parses_enabled():
 
 
 @pytest.mark.asyncio
+async def test_fetch_reproducer_config_parses_fmf_metadata():
+    async def _mock_run_tool(*_args, **_kwargs):
+        return (
+            "reproducer:\n"
+            "  enabled: true\n"
+            "  fmf:\n"
+            "    require: [runtime-package]\n"
+            "    recommend: [optional-tool]\n"
+            "    environment:\n"
+            "      PACKAGE_SETTING: value\n"
+            "    duration: 30m\n"
+            "    tier: '1'\n"
+            "    tag: [package-specific]\n"
+            "  context:\n"
+            "    by_fix_version:\n"
+            "      rhel-10.3:\n"
+            "        runtime_version: '3.3'\n"
+        )
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+    config = await fetch_reproducer_config("bind", [])
+
+    assert config.fmf.require == ["runtime-package"]
+    assert config.fmf.recommend == ["optional-tool"]
+    assert config.fmf.environment == {"PACKAGE_SETTING": "value"}
+    assert config.fmf.duration == "30m"
+    assert config.fmf.tier == "1"
+    assert config.fmf.tag == ["package-specific"]
+    assert config.context.by_fix_version == {"rhel-10.3": {"runtime_version": "3.3"}}
+
+
+@pytest.mark.asyncio
+async def test_fetch_reproducer_config_rejects_unknown_fmf_metadata():
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "reproducer:\n  enabled: true\n  fmf:\n    unsupported: value\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    with pytest.raises(InvalidReproducerConfigError, match="malformed"):
+        await fetch_reproducer_config("bind", [])
+
+
+def test_render_prompt_includes_package_fmf_metadata():
+    input_data = ReproducerInputSchema(
+        jira_issue="RHEL-12345",
+        package="bind",
+        fix_version="rhel-10.3",
+    )
+    config = PackageReproducerConfig(
+        enabled=True,
+        fmf={
+            "require": ["runtime-package"],
+            "recommend": ["optional-tool"],
+            "environment": {"PACKAGE_SETTING": "${runtime_version}"},
+            "duration": "30m",
+        },
+        context={"by_fix_version": {"rhel-10.3": {"runtime_version": "3.3"}}},
+    )
+
+    prompt = _render_prompt(input_data, reproducer_config=config)
+
+    assert "Package-specific FMF metadata from `ymir.yaml`" in prompt
+    assert '"runtime-package"' in prompt
+    assert '"optional-tool"' in prompt
+    assert '"PACKAGE_SETTING": "3.3"' in prompt
+    assert '"duration": "30m"' in prompt
+    assert "${runtime_version}" not in prompt
+
+
+def test_render_fmf_templates_rejects_unknown_variable():
+    with pytest.raises(ValueError, match="Unknown FMF context variable: missing"):
+        _render_fmf_templates({"environment": {"SETTING": "${missing}"}}, {})
+
+
+@pytest.mark.asyncio
 async def test_fetch_reproducer_config_parses_disabled():
     async def _mock_run_tool(*_args, **_kwargs):
         return "reproducer:\n  enabled: false\n"
@@ -981,3 +1113,71 @@ async def test_process_task_skips_when_reproducer_disabled(_mock_env_vars):
     flexmock(r_agent).should_receive("run_workflow").never()
     flexmock(r_agent).should_receive("try_acquire_reproducer_lock").never()
     await _run_process_task(_make_reproducer_payload())
+
+
+@pytest.mark.asyncio
+async def test_run_tmt_lint_passes(tmp_path, monkeypatch):
+    tests_clone = tmp_path / "tests-bind"
+    test_dir = tests_clone / "Regression" / "RHEL-1"
+    test_dir.mkdir(parents=True)
+    (test_dir / "main.fmf").write_text("summary: demo\ntest: ./runtest.sh\n")
+    (tests_clone / ".fmf").mkdir()
+    (tests_clone / ".fmf" / "version").write_text("1\n")
+
+    async def _fake_run_subprocess(cmd, shell=False, cwd=None, env=None):
+        assert cmd == ["tmt", "lint", "/Regression/RHEL-1"]
+        assert cwd == tests_clone
+        return 0, "pass\n", None
+
+    monkeypatch.setattr(r_agent, "run_subprocess", _fake_run_subprocess)
+    ok, output = await r_agent.run_tmt_lint(tests_clone, "Regression/RHEL-1")
+    assert ok is True
+    assert "pass" in output
+
+
+@pytest.mark.asyncio
+async def test_run_tmt_lint_fails_with_output(tmp_path, monkeypatch):
+    tests_clone = tmp_path / "tests-bind"
+    test_dir = tests_clone / "Regression" / "RHEL-1"
+    test_dir.mkdir(parents=True)
+    (test_dir / "main.fmf").write_text("summary: demo\n")
+
+    async def _fake_run_subprocess(cmd, shell=False, cwd=None, env=None):
+        return 1, "error: missing test key\n", None
+
+    monkeypatch.setattr(r_agent, "run_subprocess", _fake_run_subprocess)
+    ok, output = await r_agent.run_tmt_lint(tests_clone, "Regression/RHEL-1")
+    assert ok is False
+    assert "missing test key" in output
+    assert (tests_clone / ".fmf" / "version").is_file()
+
+
+@pytest.mark.asyncio
+async def test_run_tmt_lint_missing_metadata(tmp_path):
+    tests_clone = tmp_path / "tests-bind"
+    test_dir = tests_clone / "Regression" / "RHEL-1"
+    test_dir.mkdir(parents=True)
+    # Dir must have at least one file so _resolve_test_dir doesn't return None
+    (test_dir / "runtest.sh").write_text("#!/bin/bash\nexit 1\n")
+    ok, output = await r_agent.run_tmt_lint(tests_clone, "Regression/RHEL-1")
+    assert ok is False
+    assert "no FMF metadata" in output
+
+
+@pytest.mark.asyncio
+async def test_run_tmt_lint_no_tests_found(tmp_path, monkeypatch):
+    """tmt lint exit 0 with 'no tests found' must be treated as failure."""
+    tests_clone = tmp_path / "tests-bind"
+    test_dir = tests_clone / "Regression" / "RHEL-1"
+    test_dir.mkdir(parents=True)
+    (test_dir / "main.fmf").write_text("summary: broken\n")
+    (tests_clone / ".fmf").mkdir()
+    (tests_clone / ".fmf" / "version").write_text("1\n")
+
+    async def _fake_run_subprocess(cmd, shell=False, cwd=None, env=None):
+        return 0, "No tests found\n", None
+
+    monkeypatch.setattr(r_agent, "run_subprocess", _fake_run_subprocess)
+    ok, output = await r_agent.run_tmt_lint(tests_clone, "Regression/RHEL-1")
+    assert ok is False
+    assert "found no test" in output

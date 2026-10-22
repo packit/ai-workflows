@@ -22,6 +22,7 @@ from ymir.agents.tests.e2e.backport_agent.artifact_capture import (
     capture_backport_artifacts,
 )
 from ymir.agents.tests.e2e.backport_agent.evaluation import BackportEvaluator
+from ymir.common.config import rhel_config_override
 from ymir.common.mock_repos import (
     apply_zstream_override,
     cleanup_mock_gitconfig,
@@ -42,6 +43,7 @@ class BackportAgentTestCase:
         self.input: dict = config["input"]
         self.expected: dict = config.get("expected", {})
         self.jira_issue: str = self.input["jira_issue"]
+        self.rhel_config_override: dict | None = config.get("rhel_config_override")
         self.slow: bool = config.get("slow", False)
         self.metrics: dict = None
         self.finished_state: BackportState | None = None
@@ -75,7 +77,10 @@ class BackportAgentTestCase:
             return agent
 
         try:
-            with _span_processor.jira_issue_context(self.jira_issue):
+            with (
+                rhel_config_override(self.rhel_config_override),
+                _span_processor.jira_issue_context(self.jira_issue),
+            ):
                 self.finished_state = await run_workflow(
                     package=self.input["package"],
                     dist_git_branch=self.input["dist_git_branch"],
@@ -195,21 +200,21 @@ def mock_centos_stream_repos(request):
         shutil.rmtree(SHARED_BARE_REPOS_DIR)
     SHARED_BARE_REPOS_DIR.mkdir(parents=True, exist_ok=True)
 
-    for issue_key, config in configs.items():
-        repos = config.get("repos", [])
-        if not repos:
-            continue
+    try:
+        for issue_key, config in configs.items():
+            for tc in cases_to_run:
+                if tc.jira_issue == issue_key:
+                    tc.zstream_override = config.get("zstream_override")
+                    break
 
-        setup_mock_repos(repos, issue_key, SHARED_BARE_REPOS_DIR)
+            if not (repos := config.get("repos", [])):
+                continue
 
-        for tc in cases_to_run:
-            if tc.jira_issue == issue_key:
-                tc.zstream_override = config.get("zstream_override")
-                break
+            setup_mock_repos(repos, issue_key, SHARED_BARE_REPOS_DIR)
 
-    yield configs
-
-    cleanup_mock_gitconfig()
+        yield configs
+    finally:
+        cleanup_mock_gitconfig()
 
 
 def _files_touched_by_patch(patch_text: str) -> set[str]:
@@ -233,8 +238,12 @@ def _load_reference_patch(test_case: "BackportAgentTestCase") -> str | None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def run_test_cases_concurrently(request, mock_centos_stream_repos):
-    """Execute selected backport test cases concurrently via asyncio.gather, then collect metrics."""
+def run_test_cases_concurrently(request, mock_centos_stream_repos, observability_fixture):
+    """Execute selected backport test cases concurrently via asyncio.gather, then collect metrics.
+
+    ``observability_fixture`` is an ordering dependency: test cases need its
+    initialized span processor before their workflows start.
+    """
     cases_to_run = _selected_test_cases(request)
 
     async def _run_all():

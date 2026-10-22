@@ -8,6 +8,7 @@ from beeai_framework.adapters.mcp.serve.server import (
 
 from ymir.common.mock_repos import apply_zstream_override_from_env
 from ymir.tools.gateway_utils import setup_logging
+from ymir.tools.mcp_context import install_request_context_middleware
 from ymir.tools.unprivileged.analyze_ewa_testrun import AnalyzeEwaTestRunTool
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool
@@ -67,6 +68,7 @@ def main():
     # read by GitPatchCreationTool).
     tool_options: dict = {"working_directory": None}
     mcp = MCPServer(config=config)
+    install_request_context_middleware(mcp)
     mcp.register_many(
         [
             RunShellCommandTool(options=tool_options),

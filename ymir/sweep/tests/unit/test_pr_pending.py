@@ -2,7 +2,7 @@
 
 import pytest
 
-from ymir.supervisor.supervisor_types import MergeRequestState
+from ymir.common.models import GitlabMergeRequestState
 from ymir.sweep.comment_parser import CommentData
 from ymir.sweep.pr_pending import _GITHUB_PR_RE, _GITLAB_MR_RE, PRPendingSweep
 from ymir.sweep.tests.unit.conftest import make_issue
@@ -136,7 +136,7 @@ def _mock_github_api_get(state: str, merged_at: str | None, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_unblocked_when_gitlab_mr_merged(monkeypatch):
-    _mock_gitlab_api_get(MergeRequestState.MERGED, monkeypatch)
+    _mock_gitlab_api_get(GitlabMergeRequestState.MERGED, monkeypatch)
 
     issue = make_issue()
     result = await PRPendingSweep().is_unblocked(issue, _comment_data())
@@ -147,7 +147,7 @@ async def test_unblocked_when_gitlab_mr_merged(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_still_blocked_when_gitlab_mr_open(monkeypatch):
-    _mock_gitlab_api_get(MergeRequestState.OPEN, monkeypatch)
+    _mock_gitlab_api_get(GitlabMergeRequestState.OPEN, monkeypatch)
 
     issue = make_issue()
     result = await PRPendingSweep().is_unblocked(issue, _comment_data())
@@ -158,7 +158,7 @@ async def test_still_blocked_when_gitlab_mr_open(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_transition_to_no_patch_when_gitlab_mr_closed(monkeypatch):
-    _mock_gitlab_api_get(MergeRequestState.CLOSED, monkeypatch)
+    _mock_gitlab_api_get(GitlabMergeRequestState.CLOSED, monkeypatch)
 
     transitions = []
 

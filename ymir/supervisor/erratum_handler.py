@@ -2,6 +2,7 @@ import logging
 from datetime import UTC, datetime
 
 from ymir.common.constants import JiraLabels
+from ymir.common.models import ErrataStatus, Erratum, Issue, IssueStatus, WorkflowResult
 
 from .constants import (
     ERRATA_JOTNAR_BOT_EMAIL,
@@ -32,14 +33,7 @@ from .jira_utils import (
     get_issue,
     get_issue_by_jotnar_tag,
 )
-from .supervisor_types import (
-    ErrataStatus,
-    Erratum,
-    Issue,
-    IssueStatus,
-    JotnarTag,
-    WorkflowResult,
-)
+from .supervisor_types import JotnarTag
 from .work_item_handler import WorkItemHandler
 
 logger = logging.getLogger(__name__)

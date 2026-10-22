@@ -5,7 +5,7 @@ from enum import StrEnum
 import tomli_w
 from pydantic import BaseModel, Field
 
-from .http_utils import aiohttp_session
+from ymir.common.http_utils import aiohttp_session
 
 
 class XUnitComparisonStatus(BaseModel):
@@ -319,7 +319,7 @@ async def compare_xunit_files(
 if __name__ == "__main__":
     import sys
 
-    from .http_utils import with_aiohttp_session
+    from ymir.common.http_utils import with_aiohttp_session
 
     @with_aiohttp_session()
     async def main():

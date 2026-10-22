@@ -5,7 +5,7 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
-from .http_utils import aiohttp_session
+from ymir.common.http_utils import aiohttp_session
 
 QE_DATA_REPO = "https://gitlab.cee.redhat.com/otaylor/jotnar-qe-data"
 QE_DATA_URL = f"{QE_DATA_REPO}/-/raw/main/jotnar_qe_data.json?ref_type=heads&inline=false"

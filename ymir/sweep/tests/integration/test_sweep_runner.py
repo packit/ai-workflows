@@ -19,7 +19,7 @@ from flexmock import flexmock
 
 from ymir.common import CVEEligibilityResult, TriageEligibility
 from ymir.common.constants import JiraLabels, RedisQueues
-from ymir.supervisor.supervisor_types import Issue, IssueStatus
+from ymir.common.models import Issue, IssueStatus
 from ymir.sweep.dependency import DependencySweep
 from ymir.sweep.no_patch import NoPatchSweep
 from ymir.sweep.pr_pending import PRPendingSweep

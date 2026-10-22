@@ -5,8 +5,14 @@ from datetime import datetime
 import pytest
 
 from ymir.agents.constants import JIRA_COMMENT_TEMPLATE
-from ymir.common.models import PostponedData, Resolution, TriageOutputSchema
-from ymir.supervisor.supervisor_types import FullIssue, IssueStatus, JiraComment
+from ymir.common.models import (
+    FullIssue,
+    IssueStatus,
+    JiraComment,
+    PostponedData,
+    Resolution,
+    TriageOutputSchema,
+)
 
 
 def make_issue(

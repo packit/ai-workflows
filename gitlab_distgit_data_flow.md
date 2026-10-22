@@ -275,6 +275,11 @@ Fork naming follows `centpkg fork` convention:
 - **Format:** OAuth2 token
 - **Scope:** API access, fork creation, MR management
 
+Shared GitLab API GET requests validate the host and send `PRIVATE-TOKEN` only
+for private Red Hat projects on `gitlab.com` (including projects under
+`FORK_NAMESPACE`) or for `gitlab.cee.redhat.com`. Public projects on other
+allowlisted hosts remain unauthenticated.
+
 ### Git Operations
 
 **HTTPS (MCP Server):**

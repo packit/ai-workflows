@@ -80,6 +80,11 @@ class _MetaInjectingSession:
 
 
 def get_absolute_path(path: Path, tool: Tool) -> Path:
+    """Anchor a relative path to the tool's working directory, or the process cwd.
+
+    An already absolute path is returned unchanged; this does not resolve
+    symlinks or normalize the resulting path.
+    """
     if path.is_absolute():
         return path
     cwd = (tool.options or {}).get("working_directory") or Path.cwd()
@@ -118,6 +123,20 @@ async def run_tool(
     Without ``expected_output``, preserve the unwrapped result, including plain
     text. With a schema, accept either JSON text or structured data and let
     validation errors propagate to the caller.
+
+    Args:
+        tool: Tool instance or name to find in ``available_tools``.
+        available_tools: Tools to search when ``tool`` is a name.
+        expected_output: Optional Pydantic model used to validate the result.
+        **kwargs: Input fields passed to the selected tool.
+
+    Returns:
+        The validated model when requested, otherwise the unwrapped tool
+        output as text or structured data.
+
+    Raises:
+        ToolError: The named tool is missing from ``available_tools``.
+        pydantic.ValidationError: The result does not match ``expected_output``.
     """
     if isinstance(tool, str):
         selected_tool = next((t for t in available_tools or [] if t.name == tool), None)
@@ -146,6 +165,7 @@ async def run_tool(
 
 
 def _unpack_tool_result(result: Any) -> Any:
+    """Extract text blocks and unwrap dictionaries containing only ``result``."""
     if isinstance(result, TextContent):
         result = result.text
     if isinstance(result, dict) and len(result) == 1 and "result" in result:
@@ -154,6 +174,7 @@ def _unpack_tool_result(result: Any) -> Any:
 
 
 def _is_connection_error(exc: Exception) -> bool:
+    """Recognize connection errors, including those nested in exception groups."""
     if isinstance(exc, ExceptionGroup):
         return any(_is_connection_error(e) for e in exc.exceptions)
     return isinstance(exc, (httpx.ConnectError, httpx.ReadError, ConnectionError, OSError))
@@ -169,6 +190,9 @@ async def mcp_tools(
 ) -> AsyncGenerator[list[MCPTool]]:
     """Connect to an MCP gateway and yield the available tools.
 
+    Only connection errors before the first yield are retried. Caller errors
+    from inside the context manager propagate after the session closes.
+
     Args:
         sse_url: SSE endpoint of the MCP gateway.
         filter: Optional predicate to keep only matching tool names.
@@ -178,6 +202,10 @@ async def mcp_tools(
             ``call_tool`` invocation.  Use this to propagate context
             such as ``{"jira_issue": "RHEL-12345"}`` so that the
             gateway can scope operations per-caller.
+
+    Yields:
+        The gateway's tools, optionally filtered by name. The session stays
+        open until the context manager exits.
     """
     if (override := current_rhel_config_override.get()) is not None:
         call_meta = call_meta.copy() if call_meta else {}
@@ -228,12 +256,14 @@ def _evr_from_build(build: dict) -> EVR:
 
 
 def get_all_sources(spec: Specfile) -> Sources:
+    """Collect source tags and entries from every ``%sourcelist`` section."""
     parsed_sections = spec.parsed_sections
     sourcelists = [Sourcelist.parse(s, context=spec) for s in parsed_sections if s.id == "sourcelist"]
     return Sources(spec.tags(parsed_sections.package).content, sourcelists, context=spec)
 
 
 def get_all_patches(spec: Specfile) -> Patches:
+    """Collect patch tags and entries from every ``%patchlist`` section."""
     parsed_sections = spec.parsed_sections
     patchlists = [Sourcelist.parse(s, context=spec) for s in parsed_sections if s.id == "patchlist"]
     return Patches(spec.tags(parsed_sections.package).content, patchlists, context=spec)
@@ -276,6 +306,22 @@ async def _get_latest_build_from_tags(
     package: str,
     *tags: str,
 ) -> tuple[EVR, str]:
+    """Return the highest-EVR tagged build and its source ref.
+
+    Query all tags concurrently on Brew, then fetch the selected build's
+    metadata to read its source ref.
+
+    Args:
+        package: Package name to look up in each tag.
+        *tags: Brew tags to query in order; the first wins an EVR tie.
+
+    Returns:
+        The selected build's epoch-version-release and source ref.
+
+    Raises:
+        NoBuildFoundError: No queried tag contains a build of ``package``.
+        ValueError: The selected build has no valid source ref.
+    """
     results = await asyncio.gather(
         *(asyncio.to_thread(_get_latest_koji_build, BREWHUB_URL, tag, package) for tag in tags),
     )
@@ -296,6 +342,7 @@ async def _get_latest_build_from_tags(
 
 
 async def get_latest_candidate_build(package: str, dist_git_branch: str) -> tuple[EVR, str]:
+    """Find the highest-EVR build in the branch's candidate or z-candidate tag."""
     return await _get_latest_build_from_tags(
         package,
         f"{dist_git_branch}-candidate",
@@ -304,6 +351,7 @@ async def get_latest_candidate_build(package: str, dist_git_branch: str) -> tupl
 
 
 async def get_latest_z_pending_build(package: str, dist_git_branch: str) -> tuple[EVR, str]:
+    """Find the highest-EVR build in the branch's z-pending tag."""
     return await _get_latest_build_from_tags(
         package,
         f"{dist_git_branch}-z-pending",
@@ -311,6 +359,7 @@ async def get_latest_z_pending_build(package: str, dist_git_branch: str) -> tupl
 
 
 async def get_latest_buildroot_build(package: str, dist_git_branch: str) -> tuple[EVR, str]:
+    """Find the highest-EVR build in the branch's buildrequires tag."""
     return await _get_latest_build_from_tags(
         package,
         f"{dist_git_branch}-buildrequires",
@@ -329,6 +378,15 @@ def _resolve_buildroot_checks(
     Z-stream buildroot is checked since CentOS Stream Koji is stale.
     For internal RHEL branches with a Z-stream fix_version, only the
     Brew Z-stream buildroot is checked.
+
+    Args:
+        target_branch: Dist-git branch receiving the dependency update.
+        fix_version: Jira fix version used to detect a Z-stream target.
+        rhel_config: Optional release configuration used to detect
+            maintenance-only RHEL majors.
+
+    Returns:
+        Koji hub URL and build tag pairs to check, in lookup order.
     """
     is_zstream = fix_version.lower().endswith(".z")
 
@@ -360,6 +418,17 @@ async def check_build_in_buildroot(
     ``fix_version``.  For CS Z-stream fixes, both the CS Koji and Brew
     Z-stream buildroots are checked (unless the major version is in
     maintenance, in which case only Brew is checked).
+
+    Args:
+        target_branch: Dist-git branch whose buildroot is checked.
+        dep_component: Dependency package to find in the buildroot.
+        fixed_in_build_nvr: Brew NVR that first contains the required fix.
+        fix_version: Jira fix version used to select Y- or Z-stream tags.
+
+    Returns:
+        ``True`` when every selected buildroot has a build with EVR at least
+        that of ``fixed_in_build_nvr``. Returns ``False`` if the fixed build
+        or any required buildroot build is missing.
     """
     from ymir.common.config import load_rhel_config
 
@@ -404,31 +473,19 @@ async def check_build_in_buildroot(
 
 
 def extract_text_from_adf(adf_body) -> str:
-    """Extract plain text from Jira ADF (Atlassian Document Format) comment body.
+    """Flatten a Jira ADF body into text, joining child nodes with spaces.
 
-    The MCP get_jira_details tool returns comment bodies in ADF JSON format:
-    {
-        "type": "doc",
-        "version": 1,
-        "content": [
-            {
-                "type": "paragraph",
-                "content": [
-                    {"type": "text", "text": "Actual comment text here"},
-                    {"type": "inlineCard", "attrs": {"url": "https://..."}},
-                    ...
-                ]
-            },
-            ...
-        ]
-    }
+    Text nodes contribute their ``text`` field and inline cards contribute
+    their URL. Other nodes are traversed through ``content`` or ignored.
+    String input is returned as-is, except recognized HTML smartlink tags
+    with Jira browse URLs are replaced by their issue keys.
 
-    This function recursively extracts all "text" values and URLs from inlineCard nodes.
+    Args:
+        adf_body: ADF node, list of nodes, HTML string, or other value.
 
-    When MCP returns HTML format, it may contain smartlink tags like:
-    <custom data-type="smartlink">https://redhat.atlassian.net/browse/RHEL-123</custom>
-
-    We extract issue keys from these URLs to make them searchable.
+    Returns:
+        Extracted text, or an empty string for unsupported values and
+        nodes without text-bearing content.
     """
     if isinstance(adf_body, str):
         # Handle HTML smartlink tags: extract issue keys from URLs
@@ -465,15 +522,10 @@ def extract_text_from_adf(adf_body) -> str:
 
 
 def __traces_sampler(sampling_context: dict) -> float:
-    """
-    Compute sample rate or sampling decision for a transaction.
-    https://docs.sentry.io/platforms/python/performance/
-    https://docs.sentry.io/platforms/python/configuration/sampling
+    """Return the configured Sentry trace rate, or 0.5 when unset.
 
-    Args:
-        sampling_context: context data
-
-    Returns: traces sample rate (between 0 and 1)
+    ``sampling_context`` is currently unused. Invalid environment values
+    raise ``ValueError`` when converted to float.
     """
     if rate := os.getenv("SENTRY_TRACES_SAMPLE_RATE"):
         return float(rate)

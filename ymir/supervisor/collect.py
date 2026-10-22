@@ -1,6 +1,8 @@
 import logging
 
 from ymir.common.base_utils import init_kerberos_ticket
+from ymir.common.http_utils import with_http_sessions
+from ymir.common.models import ErrataStatus, IssueStatus
 
 from .errata_utils import get_erratum_for_link
 from .erratum_handler import (
@@ -8,9 +10,7 @@ from .erratum_handler import (
     erratum_get_issues,
     erratum_needs_attention,
 )
-from .http_utils import with_http_sessions
 from .jira_utils import get_current_issues
-from .supervisor_types import ErrataStatus, IssueStatus
 from .work_queue import WorkItem, WorkItemType, WorkQueue
 
 logger = logging.getLogger(__name__)

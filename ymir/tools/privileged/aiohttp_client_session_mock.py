@@ -149,7 +149,7 @@ class aiohttpClientSessionMock:
             else:
                 raise NotImplementedError()
             await _write_jira_mock(match_data.group(1), issue_data)
-            yield SimpleNamespace(raise_for_status=lambda: None)
+            yield SimpleNamespace(status=204, raise_for_status=lambda: None)
         else:
             raise NotImplementedError()
 
@@ -169,13 +169,13 @@ class aiohttpClientSessionMock:
             current_issue["fields"]["comment"]["maxResults"] += 1
             current_issue["fields"]["comment"]["total"] += 1
             await _write_jira_mock(match_data.group(1), current_issue)
-            yield SimpleNamespace(raise_for_status=lambda: None)
+            yield SimpleNamespace(status=201, raise_for_status=lambda: None)
         elif self.search_post_regex.fullmatch(args[0]):
 
             async def _empty_search():
                 return {"issues": []}
 
-            yield SimpleNamespace(raise_for_status=lambda: None, json=_empty_search)
+            yield SimpleNamespace(status=200, raise_for_status=lambda: None, json=_empty_search)
         elif match_data := self.transitions_get_regex.fullmatch(args[0]):
             jira_data = await _read_jira_mock(match_data.group(1))
             if kwargs["json"]["transition"]["id"] == 1:
@@ -191,6 +191,6 @@ class aiohttpClientSessionMock:
             else:
                 raise ToolError("Not implemented Transition!")
             await _write_jira_mock(match_data.group(1), jira_data)
-            yield SimpleNamespace(raise_for_status=lambda: None)
+            yield SimpleNamespace(status=204, raise_for_status=lambda: None)
         else:
             raise ToolError("Not implemented Post!")

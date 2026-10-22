@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
 
-from .supervisor_types import (
-    WorkflowResult,
-)
+from ymir.common.models import WorkflowResult
 
 WAIT_DELAY = 20 * 60  # 20 minutes
 

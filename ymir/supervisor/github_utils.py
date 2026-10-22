@@ -18,7 +18,7 @@ import logging
 import os
 from typing import Any
 
-from ymir.supervisor.http_utils import requests_session
+from ymir.common.http_utils import requests_session
 
 logger = logging.getLogger(__name__)
 

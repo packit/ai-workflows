@@ -93,6 +93,16 @@ jobs:
       run: |
         podman run --rm sweep-test:pr python3 -m ymir.sweep --help
 
+  smoke-test-jira-issue-fetcher-containerfile:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+    - name: Build Jira issue fetcher container
+      run: podman build --no-cache -f Containerfile.jira-issue-fetcher -t jira-issue-fetcher-test:pr .
+    - name: Test fetcher entry point imports as container user
+      run: podman run --rm jira-issue-fetcher-test:pr python3 -c "import ymir.jira_issue_fetcher.jira_issue_fetcher"
+
   smoke-test-api-containerfile:
     runs-on: ubuntu-latest
     steps:

@@ -8,9 +8,9 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
+from ymir.common.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
+from ymir.common.http_utils import aiohttp_get_with_retries
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
-from ymir.tools.http import aiohttp_get_with_retries
 
 TESTING_FARM_ARTIFACTS_URL = "https://artifacts.osci.redhat.com/testing-farm"
 

@@ -37,13 +37,10 @@ WORKDIR /home/sweepbot
 # Copy only the modules required by the sweep.
 # ymir.sweep — the sweep module itself
 # ymir.common — shared utilities, models, constants, config
-# ymir.supervisor — jira_utils, gitlab_utils, http_utils, supervisor_types
-# ymir.tools — tools constants (YMIR_USER_AGENT, imported by http_utils) and
-#              ymir.tools.privileged.jira (CheckCveTriageEligibilityTool, which
-#              the y_stream sweep re-runs to decide unblocking)
+# ymir.tools — ymir.tools.privileged.jira (CheckCveTriageEligibilityTool,
+#              which the y_stream sweep re-runs to decide unblocking)
 COPY ymir/sweep/ /home/sweepbot/ymir/sweep/
 COPY ymir/common/ /home/sweepbot/ymir/common/
-COPY ymir/supervisor/ /home/sweepbot/ymir/supervisor/
 COPY ymir/tools/ /home/sweepbot/ymir/tools/
 
 RUN chgrp -R root /home/sweepbot && chmod -R g+rwX /home/sweepbot

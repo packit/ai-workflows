@@ -5,8 +5,8 @@ from functools import cache
 from json import dumps as json_dumps
 from typing import Any
 
-from .http_utils import requests_session
-from .supervisor_types import (
+from ymir.common.http_utils import requests_session
+from ymir.common.models import (
     TestingFarmRequest,
     TestingFarmRequestResult,
     TestingFarmRequestState,

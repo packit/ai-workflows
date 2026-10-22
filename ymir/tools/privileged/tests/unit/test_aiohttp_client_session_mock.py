@@ -3,12 +3,14 @@ import re
 
 import pytest
 
+from ymir.common.jira_api import jira_api_post, jira_api_put
 from ymir.tools.privileged.aiohttp_client_session_mock import aiohttpClientSessionMock
 
 
 @pytest.fixture
 def mock_session(monkeypatch, tmp_path):
     base_url = "https://jira.example.test"
+    monkeypatch.setenv("JIRA_URL", base_url)
     monkeypatch.setenv("JIRA_MOCK_FILES", str(tmp_path))
 
     regexes = {
@@ -50,6 +52,7 @@ async def test_put_issue_updates_mock_file(mock_session):
         f"{base_url}/rest/api/3/issue/RHEL-12345",
         json={"fields": {"summary": "updated"}},
     ) as response:
+        assert response.status == 204
         response.raise_for_status()
 
     assert json.loads(issue_path.read_text())["fields"]["summary"] == "updated"
@@ -72,8 +75,60 @@ async def test_post_comment_updates_mock_file(mock_session):
         f"{base_url}/rest/api/3/issue/RHEL-12345/comment",
         json={"body": "comment"},
     ) as response:
+        assert response.status == 201
         response.raise_for_status()
 
     comments = json.loads(issue_path.read_text())["fields"]["comment"]
     assert comments["total"] == 1
     assert comments["comments"][0]["body"] == "comment"
+
+
+@pytest.mark.asyncio
+async def test_shared_jira_client_decodes_search_response(mock_session):
+    session, base_url, _mock_dir = mock_session
+
+    result = await jira_api_post(
+        "search/jql",
+        json={"jql": "project = RHEL", "maxResults": 10},
+        api_version="3",
+        base_url=base_url,
+        headers={"Authorization": "test"},
+        session=session,
+        decode_response=True,
+    )
+
+    assert result == {"issues": []}
+
+
+@pytest.mark.asyncio
+async def test_shared_jira_client_updates_labels_in_mock_file(mock_session):
+    session, base_url, mock_dir = mock_session
+    issue_path = mock_dir / "RHEL-12345"
+    issue_path.write_text(json.dumps({"key": "RHEL-12345", "fields": {"labels": ["existing"]}}))
+
+    await jira_api_put(
+        "issue/RHEL-12345",
+        json={"update": {"labels": [{"add": "added"}]}},
+        api_version="3",
+        base_url=base_url,
+        headers={"Authorization": "test"},
+        session=session,
+    )
+
+    assert set(json.loads(issue_path.read_text())["fields"]["labels"]) == {"existing", "added"}
+
+
+@pytest.mark.asyncio
+async def test_post_transition_exposes_success_status(mock_session):
+    session, base_url, mock_dir = mock_session
+    issue_path = mock_dir / "RHEL-12345"
+    issue_path.write_text(json.dumps({"key": "RHEL-12345", "fields": {"status": {"name": "Open"}}}))
+
+    async with session.post(
+        f"{base_url}/rest/api/3/issue/RHEL-12345/transitions",
+        json={"transition": {"id": 1}},
+    ) as response:
+        assert response.status == 204
+        response.raise_for_status()
+
+    assert json.loads(issue_path.read_text())["fields"]["status"]["name"] == "In Progress"

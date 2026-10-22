@@ -29,11 +29,12 @@ from beeai_framework.tools import (
 from pydantic import BaseModel, Field
 
 from ymir.common.base_utils import run_subprocess
+from ymir.common.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
+from ymir.common.github_api import github_headers
+from ymir.common.http_utils import aiohttp_get_with_retries
 from ymir.common.utils import mcp_tools, run_tool
 from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
-from ymir.tools.http import aiohttp_get_with_retries
 
 
 class ExtractUpstreamRepositoryInput(BaseModel):
@@ -108,7 +109,7 @@ async def _fetch_github_unauthenticated(name: str, **kwargs) -> dict:
     else:
         raise ToolError(f"Unsupported GitHub tool: {name}")
 
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": YMIR_USER_AGENT}
+    headers = github_headers(allow_token=False)
     try:
         async with (
             aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,

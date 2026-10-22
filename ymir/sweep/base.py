@@ -2,15 +2,15 @@
 
 Provides the shared orchestration loop (fetch → parse comment → check →
 unblock/transition) so that concrete strategies only need to implement
-``is_unblocked()``.  All Jira operations go through
-``ymir.supervisor.jira_utils`` (synchronous ``requests``-based client).
-The MCP gateway is not involved.
+``is_unblocked()``. All Jira operations go through the shared
+``ymir.common.jira_api`` async client. The MCP gateway is not involved.
 
 The sweep runs inside ``asyncio.run()`` so that ``check_build_in_buildroot``
-can be awaited directly.  ``jira_utils`` calls remain synchronous; they
-block the event loop briefly, which is acceptable for a batch CronJob.
+and provider requests can be awaited directly.
 """
 
+import asyncio
+import inspect
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -20,13 +20,8 @@ import redis
 
 from ymir.common.base_utils import fix_await
 from ymir.common.constants import JiraLabels, RedisQueues
-from ymir.common.models import Task
-from ymir.supervisor.jira_utils import (
-    add_issue_label,
-    get_current_issues,
-    remove_issue_label,
-)
-from ymir.supervisor.supervisor_types import FullIssue
+from ymir.common.jira_api import add_issue_label, get_current_issues, remove_issue_label
+from ymir.common.models import FullIssue, Task
 from ymir.sweep.comment_parser import CommentData, parse_ymir_comment
 
 
@@ -65,10 +60,28 @@ class SweepStrategy(ABC):
         """Query Jira for all issues with this strategy's postponement label.
 
         Returns ``FullIssue`` objects with comments, labels, and custom
-        fields decoded via ``jira_utils.get_current_issues(jql, full=True)``.
+        fields decoded by the shared Jira client.
+
+        This synchronous compatibility entry point is retained for existing
+        callers. The sweep runtime uses ``_get_blocked_issues_async``.
         """
         jql = f'labels = "{self.label.value}" AND status != "Closed"'
-        issues = list(get_current_issues(jql, full=True))
+        result = get_current_issues(jql, full=True)
+        if inspect.isawaitable(result):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                issues = list(asyncio.run(result))
+            else:
+                raise RuntimeError("Use _get_blocked_issues_async inside an event loop")
+        else:
+            issues = list(result)
+        self.logger.info("Found %d issues with label %s", len(issues), self.label.value)
+        return issues
+
+    async def _get_blocked_issues_async(self) -> list[FullIssue]:
+        jql = f'labels = "{self.label.value}" AND status != "Closed"'
+        issues = list(await fix_await(get_current_issues(jql, full=True)))
         self.logger.info("Found %d issues with label %s", len(issues), self.label.value)
         return issues
 
@@ -107,8 +120,8 @@ class SweepStrategy(ABC):
         """
         task = Task.from_issue(issue_key)
         await fix_await(redis_conn.lpush(RedisQueues.TRIAGE_QUEUE.value, task.to_json()))
-        add_issue_label(issue_key, JiraLabels.TRIAGE_IN_PROGRESS.value)
-        remove_issue_label(issue_key, self.label.value, comment=comment)
+        await fix_await(add_issue_label(issue_key, JiraLabels.TRIAGE_IN_PROGRESS.value))
+        await fix_await(remove_issue_label(issue_key, self.label.value, comment=comment))
         self.logger.info(
             "Unblocked %s — removed %s, pushed to triage queue",
             issue_key,
@@ -120,21 +133,30 @@ class SweepStrategy(ABC):
         issue_key: str,
         new_label: JiraLabels,
         comment: str | None = None,
-    ) -> None:
+    ):
         """Swap postponement label and post an optional comment.
 
         Adds the new label first so that a subsequent failure to remove the
         old label leaves the issue discoverable by the new strategy.  The
         comment is posted atomically with the new label addition.
         """
-        add_issue_label(issue_key, new_label.value, comment=comment)
-        remove_issue_label(issue_key, self.label.value)
-        self.logger.info(
-            "Transitioned %s: %s -> %s",
-            issue_key,
-            self.label.value,
-            new_label.value,
-        )
+
+        async def transition() -> None:
+            await fix_await(add_issue_label(issue_key, new_label.value, comment=comment))
+            await fix_await(remove_issue_label(issue_key, self.label.value))
+            self.logger.info(
+                "Transitioned %s: %s -> %s",
+                issue_key,
+                self.label.value,
+                new_label.value,
+            )
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(transition())
+            return None
+        return transition()
 
     async def run(self, redis_conn: redis.Redis) -> dict[str, int]:
         """Execute a full sweep: fetch issues, check each, handle results.
@@ -153,7 +175,7 @@ class SweepStrategy(ABC):
             A summary dict with counts: ``total``, ``unblocked``,
             ``transitioned``, ``errors``, ``still_blocked``.
         """
-        issues = self.get_blocked_issues()
+        issues = await self._get_blocked_issues_async()
         total = len(issues)
         unblocked = 0
         transitioned = 0

@@ -98,6 +98,13 @@ uv sync --extra test
 uv run make -f Makefile.tests check
 ```
 
+`make check-in-container` builds both `Containerfile.tests` (Fedora) and
+`Containerfile.c9s-tests` (CentOS Stream 9) before running the test groups.
+The BeeAI runtime images (`Containerfile.c9s` and `Containerfile.c10s`) also
+install shared-module dependencies explicitly. Shared imports such as
+`ymir.common.jira_api` need dependencies including `backoff` in both runtime
+images and both test images.
+
 You'll also need to have `python3-rpm` installed on the host system -
 the `rpm` module installed from PyPI is [rpm-shim](https://github.com/packit/rpm-shim)
 and just pulls the files from python3-rpm into the venv.

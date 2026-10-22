@@ -13,7 +13,6 @@ SECURITY:
 - Cannot push code, create PRs, or modify GitHub resources
 """
 
-import os
 import re
 from json import JSONDecodeError
 from urllib.parse import urlparse
@@ -24,18 +23,16 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
+from ymir.common.constants import AIOHTTP_TIMEOUT
+from ymir.common.github_api import github_headers as _shared_github_headers
+from ymir.common.http_utils import aiohttp_get_with_retries
 from ymir.tools.base import CloneableTool as Tool
-from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
-from ymir.tools.http import aiohttp_get_with_retries
 
 MAX_GITHUB_PATCH_PREVIEW_LENGTH = 2_000
 
 
 def _github_headers(accept: str = "application/vnd.github+json") -> dict[str, str]:
-    headers = {"Accept": accept, "User-Agent": YMIR_USER_AGENT}
-    if token := os.getenv("GITHUB_READONLY_TOKEN"):
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
+    return _shared_github_headers(accept)
 
 
 def _github_path_match(url: str, pattern: str, error_message: str) -> re.Match[str]:

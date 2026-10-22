@@ -3,6 +3,16 @@ from datetime import UTC, datetime, timedelta
 from urllib.error import HTTPError
 
 from ymir.common.constants import JiraLabels
+from ymir.common.models import (
+    ErrataStatus,
+    Erratum,
+    FullIssue,
+    GitlabMergeRequestState,
+    IssueStatus,
+    PreliminaryTesting,
+    TestingState,
+    WorkflowResult,
+)
 from ymir.supervisor.baseline_tests import BaselineTests
 
 from .constants import DATETIME_MIN_UTC, GITLAB_GROUPS
@@ -14,16 +24,6 @@ from .jira_utils import (
     format_attention_message,
     remove_issue_label,
     update_issue_comment,
-)
-from .supervisor_types import (
-    ErrataStatus,
-    Erratum,
-    FullIssue,
-    IssueStatus,
-    MergeRequestState,
-    PreliminaryTesting,
-    TestingState,
-    WorkflowResult,
 )
 from .testing_analyst import analyze_issue
 from .work_item_handler import WorkItemHandler
@@ -167,7 +167,7 @@ class IssueHandler(WorkItemHandler):
                 merged_mrs = search_gitlab_project_mrs(
                     f"redhat/{group}/{component}",
                     issue.key,
-                    state=MergeRequestState.MERGED,
+                    state=GitlabMergeRequestState.MERGED,
                 )
 
                 if merged_mr := next(merged_mrs, None):
@@ -195,7 +195,7 @@ class IssueHandler(WorkItemHandler):
                 yield from search_gitlab_project_mrs(
                     project,
                     issue.key,
-                    state=MergeRequestState.MERGED,
+                    state=GitlabMergeRequestState.MERGED,
                 )
 
         return max(

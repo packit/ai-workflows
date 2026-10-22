@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 
 from ymir.common.constants import YMIR_COMMENT_MARKER
-from ymir.supervisor.supervisor_types import FullIssue
+from ymir.common.models import FullIssue
 
 # Derived from the shared marker template
 _YMIR_TRIAGE_AGENT_COMMENT_MARKER = YMIR_COMMENT_MARKER.substitute(AGENT_TYPE="Triage")

@@ -13,9 +13,11 @@ from bs4 import BeautifulSoup, Tag  # type: ignore
 from pydantic import BaseModel, RootModel
 from requests_gssapi import HTTPSPNEGOAuth
 
+from ymir.common.http_utils import requests_session
+from ymir.common.models import ErrataComment as Comment
+from ymir.common.models import ErrataStatus, Erratum, FullErratum
+
 from .constants import DATETIME_MIN_UTC
-from .http_utils import requests_session
-from .supervisor_types import Comment, ErrataStatus, Erratum, FullErratum
 
 logger = logging.getLogger(__name__)
 

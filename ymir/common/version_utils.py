@@ -255,10 +255,10 @@ async def get_maintenance_rhel_branch(branch: str) -> str | None:
 
 
 def nvr_to_cs_nvr(nvr: str) -> str | None:
-    """Derive the CentOS Stream NVR from a Brew NVR by stripping the Z-stream suffix.
+    """Strip an optional ``_<minor>`` suffix from the first ``.el<major>`` tag.
 
-    Brew Z-stream builds use dist tags like ``.el9_8``; the equivalent CentOS
-    Stream build uses ``.el9``.  Returns None if no dist tag is found.
+    For example, ``.el9_8`` becomes ``.el9``. Returns ``None`` if the NVR
+    has no matching dist tag; an existing ``.el9`` tag is returned unchanged.
     """
     match = _DIST_TAG_RE.search(nvr)
     if not match:
@@ -366,6 +366,11 @@ def extract_downstream_package(raw: str | None) -> str | None:
 
 
 def is_modular(summary: str | None, component: str | None) -> bool:
+    """Check whether a Jira summary has a module/stream prefix for the package.
+
+    ``component`` must be the package segment after ``/``; missing input
+    returns ``False``.
+    """
     if not summary or not component:
         return False
     return bool(re.match(MODULAR_SUMMARY_PREFIX + re.escape(component) + r":", summary))

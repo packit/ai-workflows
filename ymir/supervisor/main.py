@@ -8,6 +8,7 @@ from attr import dataclass
 
 from ymir.agents.observability import setup_observability
 from ymir.common.base_utils import init_kerberos_ticket
+from ymir.common.http_utils import with_http_sessions
 from ymir.common.logging_setup import configure_logging
 
 from .collect import collect_and_schedule_work_items
@@ -15,7 +16,6 @@ from .errata_utils import get_erratum
 from .erratum_handler import (
     ErratumHandler,
 )
-from .http_utils import with_http_sessions
 from .issue_handler import IssueHandler
 from .jira_utils import get_issue
 from .work_queue import WorkItemType, WorkQueue, work_queue

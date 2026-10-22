@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass
 from functools import cached_property
 
+from ymir.common.models import FullIssue, TestingFarmRequest, TestingFarmRequestState
 from ymir.supervisor.compare_xunit import (
     XUnitComparison,
     XUnitComparisonStatus,
@@ -10,7 +11,6 @@ from ymir.supervisor.compare_xunit import (
 )
 from ymir.supervisor.jira_utils import add_issue_attachments
 
-from .supervisor_types import FullIssue, TestingFarmRequest, TestingFarmRequestState
 from .testing_farm_utils import (
     TESTING_FARM_URL,
     testing_farm_get_request,

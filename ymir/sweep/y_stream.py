@@ -23,7 +23,7 @@ import sentry_sdk
 
 from ymir.common import CVEEligibilityResult, TriageEligibility
 from ymir.common.constants import JiraLabels
-from ymir.supervisor.supervisor_types import FullIssue
+from ymir.common.models import FullIssue
 from ymir.sweep.base import SweepResult, SweepStrategy
 from ymir.sweep.comment_parser import CommentData
 from ymir.tools.privileged.jira import CheckCveTriageEligibilityTool

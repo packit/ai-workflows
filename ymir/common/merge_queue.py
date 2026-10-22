@@ -15,10 +15,12 @@ _DEFAULT_STALE_ACTIVE_THRESHOLD = timedelta(hours=6)
 
 
 def _consolidation_field_key(package: str, branch: str, slot: str) -> str:
+    """Build a merge queue hash field for a package, branch, and slot."""
     return f"{package}:{branch}:{slot}"
 
 
 def _heartbeat_field_key(package: str, branch: str) -> str:
+    """Build the heartbeat hash field for a package and branch."""
     return _consolidation_field_key(package, branch, "heartbeat")
 
 

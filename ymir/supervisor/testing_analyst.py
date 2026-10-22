@@ -10,9 +10,9 @@ from beeai_framework.template import PromptTemplate, PromptTemplateInput
 from pydantic import BaseModel, Field
 
 from ymir.agents.utils import get_agent_execution_config
+from ymir.common.models import FullErratum, FullIssue, TestingState
 
 from .qe_data import TestLocationInfo, get_qe_data
-from .supervisor_types import FullErratum, FullIssue, TestingState
 from .tools.analyze_ewa_testrun import AnalyzeEwaTestRunTool
 from .tools.read_attachment import ReadAttachmentTool
 from .tools.read_issue import ReadIssueTool

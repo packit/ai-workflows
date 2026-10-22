@@ -17,17 +17,10 @@ import backoff
 import requests
 
 from ymir.common.base_utils import get_jira_auth_headers
+from ymir.common.http_utils import requests_session
+from ymir.common.models import FullIssue, Issue, IssueStatus, JiraComment, PreliminaryTesting, TestCoverage
 
-from .http_utils import requests_session
-from .supervisor_types import (
-    FullIssue,
-    Issue,
-    IssueStatus,
-    JiraComment,
-    JotnarTag,
-    PreliminaryTesting,
-    TestCoverage,
-)
+from .supervisor_types import JotnarTag
 
 logger = logging.getLogger(__name__)
 
@@ -801,7 +794,7 @@ def create_issue(
 if __name__ == "__main__":
     import asyncio
 
-    from .http_utils import with_requests_session
+    from ymir.common.http_utils import with_requests_session
 
     @with_requests_session()
     async def main():

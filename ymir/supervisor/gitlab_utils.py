@@ -5,8 +5,8 @@ from typing import Any
 from urllib.parse import quote as urlquote
 from urllib.parse import urlparse
 
-from .http_utils import requests_session
-from .supervisor_types import MergeRequest, MergeRequestState
+from ymir.common.http_utils import requests_session
+from ymir.common.models import GitlabMergeRequest, GitlabMergeRequestState
 
 logger = logging.getLogger(__name__)
 
@@ -55,22 +55,22 @@ def search_gitlab_project_mrs(
     project: str,
     issue_key: str,
     *,
-    state: MergeRequestState | None = None,
+    state: GitlabMergeRequestState | None = None,
 ):
     """
     Searches for merge requests in a GitLab project related to an issue key.
 
-    This function queries the GitLab API and yields MergeRequest objects
+    This function queries the GitLab API and yields GitlabMergeRequest objects
     for each MR found that matches the search criteria.
 
     Args:
         project (str): The path of the GitLab project (e.g., 'redhat/centos-stream/rpms/podman').
         issue_key (str): The issue key to search for (e.g., 'RHEL-12345').
-        state (MergeRequestState | None, optional): If provided, filters MRs
+        state (GitlabMergeRequestState | None, optional): If provided, filters MRs
         by their state (e.g., 'opened', 'merged'). Defaults to None.
 
     Yields:
-        MergeRequest: A data object for each matching merge request.
+        GitlabMergeRequest: A data object for each matching merge request.
     """
     logger.debug("Searching for MRs for %s in %s", issue_key, project)
     path = f"projects/{urlquote(project, safe='')}/merge_requests"
@@ -82,7 +82,7 @@ def search_gitlab_project_mrs(
     result = gitlab_api_get(path, params=params)
 
     for mr in result:
-        yield MergeRequest(
+        yield GitlabMergeRequest(
             project=project,
             iid=mr["iid"],
             url=mr["web_url"],

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from ymir.supervisor.supervisor_types import JiraComment
+from ymir.common.models import JiraComment
 from ymir.sweep.comment_parser import _YMIR_TRIAGE_AGENT_COMMENT_MARKER, parse_ymir_comment
 from ymir.sweep.tests.unit.conftest import make_issue, make_ymir_comment
 

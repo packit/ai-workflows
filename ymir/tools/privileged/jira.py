@@ -25,9 +25,11 @@ from ymir.common import (
     load_rhel_config,
 )
 from ymir.common.base_utils import get_jira_auth_headers
-from ymir.common.constants import CENTOS_STREAM_KOJIHUB_URL, JIRA_SEARCH_PATH
+from ymir.common.constants import AIOHTTP_TIMEOUT, CENTOS_STREAM_KOJIHUB_URL
 from ymir.common.cve import CVE_ID_PATTERN
 from ymir.common.cve import extract_cve_ids as extract_cve_ids
+from ymir.common.http_utils import aiohttp_get_with_retries
+from ymir.common.jira_api import jira_api_get, jira_api_post, jira_api_put
 from ymir.common.utils import _get_koji_build
 from ymir.common.version_utils import (
     get_fix_version_variants,
@@ -39,8 +41,6 @@ from ymir.common.version_utils import (
 )
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import tool_error_context
-from ymir.tools.constants import AIOHTTP_TIMEOUT
-from ymir.tools.http import aiohttp_get_with_retries
 
 if os.getenv("MOCK_JIRA", "False").lower() == "true":
     from ymir.tools.privileged.aiohttp_client_session_mock import (
@@ -228,27 +228,24 @@ class GetJiraDetailsTool(Tool[GetJiraDetailsToolInput, ToolRunOptions, JSONToolO
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             with tool_error_context(f"Failed to get details about issue {issue_key}", url=jira_url):
-                async with aiohttp_get_with_retries(
-                    session,
-                    jira_url,
+                issue_data = await jira_api_get(
+                    f"issue/{issue_key}",
                     params={"fields": ",".join(_REQUESTED_FIELDS), "expand": "comments"},
                     headers=headers,
-                ) as response:
-                    response.raise_for_status()
-                    issue_data = await response.json()
+                    api_version="3",
+                    base_url=os.getenv("JIRA_URL"),
+                    session=session,
+                )
 
             try:
-                async with aiohttp_get_with_retries(
-                    session,
-                    urljoin(
-                        os.getenv("JIRA_URL"),
-                        f"rest/api/3/issue/{issue_key}/remotelink",
-                    ),
+                remote_links = await jira_api_get(
+                    f"issue/{issue_key}/remotelink",
                     headers=headers,
-                ) as remote_links_response:
-                    remote_links_response.raise_for_status()
-                    remote_links = await remote_links_response.json()
-                    issue_data["remote_links"] = remote_links
+                    api_version="3",
+                    base_url=os.getenv("JIRA_URL"),
+                    session=session,
+                )
+                issue_data["remote_links"] = remote_links
             except (aiohttp.ClientError, TimeoutError) as e:
                 logger.debug("Remote links fetch failed for %s, defaulting to empty: %s", issue_key, e)
                 issue_data["remote_links"] = []
@@ -1737,12 +1734,14 @@ class EditJiraLabelsTool(Tool[EditJiraLabelsToolInput, ToolRunOptions, StringToo
                 adding=labels_to_add,
                 removing=labels_to_remove,
             ):
-                async with session.put(
-                    jira_url,
+                await jira_api_put(
+                    f"issue/{issue_key}",
                     json=payload,
                     headers=headers,
-                ) as response:
-                    response.raise_for_status()
+                    api_version="3",
+                    base_url=os.getenv("JIRA_URL"),
+                    session=session,
+                )
 
         return StringToolOutput(result=f"Successfully edited labels on {issue_key}.")
 
@@ -1868,7 +1867,6 @@ class SearchJiraIssuesTool(
         max_results = tool_input.max_results
 
         headers = get_jira_auth_headers()
-        url = urljoin(os.getenv("JIRA_URL"), JIRA_SEARCH_PATH)
         logger.info(f"Searching Jira with JQL: {jql}")
 
         json_payload = {
@@ -1879,13 +1877,15 @@ class SearchJiraIssuesTool(
 
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             with tool_error_context("Failed to search Jira issues", jql=jql):
-                async with session.post(
-                    url,
+                data = await jira_api_post(
+                    "search/jql",
                     json=json_payload,
                     headers=headers,
-                ) as response:
-                    response.raise_for_status()
-                    data = await response.json()
+                    api_version="3",
+                    base_url=os.getenv("JIRA_URL"),
+                    session=session,
+                    decode_response=True,
+                )
 
         issues = data.get("issues", [])
         logger.info(f"Jira search returned {len(issues)} issues")

@@ -1,6 +1,6 @@
 ---
 name: reproducer
-description: Create minimal, automated reproducers for RHEL bugs and CVEs — design tests, verify on Testing Farm machines, and publish merge requests to the RHEL tests repository.
+description: Create minimal, automated reproducers for RHEL bugs and CVEs — design tests, verify on Testing Farm machines, and use the tests repository configured in package ymir.yaml.
 ---
 
 # Reproducer Skill
@@ -76,13 +76,15 @@ Every reproducer created by this agent must follow these principles:
 Execute the following steps in order. Track state across steps using these variables:
 
 - `package_name` — the RPM package name (null initially)
+- `test_repository_url` — full HTTPS clone URL from `reproducer.test_repository`, or the package-derived default
+- `test_directory_prefix` — optional repository-relative prefix from `reproducer.test_directory_prefix` (null initially)
 - `maintainer_rules` — package-specific rules from maintainer (null initially)
 - `reproducer_fmf_config` — supported package-specific FMF metadata from `ymir.yaml` (empty initially)
 - `jira_data` — full Jira issue data (null initially)
 - `tf_request_id` — Testing Farm reservation request ID (null initially)
 - `ssh_connection` — SSH connection string for the reserved machine, e.g. `root@1.2.3.4` (null initially)
 - `test_dir` — local path to the test directory created in the tests repo clone (null initially)
-- `tests_clone` — path to cloned `gitlab.com/redhat/rhel/tests/<package_name>` repository (null initially)
+- `tests_clone` — path to the configured tests repository clone (null initially)
 - `reproducer_verified` — whether the reproducer was successfully verified on TF machine (false initially)
 - `iteration_count` — number of verification loop iterations completed (0 initially)
 - `merge_request_url` — URL of the created MR in the tests repo (null initially)
@@ -117,17 +119,25 @@ Execute the following steps in order. Track state across steps using these varia
 7. If neither `{{triage_summary}}` nor `{{patch_urls}}` are provided, design the test based solely on the Jira issue description, comments, and any reproducer steps or error messages described in the issue. In this case, the test may require more iteration in step 5.
 
 8. **Check for existing test or open reproducer MR** before creating a new one:
-   - Clone `https://gitlab.com/redhat/rhel/tests/<package_name>` to `/git-repos/tests-<package_name>` (omit branch).
+   - Call `get_maintainer_rules` for `package_name` with `file_path=ymir.yaml`.
+   - Read `reproducer.test_repository` from the YAML. If unset, use `https://gitlab.com/redhat/rhel/tests/<package_name>`.
+   - Save the selected URL as `test_repository_url`.
+   - Read optional `reproducer.test_directory_prefix`. If set, use this repository-relative path prefix for newly created tests. Do not prepend it to an existing test path when adapting.
+   - Clone `test_repository_url` to `/git-repos/Reproducer/{{jira_issue}}/tests-<package_name>` (omit branch).
    - Look for `Security/<cve_id>/` (CVE) or `Regression/<jira_issue>/` (bug), and grep for the issue/CVE ids.
-   - Call `list_project_merge_requests` on `redhat/rhel/tests/<package_name>` with `state=opened` and label `ymir_reproducer`; match open MRs by **`[{{cve_id}}]` or `[{{jira_issue}}]` in the MR title** (not description). CVE MR titles stay `[CVE-…]` across streams; regression MR titles accumulate `[RHEL-…]` keys when another stream extends the same open MR (e.g. `[RHEL-100, RHEL-200]`).
+   - If `test_repository_url` is a GitLab URL, call `list_project_merge_requests` using its project path, `state=opened`, and label `ymir_reproducer`; match open MRs by **`[{{cve_id}}]` or `[{{jira_issue}}]` in the MR title** (not description). CVE MR titles stay `[CVE-…]` across streams; regression MR titles accumulate `[RHEL-…]` keys when another stream extends the same open MR (e.g. `[RHEL-100, RHEL-200]`).
    - If found: reserve TF for **this** stream and verify the existing test from the MR branch.
      - Works → `success=true`, `test_already_exists=true`, `adapted_existing=false` (no new MR).
      - Fails on this stream → adapt in the **same** test directory (no duplicate paths/MRs), update `main.fmf` by appending `- verifies: https://issues.redhat.com/browse/{{jira_issue}}` to the `link` list (keep existing entries), re-verify, set `adapted_existing=true` and `existing_mr_url` to the open CVE MR so orchestration updates that MR.
    - If triage says not-affected: still build/verify a test that would catch the issue if present; detection contradicts N/A, non-reproducible supports N/A.
 
+   The current Ymir publisher uses its existing GitLab.com Red Hat project flow.
+   For another provider, use the configured clone to inspect tests, but do not
+   assume Ymir can discover open PRs or publish a PR there.
+
 ### Step 2: Get Maintainer Rules
 
-1. Call `get_maintainer_rules` with the `package_name` and `file_path` = `ymir.yaml`.
+1. Use the `ymir.yaml` content fetched in step 1.8 (fetch it here if not already available).
 2. If the file contains a `reproducer.fmf` section, save these supported fields as
    `reproducer_fmf_config`:
    - `require` — additional runtime package requirements
@@ -202,18 +212,20 @@ Use the Jira issue description, `triage_summary`, and `patch_urls` to understand
 
 #### 4.1. Clone the Tests Repository
 
-1. Clone the RHEL tests repository using `clone_repository`:
-   - URL: `https://gitlab.com/redhat/rhel/tests/<package_name>`
+1. Clone the configured tests repository using `clone_repository`:
+   - URL: `test_repository_url` selected from package `ymir.yaml` (default: `https://gitlab.com/redhat/rhel/tests/<package_name>`)
    - Do NOT specify a `branch` parameter — omit it so the tool clones the default branch (it may not be `main`).
-   - Use a clone path under `/git-repos/` (the shared volume), e.g. `/git-repos/tests-<package_name>`.
+   - Use a clone path under `/git-repos/` (the shared volume), normally `/git-repos/Reproducer/{{jira_issue}}/tests-<package_name>`.
    - If the clone path already exists from a previous failed attempt, `clone_repository` removes and re-clones it — do NOT delete it yourself with `rm -rf`.
    - Save the clone path as `tests_clone`.
 
 2. Create the test directory under the tests clone. Prefer package convention:
    - CVEs: often `<tests_clone>/Security/<cve_id>/`
    - Bugs: often `<tests_clone>/Regression/<jira_issue>/`
+   - If `test_directory_prefix` is configured, prepend it for a new test (e.g. `<tests_clone>/packages/<package_name>/Security/<cve_id>/`).
    If the package already uses a different parent or leaf name for similar
-   tests, match that layout instead. Save the absolute path as `test_dir` and
+   tests, match that layout instead. When adapting, keep the discovered path and
+   do not add the prefix again. Save the absolute path as `test_dir` and
    the path relative to `tests_clone` for the `test_directory` output field.
 
 3. Create the `.fmf/version` file if it does not already exist at the tests repo root:

@@ -8,11 +8,12 @@ and components to ensure consistency and type safety.
 import re
 from datetime import UTC, datetime
 from enum import Enum, StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 
 from ymir.common.validators import UniqueSortedList
 
@@ -1023,6 +1024,20 @@ class PackageReproducerConfig(BaseModel):
         default=False,
         description="Whether to run the Ymir reproducer workflow for this package",
     )
+    test_repository: str | None = Field(
+        default=None,
+        description=(
+            "HTTPS clone URL for the repository where reproducer tests are searched. "
+            "Defaults to https://gitlab.com/redhat/rhel/tests/<package>."
+        ),
+    )
+    test_directory_prefix: str | None = Field(
+        default=None,
+        description=(
+            "Optional repository-relative prefix prepended to new reproducer test directories. "
+            "Existing tests keep their discovered path."
+        ),
+    )
     fmf: PackageReproducerFmfConfig = Field(
         default_factory=PackageReproducerFmfConfig,
         description="Package-specific FMF metadata merged into the default reproducer template",
@@ -1031,6 +1046,36 @@ class PackageReproducerConfig(BaseModel):
         default_factory=PackageReproducerContextConfig,
         description="Package-specific context used to render FMF metadata templates",
     )
+
+    @field_validator("test_repository")
+    @classmethod
+    def validate_test_repository(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or parsed.path in {"", "/"}
+        ):
+            raise ValueError("test_repository must be a credential-free HTTPS repository URL")
+        return value.rstrip("/")
+
+    @field_validator("test_directory_prefix")
+    @classmethod
+    def validate_test_directory_prefix(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        path = PurePosixPath(value)
+        if not value.strip() or path.is_absolute() or ".." in path.parts or not path.parts:
+            raise ValueError("test_directory_prefix must be a relative path without '..' segments")
+        return path.as_posix()
 
 
 class PackageReleaseBumpingConfig(BaseModel):

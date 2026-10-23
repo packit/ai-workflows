@@ -725,6 +725,8 @@ class _ReproducerPromptInput(BaseModel):
     reproducer_working_dir: str = "/git-repos/Reproducer/RHEL-1"
     tests_clone_ready: bool = False
     tests_clone_path: str | None = None
+    test_repository_url: str = "https://gitlab.com/redhat/rhel/tests/bind"
+    test_directory_prefix: str | None = None
     existing_mr_url: str | None = None
     mr_source_branch: str | None = None
     existing_test_directory: str | None = None
@@ -752,11 +754,14 @@ class TestReproducerTemplate:
                 dry_run=True,
                 reproducer_working_dir="/git-repos/Reproducer/RHEL-12345",
                 tests_clone_path="/git-repos/Reproducer/RHEL-12345/tests-bind",
+                test_directory_prefix="packages/bind",
             ),
         )
         assert "tmt lint" in result
         assert "cancel_testing_farm_request" in result
         assert "programmatically" in result
+        assert "https://gitlab.com/redhat/rhel/tests/bind" in result
+        assert "Configured test directory prefix: `packages/bind`." in result
 
     def test_fix_tmt_lint_prompt_includes_error_and_tf_id(self):
         result = render_template(

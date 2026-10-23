@@ -136,6 +136,35 @@ def test_needs_merge_request():
     assert _needs_merge_request(_output(success=True, lock_deferred=True)) is False
 
 
+def test_tmt_lint_fix_preserves_workflow_classification():
+    original = _output(
+        jira_issue="RHEL-114607",
+        reproducer_type="cve",
+        package="expat",
+        test_directory="packages/expat/Security/CVE-2025-59375",
+        test_already_exists=False,
+        adapted_existing=False,
+    )
+    fixed = _output(
+        jira_issue="RHEL-114607",
+        reproducer_type="cve",
+        package="expat",
+        test_directory="Regression/RHEL-OTHER",
+        test_already_exists=True,
+        existing_mr_url="https://gitlab.com/redhat/rhel/tests/expat/-/merge_requests/1",
+        adapted_existing=True,
+        summary="Fixed the FMF metadata.",
+    )
+
+    result = r_agent._preserve_tmt_lint_workflow_fields(original, fixed)
+
+    assert result.test_already_exists is False
+    assert result.adapted_existing is False
+    assert result.existing_mr_url is None
+    assert result.test_directory == "packages/expat/Security/CVE-2025-59375"
+    assert result.summary == "Fixed the FMF metadata."
+
+
 def test_resolve_test_dir_uses_agent_relative_path(tmp_path: Path):
     security = tmp_path / "Security" / "CVE-2026-11331"
     security.mkdir(parents=True)
@@ -160,6 +189,21 @@ def test_resolve_test_dir_rejects_traversal_and_missing(tmp_path: Path):
     assert _resolve_test_dir(tmp_path, "Security/CVE-missing") is None
 
 
+@pytest.mark.parametrize(
+    ("test_directory", "prefix", "expected"),
+    [
+        ("shared_pkg/exp_security/Security/CVE-1", "shared_pkg/exp_security", True),
+        ("/shared_pkg/exp_security/Security/CVE-1", "shared_pkg/exp_security", True),
+        ("shared_pkg/exp_security_extra/Security/CVE-1", "shared_pkg/exp_security", False),
+        ("Security/CVE-1", "shared_pkg/exp_security", False),
+        ("shared_pkg/../Security/CVE-1", "shared_pkg/exp_security", False),
+        (None, "shared_pkg/exp_security", False),
+    ],
+)
+def test_test_directory_is_under_prefix(test_directory, prefix, expected):
+    assert r_agent._test_directory_is_under_prefix(test_directory, prefix) is expected
+
+
 def test_discover_existing_reproducer_test_dir_prefers_security_cve(tmp_path: Path):
     repo = tmp_path / "tests-pkg"
     repo.mkdir()
@@ -174,6 +218,60 @@ def test_discover_existing_reproducer_test_dir_prefers_security_cve(tmp_path: Pa
         reproducer_type="cve",
     )
     assert discovered == canonical
+
+
+def test_discover_existing_reproducer_test_dir_finds_prefixed_security_cve(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    canonical = repo / "shared_pkg" / "exp_security" / "Security" / "CVE-2026-50219"
+    canonical.mkdir(parents=True)
+    (canonical / "main.fmf").write_text("summary: test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id="CVE-2026-50219",
+        jira_issue="RHEL-220981",
+        reproducer_type="cve",
+        test_directory_prefix="shared_pkg/exp_security",
+    )
+
+    assert discovered == canonical
+
+
+def test_discover_existing_reproducer_test_dir_finds_prefixed_regression(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    canonical = repo / "shared_pkg" / "exp_security" / "Regression" / "RHEL-100"
+    canonical.mkdir(parents=True)
+    (canonical / "main.fmf").write_text("summary: test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id=None,
+        jira_issue="RHEL-100",
+        reproducer_type="bug",
+        test_directory_prefix="shared_pkg/exp_security",
+    )
+
+    assert discovered == canonical
+
+
+def test_discover_existing_reproducer_test_dir_falls_back_to_root_layout_with_prefix(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    legacy = repo / "Security" / "CVE-2026-50219"
+    legacy.mkdir(parents=True)
+    (legacy / "main.fmf").write_text("summary: test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id="CVE-2026-50219",
+        jira_issue="RHEL-220981",
+        reproducer_type="cve",
+        test_directory_prefix="shared_pkg/exp_security",
+    )
+
+    assert discovered == legacy
 
 
 def test_discover_existing_reproducer_test_dir_rejects_cve_prefix_collision(tmp_path: Path):
@@ -224,7 +322,7 @@ def test_match_open_reproducer_mr_by_cve_bracket_in_title():
             "source_branch": "reproducer/RHEL-221017",
         }
     ]
-    matched = _match_open_reproducer_mr(mrs, cve_ids=["CVE-2026-56132"])
+    matched = _match_open_reproducer_mr(mrs, package="expat", cve_ids=["CVE-2026-56132"])
     assert matched is not None
     assert matched["source_branch"] == "reproducer/RHEL-221017"
 
@@ -237,8 +335,8 @@ def test_match_open_reproducer_mr_ignores_unrelated_cve_in_description():
             "description": "Test for CVE-2026-99999 which is unrelated.",
         }
     ]
-    assert _match_open_reproducer_mr(mrs, cve_ids=["CVE-2026-99999"]) is None
-    assert _match_open_reproducer_mr(mrs, cve_ids=["CVE-2026-56132"]) is not None
+    assert _match_open_reproducer_mr(mrs, package="expat", cve_ids=["CVE-2026-99999"]) is None
+    assert _match_open_reproducer_mr(mrs, package="expat", cve_ids=["CVE-2026-56132"]) is not None
 
 
 def test_match_open_reproducer_mr_ignores_bare_cve_token_without_brackets():
@@ -249,26 +347,67 @@ def test_match_open_reproducer_mr_ignores_bare_cve_token_without_brackets():
             "description": "Security test for CVE-2026-56132 in expat.",
         }
     ]
-    assert _match_open_reproducer_mr(mrs, cve_ids=["CVE-2026-56132"]) is None
+    assert _match_open_reproducer_mr(mrs, package="expat", cve_ids=["CVE-2026-56132"]) is None
+
+
+def test_match_open_reproducer_mr_scopes_cve_and_existing_url_to_package():
+    cve_id = "CVE-2026-56132"
+    expat_mr = {
+        "url": "https://gitlab.com/redhat/rhel/tests/shared/-/merge_requests/1",
+        "title": f"expat: [{cve_id}] ymir reproducer test",
+    }
+    bind_mr = {
+        "url": "https://gitlab.com/redhat/rhel/tests/shared/-/merge_requests/2",
+        "title": f"bind: [{cve_id}] ymir reproducer test",
+    }
+    mrs = [expat_mr, bind_mr]
+
+    assert _match_open_reproducer_mr(mrs, package="bind", cve_ids=[cve_id]) == bind_mr
+    assert (
+        _match_open_reproducer_mr(
+            mrs,
+            package="bind",
+            cve_ids=[cve_id],
+            existing_mr_url=expat_mr["url"],
+        )
+        == bind_mr
+    )
+    assert (
+        _match_open_reproducer_mr(
+            [expat_mr],
+            package="bind",
+            cve_ids=[cve_id],
+            existing_mr_url=expat_mr["url"],
+        )
+        is None
+    )
 
 
 def test_match_regression_sibling_mr_when_issue_not_yet_in_title():
     mrs = [
         {
             "url": "https://gitlab.com/a/1",
-            "title": "bind: [RHEL-100] ymir reproducer test",
+            "title": "expat: [RHEL-100] ymir reproducer test",
         },
         {
             "url": "https://gitlab.com/a/2",
             "title": "bind: [RHEL-500] ymir reproducer test",
         },
     ]
-    assert _match_regression_sibling_mr(mrs, "RHEL-300") is None
-    assert _match_regression_sibling_mr(mrs, "RHEL-300", clone_root="RHEL-100") == mrs[0]
+    assert _match_regression_sibling_mr([mrs[0]], "RHEL-300", package="bind") is None
+    assert _match_regression_sibling_mr(mrs, "RHEL-300", package="bind") == mrs[1]
+    assert (
+        _match_regression_sibling_mr(
+            mrs,
+            "RHEL-300",
+            package="bind",
+            clone_root="RHEL-500",
+        )
+        == mrs[1]
+    )
 
     single = [mrs[0]]
-    assert _match_regression_sibling_mr(single, "RHEL-200") == single[0]
-    assert _match_regression_sibling_mr(single, "RHEL-200", clone_root="RHEL-100") == single[0]
+    assert _match_regression_sibling_mr(single, "RHEL-200", package="bind") is None
 
 
 def test_match_open_reproducer_mr_uses_clone_root_tag():
@@ -282,8 +421,24 @@ def test_match_open_reproducer_mr_uses_clone_root_tag():
             "title": "bind: [RHEL-500] ymir reproducer test",
         },
     ]
-    assert _match_open_reproducer_mr(mrs, jira_issue="RHEL-200", clone_root="RHEL-100") == mrs[0]
-    assert _match_open_reproducer_mr(mrs, jira_issue="RHEL-600", clone_root="RHEL-500") == mrs[1]
+    assert (
+        _match_open_reproducer_mr(
+            mrs,
+            package="bind",
+            jira_issue="RHEL-200",
+            clone_root="RHEL-100",
+        )
+        == mrs[0]
+    )
+    assert (
+        _match_open_reproducer_mr(
+            mrs,
+            package="bind",
+            jira_issue="RHEL-600",
+            clone_root="RHEL-500",
+        )
+        == mrs[1]
+    )
 
 
 def test_discover_existing_reproducer_test_dir_prefers_clone_root_regression_path(tmp_path: Path):
@@ -400,9 +555,9 @@ def test_match_open_reproducer_mr_by_jira_bracket():
             "description": "Also mentions RHEL-88888 in prose.",
         }
     ]
-    matched = _match_open_reproducer_mr(mrs, jira_issue="RHEL-99999")
+    matched = _match_open_reproducer_mr(mrs, package="bind", jira_issue="RHEL-99999")
     assert matched is not None
-    assert _match_open_reproducer_mr(mrs, jira_issue="RHEL-88888") is None
+    assert _match_open_reproducer_mr(mrs, package="bind", jira_issue="RHEL-88888") is None
 
 
 def test_build_mr_title_uses_cve_bracket_for_security():
@@ -432,12 +587,14 @@ def test_build_mr_title_multi_cve_roundtrip():
 
     matched = _match_open_reproducer_mr(
         [{"url": "https://gitlab.com/a/1", "title": title}],
+        package="expat",
         cve_ids=["CVE-2026-56132"],
     )
     assert matched is not None
 
     matched2 = _match_open_reproducer_mr(
         [{"url": "https://gitlab.com/a/1", "title": title}],
+        package="expat",
         cve_ids=["CVE-2026-50219"],
     )
     assert matched2 is not None
@@ -451,15 +608,65 @@ def test_build_mr_title_uses_jira_bracket_for_regression():
 
 def test_match_open_reproducer_mr_prefers_existing_url():
     mrs = [
-        {"url": "https://gitlab.com/a/1", "title": "other", "description": ""},
-        {"url": "https://gitlab.com/a/2", "title": "target", "description": ""},
+        {
+            "url": "https://gitlab.com/a/1",
+            "title": "expat: [CVE-2026-12345] ymir reproducer test",
+            "description": "",
+        },
+        {
+            "url": "https://gitlab.com/a/2",
+            "title": "bind: [CVE-2026-12345] ymir reproducer test",
+            "description": "",
+        },
     ]
     matched = _match_open_reproducer_mr(
         mrs,
+        package="bind",
         cve_ids=["CVE-1"],
         existing_mr_url="https://gitlab.com/a/2",
     )
     assert matched["url"] == "https://gitlab.com/a/2"
+    assert (
+        _match_open_reproducer_mr(
+            mrs,
+            package="expat",
+            cve_ids=["CVE-1"],
+            existing_mr_url="https://gitlab.com/a/2",
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_mr_target_does_not_restore_bootstrap_rejection(tmp_path: Path):
+    rejected_mr_url = "https://gitlab.com/redhat/rhel/tests/shared/-/merge_requests/10"
+    result = _output(
+        jira_issue="RHEL-10",
+        success=True,
+        package="bind",
+        reproducer_type="cve",
+        existing_mr_url=rejected_mr_url,
+    )
+    agent_input = ReproducerInputSchema(
+        jira_issue="RHEL-10",
+        package="bind",
+        cve_id="CVE-2026-12345",
+    )
+    bootstrap = r_agent.TestsCloneBootstrap(tests_clone=tmp_path)
+
+    flexmock(r_agent).should_receive("_list_open_reproducer_mrs").never()
+    mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(
+        result,
+        agent_input,
+        "bind",
+        [],
+        bootstrap=bootstrap,
+    )
+
+    assert mr_url is None
+    assert branch == "reproducer/RHEL-10"
+    assert matched_mr is None
+    assert result.existing_mr_url is None
 
 
 @pytest.mark.asyncio
@@ -675,17 +882,22 @@ async def test_prepare_reproducer_branch_bootstrapped_adapt_preserves_worktree(t
     assert (test_dir / "runtest.sh").read_text() == "local-adapt\n"
 
 
+@pytest.mark.parametrize("existing_under_prefix", [True, False])
 @pytest.mark.asyncio
-async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Path):
+async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(
+    tmp_path: Path,
+    existing_under_prefix: bool,
+):
     working_dir = tmp_path / "Reproducer" / "RHEL-2"
     working_dir.mkdir(parents=True)
     repo = working_dir / "tests-bind"
     repo.mkdir()
     cve_id = "CVE-2026-0001"
+    test_directory_prefix = "shared_pkg/exp_security"
 
     async def _mock_run_tool(name, available_tools=None, **_kwargs):
         if name == "clone_repository":
-            (repo / "README").write_text("cloned\n")
+            await _git_init_with_main(repo)
             return "ok"
         if name == "list_project_merge_requests":
             return [
@@ -707,12 +919,13 @@ async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Pat
                 comments=[],
             ).model_dump(mode="json")
         if name == "fetch_branch":
-            await _git_init_with_main(repo)
             await check_subprocess(["git", "checkout", "-b", "reproducer/RHEL-1"], cwd=repo)
             mr_dir = repo / "Security" / cve_id
+            if existing_under_prefix:
+                mr_dir = repo / test_directory_prefix / "Security" / cve_id
             mr_dir.mkdir(parents=True)
             (mr_dir / "main.fmf").write_text("summary: on mr\n")
-            await check_subprocess(["git", "add", "Security"], cwd=repo)
+            await check_subprocess(["git", "add", str(mr_dir.relative_to(repo))], cwd=repo)
             await check_subprocess(["git", "commit", "-m", "mr test"], cwd=repo)
             return "ok"
         raise AssertionError(f"unexpected tool {name}")
@@ -724,13 +937,106 @@ async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Pat
         package="bind",
         cve_id=cve_id,
     )
-    bootstrap = await _bootstrap_tests_clone(working_dir, input_data, [])
+    bootstrap = await _bootstrap_tests_clone(
+        working_dir,
+        input_data,
+        [],
+        test_directory_prefix=test_directory_prefix,
+    )
 
     assert bootstrap.existing_mr_url.endswith("/merge_requests/9")
     assert bootstrap.mr_source_branch == "reproducer/RHEL-1"
-    assert bootstrap.existing_test_directory == f"Security/{cve_id}"
+    expected_test_directory = f"Security/{cve_id}"
+    if existing_under_prefix:
+        expected_test_directory = f"{test_directory_prefix}/{expected_test_directory}"
+    assert bootstrap.existing_test_directory == expected_test_directory
     head, _ = await check_subprocess(["git", "branch", "--show-current"], cwd=repo)
     assert head.strip() == "reproducer/RHEL-1"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_discards_mr_when_branch_has_no_matching_test(tmp_path: Path):
+    working_dir = tmp_path / "Reproducer" / "RHEL-4"
+    working_dir.mkdir(parents=True)
+    repo = working_dir / "tests-bind"
+    repo.mkdir()
+    cve_id = "CVE-2026-0002"
+    test_directory_prefix = "packages/bind"
+
+    async def _mock_run_tool(name, available_tools=None, **_kwargs):
+        if name == "clone_repository":
+            await _git_init_with_main(repo)
+            return "ok"
+        if name == "list_project_merge_requests":
+            return [
+                {
+                    "url": "https://gitlab.com/redhat/rhel/tests/shared/-/merge_requests/10",
+                    "title": f"bind: [{cve_id}] ymir reproducer test",
+                    "source_branch": "reproducer/RHEL-3",
+                }
+            ]
+        if name == "get_merge_request_details":
+            return MergeRequestDetails(
+                source_repo="https://gitlab.com/fork/tests-shared.git",
+                source_branch="reproducer/RHEL-3",
+                target_repo_name="shared",
+                target_branch="main",
+                title=f"bind: [{cve_id}] ymir reproducer test",
+                description="",
+                last_updated_at=datetime.now(UTC),
+                comments=[],
+            ).model_dump(mode="json")
+        if name == "fetch_branch":
+            await check_subprocess(["git", "checkout", "-b", "reproducer/RHEL-3"], cwd=repo)
+            unrelated_dir = repo / test_directory_prefix / "Security" / "CVE-2026-0001"
+            unrelated_dir.mkdir(parents=True)
+            (unrelated_dir / "main.fmf").write_text("summary: unrelated test\n")
+            await check_subprocess(["git", "add", test_directory_prefix], cwd=repo)
+            await check_subprocess(["git", "commit", "-m", "unrelated test"], cwd=repo)
+            return "ok"
+        raise AssertionError(f"unexpected tool {name}")
+
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    input_data = ReproducerInputSchema(jira_issue="RHEL-4", package="bind", cve_id=cve_id)
+
+    bootstrap = await _bootstrap_tests_clone(
+        working_dir,
+        input_data,
+        [],
+        test_directory_prefix=test_directory_prefix,
+    )
+
+    assert bootstrap.existing_mr_url is None
+    assert bootstrap.mr_source_branch is None
+    assert bootstrap.existing_test_directory is None
+    assert bootstrap.matched_mr is None
+    head, _ = await check_subprocess(["git", "branch", "--show-current"], cwd=repo)
+    assert head.strip() == "main"
+    assert not (repo / test_directory_prefix / "Security" / "CVE-2026-0001").exists()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_tests_clone_uses_configured_repository_url(tmp_path: Path):
+    working_dir = tmp_path / "Reproducer" / "RHEL-3"
+    working_dir.mkdir(parents=True)
+    repository_url = "https://gitlab.com/redhat/rhel/tests/shared.git"
+    cloned_urls = []
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        if name == "clone_repository":
+            cloned_urls.append(kwargs["repository"])
+            return "ok"
+        if name == "list_project_merge_requests":
+            assert kwargs["project"] == "redhat/rhel/tests/shared"
+            return []
+        raise AssertionError(f"unexpected tool {name}")
+
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    input_data = ReproducerInputSchema(jira_issue="RHEL-3", package="bind")
+
+    await _bootstrap_tests_clone(working_dir, input_data, [], repository_url=repository_url)
+
+    assert cloned_urls == [repository_url]
 
 
 # =============================================================================
@@ -1048,6 +1354,7 @@ def test_render_prompt_includes_package_fmf_metadata():
     )
     config = PackageReproducerConfig(
         enabled=True,
+        test_directory_prefix="packages/bind",
         fmf={
             "require": ["runtime-package"],
             "recommend": ["optional-tool"],
@@ -1065,6 +1372,29 @@ def test_render_prompt_includes_package_fmf_metadata():
     assert '"PACKAGE_SETTING": "3.3"' in prompt
     assert '"duration": "30m"' in prompt
     assert "${runtime_version}" not in prompt
+    assert "Configured test directory prefix: `packages/bind`." in prompt
+
+
+def test_render_prompt_passes_configured_test_repository_to_template(monkeypatch):
+    captured = {}
+    config = PackageReproducerConfig(
+        enabled=True,
+        test_repository="https://gitlab.com/redhat/rhel/tests/shared.git",
+        test_directory_prefix="packages/bind",
+    )
+
+    def _capture_context(_template_name, context):
+        captured["context"] = context
+        return ""
+
+    monkeypatch.setattr(r_agent, "render_template", _capture_context)
+    _render_prompt(
+        ReproducerInputSchema(jira_issue="RHEL-12345", package="bind"),
+        reproducer_config=config,
+    )
+
+    assert captured["context"].test_repository_url == config.test_repository
+    assert captured["context"].test_directory_prefix == config.test_directory_prefix
 
 
 def test_render_fmf_templates_rejects_unknown_variable():

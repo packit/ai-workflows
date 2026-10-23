@@ -113,6 +113,7 @@ def get_tool_call_checker_config() -> ToolCallCheckerConfig:
 
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
+_SKILLS_DIR = Path(__file__).parent / "skills"
 
 _jinja2_envs: dict[str, Environment] = {}
 
@@ -145,6 +146,15 @@ def render_template(
     env = _get_jinja2_env(template_dir)
     template = env.get_template(template_name)
     return template.render(input.model_dump(mode="json") if input else {})
+
+
+def get_skills_dir() -> Path:
+    """Directory holding the on-demand Agent Skills.
+
+    A skill is a directory with a ``SKILL.md`` (markdown + YAML frontmatter);
+    ``LoadSkillTool`` reads them when an agent asks for one by name.
+    """
+    return _SKILLS_DIR
 
 
 def set_litellm_debug() -> None:

@@ -15,7 +15,6 @@ import requests
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, ToolError, ToolRunOptions
-from mcp.server.lowlevel.server import request_ctx
 from pydantic import BaseModel, Field, field_validator
 
 from ymir.common.models import (
@@ -26,6 +25,7 @@ from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import make_additional_context, tool_error_context
 from ymir.tools.errors import ToolErrorWithContext
 from ymir.tools.gateway_utils import redact_credentials
+from ymir.tools.mcp_context import request_meta
 
 logger = logging.getLogger(__name__)
 
@@ -293,16 +293,9 @@ _allowed_ssh_hosts: dict[str, set[str]] = {}
 _PACKAGE_NAME_RE = re.compile(r"^[A-Za-z0-9_.+-]+$")
 
 
-def _get_mcp_meta() -> Any:
-    try:
-        return request_ctx.get().meta
-    except LookupError:
-        return None
-
-
 def _meta_get(key: str) -> str | None:
     """Read a string field from the current MCP request ``_meta``."""
-    meta = _get_mcp_meta()
+    meta = request_meta()
     if meta is None:
         return None
     value = getattr(meta, key, None)

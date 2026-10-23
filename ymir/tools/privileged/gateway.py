@@ -10,6 +10,7 @@ from beeai_framework.adapters.mcp.serve.server import (
 
 from ymir.common.mock_repos import apply_zstream_override_from_env
 from ymir.tools.gateway_utils import get_log_detective_mcp, setup_logging
+from ymir.tools.mcp_context import install_request_context_middleware
 from ymir.tools.privileged.copr import BuildPackageTool, DownloadArtifactsTool
 from ymir.tools.privileged.distgit import CreateZstreamBranchTool
 from ymir.tools.privileged.errata import (
@@ -106,6 +107,7 @@ async def _async_main():
     apply_zstream_override_from_env()
     tool_options: dict = {"working_directory": None}
     mcp = MCPServer(config=config)
+    install_request_context_middleware(mcp)
 
     log_detective_tools = await get_log_detective_mcp()
     if log_detective_tools:

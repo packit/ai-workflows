@@ -12,6 +12,9 @@ dynamic = ["dependencies"]
 [tool.hatch.metadata.hooks.requirements_txt]
 files = ["../../requirements-global.txt", "requirements.txt"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [project.optional-dependencies]
 test = [
     "pytest>=8.4.1",

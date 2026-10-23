@@ -20,7 +20,6 @@ from beeai_framework.tools import (
     ToolError,
     ToolRunOptions,
 )
-from mcp.server.lowlevel.server import request_ctx
 from ogr.exceptions import GitlabAPIException, OgrException
 from ogr.factory import get_project
 from ogr.services.gitlab.project import GitlabProject
@@ -42,6 +41,7 @@ from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.errors import ToolErrorWithContext
 from ymir.tools.gateway_utils import redact_credentials
 from ymir.tools.http import aiohttp_get_with_retries
+from ymir.tools.mcp_context import request_meta
 from ymir.tools.privileged.utils import clean_stale_repositories, sanitize_url
 
 logger = logging.getLogger(__name__)
@@ -166,12 +166,7 @@ def _get_mock_git_env() -> dict[str, str] | None:
     Falls back to ``None`` (inherit process env) when no per-issue
     gitconfig exists or when the request has no metadata.
     """
-    try:
-        ctx = request_ctx.get()
-        meta = ctx.meta
-    except LookupError:
-        return None
-
+    meta = request_meta()
     if meta is None:
         return None
 

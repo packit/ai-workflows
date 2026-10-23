@@ -523,6 +523,16 @@ def test_reproducer_agent_artifacts(test_case: ReproducerAgentTestCase):
     assert test_dir.is_dir(), (
         f"{test_case.jira_issue}: expected test directory at {test_dir} but it does not exist"
     )
+    prefix = test_case.reproducer_config.test_directory_prefix if test_case.reproducer_config else None
+    if prefix:
+        assert result.test_directory, (
+            f"{test_case.jira_issue}: test_directory is required with a configured prefix"
+        )
+        relative_test_dir = Path(str(result.test_directory).strip().lstrip("/"))
+        assert relative_test_dir.is_relative_to(Path(prefix)), (
+            f"{test_case.jira_issue}: expected test_directory={result.test_directory!r} "
+            f"to be under configured prefix {prefix!r}"
+        )
 
     runtest = test_dir / "runtest.sh"
     assert runtest.is_file(), f"{test_case.jira_issue}: missing runtest.sh in {test_dir}"

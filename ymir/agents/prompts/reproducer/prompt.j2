@@ -8,6 +8,8 @@ tracing, or upstream fix hunting. Use the provided triage summary and Jira issue
 description to understand the bug.
 
 Your working Jira issue is {{ jira_issue }}. The package is {{ package }}.
+Configured tests repository: `{{ test_repository_url }}`.
+{% if test_directory_prefix %}Configured test directory prefix: `{{ test_directory_prefix }}`.{% endif %}
 {% if cve_id %}The CVE is {{ cve_id }}.{% endif %}
 {% if patch_urls %}Patch URLs: {{ patch_urls }}.{% endif %}
 {% if triage_summary %}
@@ -126,8 +128,8 @@ Execute the following steps in order.
    Do NOT call `clone_repository` for this path — it would destroy the checked-out
    branch{% endif %}.
    {% else %}
-   * Clone the RHEL tests repository using `clone_repository`:
-     - URL: `https://gitlab.com/redhat/rhel/tests/<package_name>`
+   * Clone the configured tests repository using `clone_repository`:
+     - URL: `{{ test_repository_url }}`
      - Do NOT specify a `branch` parameter — omit it so the tool clones the default branch.
      - Use clone path `{{ reproducer_working_dir }}/tests-<package_name>`.
      - If the clone path already exists, `clone_repository` removes and re-clones it — do NOT delete it yourself with `rm -rf`.
@@ -148,11 +150,12 @@ Execute the following steps in order.
      run_shell_command("grep -rl '{{ cve_id }}' {{ reproducer_working_dir }}/tests-<package_name>/ --include='*.fmf' --include='*.sh' || true")
      ```
      {% endif %}
-   * List open reproducer MRs with `list_project_merge_requests`:
-     - `project`: `redhat/rhel/tests/<package_name>`
-     - `state`: `opened`
-     - `labels`: `["ymir_reproducer"]`
-     Match MRs whose **title** contains the canonical tag ``[{{ cve_id }}]``{% if cve_id %}
+   * For GitLab repositories, list open reproducer MRs with
+     `list_project_merge_requests` using the project path from
+     `{{ test_repository_url }}` (remove the scheme, host, surrounding slashes,
+     and optional `.git` suffix), `state="opened"`, and
+     `labels=["ymir_reproducer"]`. Match MRs whose **title** contains the
+     canonical tag ``[{{ cve_id }}]``{% if cve_id %}
      (primary for sibling streams — do not match on description text, which may
      mention unrelated CVEs){% endif %}, or ``[{{ jira_issue }}]`` for regression tests.
      Orchestration titles new reproducer MRs as ``<package>: [CVE-…] ymir reproducer test``
@@ -164,6 +167,10 @@ Execute the following steps in order.
      `fetch_branch` + `git checkout`) **before** copying/running the test — the test
      usually lives only on that branch, not on the default branch yet.{% endif %}
      The MR does not need to be merged first.
+
+   The current orchestration can discover and publish MRs only through its
+   existing GitLab.com Red Hat project flow. For other providers, inspect the
+   configured clone but do not assume automatic open-PR discovery or publishing.
 
    * **If an existing test directory / matching test / open MR is found:**
      1. Continue to steps 3–6 to reserve a Testing Farm machine for **this**
@@ -281,10 +288,13 @@ Execute the following steps in order.
    {% if tests_clone_ready %}
    The tests repository was prepared by orchestration at `{{ tests_clone_path }}`{% if mr_source_branch %} on branch `{{ mr_source_branch }}`{% endif %}{% if existing_test_directory %} with the canonical test at `{{ existing_test_directory }}/`{% endif %}. Do NOT call `clone_repository` for this path.
    {% else %}
-   The tests repository was already cloned in step 1.7 at `{{ reproducer_working_dir }}/tests-<package_name>`. If for any reason the clone is missing, re-clone it using `clone_repository` with URL `https://gitlab.com/redhat/rhel/tests/<package_name>` (no `branch` parameter) to `{{ reproducer_working_dir }}/tests-<package_name>`.
+   The tests repository was already cloned in step 1.7 at `{{ reproducer_working_dir }}/tests-<package_name>`. If for any reason the clone is missing, re-clone it using `clone_repository` with URL `{{ test_repository_url }}` (no `branch` parameter) to `{{ reproducer_working_dir }}/tests-<package_name>`.
    {% endif %}
 
-   * Create the test directory under the tests clone. Prefer package convention:
+   * Create the test directory under the tests clone. For a new test, prepend
+     the configured `test_directory_prefix` when one is set; keep the full path
+     relative to the clone. For an existing test, adapt it at its discovered path
+     without adding the prefix again. Otherwise, prefer package convention:
      - CVEs: often `<tests_clone>/Security/<cve_id>/`
      - Bugs: often `<tests_clone>/Regression/<jira_issue>/`
      If the package already uses a different parent or leaf name for similar

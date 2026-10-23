@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from ymir.common.models import (
     AUTOMATED_RESOLUTION_NOT_SUPPORTED,
     POSTPONEMENT_NOTE,
@@ -10,6 +13,7 @@ from ymir.common.models import (
     ErrorListEntry,
     NotAffectedData,
     OpenEndedAnalysisData,
+    PackageReproducerConfig,
     PostponedData,
     RebaseData,
     RebuildData,
@@ -19,6 +23,42 @@ from ymir.common.models import (
     Task,
     TriageOutputSchema,
 )
+
+
+def test_package_reproducer_config_defaults_test_repository():
+    assert PackageReproducerConfig().test_repository is None
+
+
+def test_package_reproducer_config_accepts_https_test_repository():
+    config = PackageReproducerConfig(test_repository="https://gitlab.com/redhat/rhel/tests/shared.git/")
+
+    assert config.test_repository == "https://gitlab.com/redhat/rhel/tests/shared.git"
+
+
+@pytest.mark.parametrize(
+    "repository_url",
+    [
+        "http://gitlab.com/redhat/rhel/tests/bash",
+        "https://user:password@example.com/tests.git",  # pragma: allowlist secret
+        "https://example.com/",
+        "https://example.com/tests.git?token=secret",
+    ],
+)
+def test_package_reproducer_config_rejects_invalid_test_repository(repository_url):
+    with pytest.raises(ValidationError):
+        PackageReproducerConfig(test_repository=repository_url)
+
+
+def test_package_reproducer_config_accepts_test_directory_prefix():
+    config = PackageReproducerConfig(test_directory_prefix="packages/ruby/")
+
+    assert config.test_directory_prefix == "packages/ruby"
+
+
+@pytest.mark.parametrize("prefix", ["", "/packages/ruby", "../ruby", "packages/../ruby"])
+def test_package_reproducer_config_rejects_unsafe_test_directory_prefix(prefix):
+    with pytest.raises(ValidationError, match="test_directory_prefix"):
+        PackageReproducerConfig(test_directory_prefix=prefix)
 
 
 def test_backport_formatting():

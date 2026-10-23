@@ -136,6 +136,35 @@ def test_needs_merge_request():
     assert _needs_merge_request(_output(success=True, lock_deferred=True)) is False
 
 
+def test_tmt_lint_fix_preserves_workflow_classification():
+    original = _output(
+        jira_issue="RHEL-114607",
+        reproducer_type="cve",
+        package="expat",
+        test_directory="packages/expat/Security/CVE-2025-59375",
+        test_already_exists=False,
+        adapted_existing=False,
+    )
+    fixed = _output(
+        jira_issue="RHEL-114607",
+        reproducer_type="cve",
+        package="expat",
+        test_directory="Regression/RHEL-OTHER",
+        test_already_exists=True,
+        existing_mr_url="https://gitlab.com/redhat/rhel/tests/expat/-/merge_requests/1",
+        adapted_existing=True,
+        summary="Fixed the FMF metadata.",
+    )
+
+    result = r_agent._preserve_tmt_lint_workflow_fields(original, fixed)
+
+    assert result.test_already_exists is False
+    assert result.adapted_existing is False
+    assert result.existing_mr_url is None
+    assert result.test_directory == "packages/expat/Security/CVE-2025-59375"
+    assert result.summary == "Fixed the FMF metadata."
+
+
 def test_resolve_test_dir_uses_agent_relative_path(tmp_path: Path):
     security = tmp_path / "Security" / "CVE-2026-11331"
     security.mkdir(parents=True)
@@ -160,6 +189,21 @@ def test_resolve_test_dir_rejects_traversal_and_missing(tmp_path: Path):
     assert _resolve_test_dir(tmp_path, "Security/CVE-missing") is None
 
 
+@pytest.mark.parametrize(
+    ("test_directory", "prefix", "expected"),
+    [
+        ("shared_pkg/exp_security/Security/CVE-1", "shared_pkg/exp_security", True),
+        ("/shared_pkg/exp_security/Security/CVE-1", "shared_pkg/exp_security", True),
+        ("shared_pkg/exp_security_extra/Security/CVE-1", "shared_pkg/exp_security", False),
+        ("Security/CVE-1", "shared_pkg/exp_security", False),
+        ("shared_pkg/../Security/CVE-1", "shared_pkg/exp_security", False),
+        (None, "shared_pkg/exp_security", False),
+    ],
+)
+def test_test_directory_is_under_prefix(test_directory, prefix, expected):
+    assert r_agent._test_directory_is_under_prefix(test_directory, prefix) is expected
+
+
 def test_discover_existing_reproducer_test_dir_prefers_security_cve(tmp_path: Path):
     repo = tmp_path / "tests-pkg"
     repo.mkdir()
@@ -174,6 +218,60 @@ def test_discover_existing_reproducer_test_dir_prefers_security_cve(tmp_path: Pa
         reproducer_type="cve",
     )
     assert discovered == canonical
+
+
+def test_discover_existing_reproducer_test_dir_finds_prefixed_security_cve(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    canonical = repo / "shared_pkg" / "exp_security" / "Security" / "CVE-2026-50219"
+    canonical.mkdir(parents=True)
+    (canonical / "main.fmf").write_text("summary: test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id="CVE-2026-50219",
+        jira_issue="RHEL-220981",
+        reproducer_type="cve",
+        test_directory_prefix="shared_pkg/exp_security",
+    )
+
+    assert discovered == canonical
+
+
+def test_discover_existing_reproducer_test_dir_finds_prefixed_regression(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    canonical = repo / "shared_pkg" / "exp_security" / "Regression" / "RHEL-100"
+    canonical.mkdir(parents=True)
+    (canonical / "main.fmf").write_text("summary: test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id=None,
+        jira_issue="RHEL-100",
+        reproducer_type="bug",
+        test_directory_prefix="shared_pkg/exp_security",
+    )
+
+    assert discovered == canonical
+
+
+def test_discover_existing_reproducer_test_dir_falls_back_to_root_layout_with_prefix(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    legacy = repo / "Security" / "CVE-2026-50219"
+    legacy.mkdir(parents=True)
+    (legacy / "main.fmf").write_text("summary: test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id="CVE-2026-50219",
+        jira_issue="RHEL-220981",
+        reproducer_type="cve",
+        test_directory_prefix="shared_pkg/exp_security",
+    )
+
+    assert discovered == legacy
 
 
 def test_discover_existing_reproducer_test_dir_rejects_cve_prefix_collision(tmp_path: Path):
@@ -682,6 +780,7 @@ async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Pat
     repo = working_dir / "tests-bind"
     repo.mkdir()
     cve_id = "CVE-2026-0001"
+    test_directory_prefix = "shared_pkg/exp_security"
 
     async def _mock_run_tool(name, available_tools=None, **_kwargs):
         if name == "clone_repository":
@@ -709,10 +808,10 @@ async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Pat
         if name == "fetch_branch":
             await _git_init_with_main(repo)
             await check_subprocess(["git", "checkout", "-b", "reproducer/RHEL-1"], cwd=repo)
-            mr_dir = repo / "Security" / cve_id
+            mr_dir = repo / test_directory_prefix / "Security" / cve_id
             mr_dir.mkdir(parents=True)
             (mr_dir / "main.fmf").write_text("summary: on mr\n")
-            await check_subprocess(["git", "add", "Security"], cwd=repo)
+            await check_subprocess(["git", "add", test_directory_prefix], cwd=repo)
             await check_subprocess(["git", "commit", "-m", "mr test"], cwd=repo)
             return "ok"
         raise AssertionError(f"unexpected tool {name}")
@@ -724,13 +823,42 @@ async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Pat
         package="bind",
         cve_id=cve_id,
     )
-    bootstrap = await _bootstrap_tests_clone(working_dir, input_data, [])
+    bootstrap = await _bootstrap_tests_clone(
+        working_dir,
+        input_data,
+        [],
+        test_directory_prefix=test_directory_prefix,
+    )
 
     assert bootstrap.existing_mr_url.endswith("/merge_requests/9")
     assert bootstrap.mr_source_branch == "reproducer/RHEL-1"
-    assert bootstrap.existing_test_directory == f"Security/{cve_id}"
+    assert bootstrap.existing_test_directory == f"{test_directory_prefix}/Security/{cve_id}"
     head, _ = await check_subprocess(["git", "branch", "--show-current"], cwd=repo)
     assert head.strip() == "reproducer/RHEL-1"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_tests_clone_uses_configured_repository_url(tmp_path: Path):
+    working_dir = tmp_path / "Reproducer" / "RHEL-3"
+    working_dir.mkdir(parents=True)
+    repository_url = "https://gitlab.com/redhat/rhel/tests/shared.git"
+    cloned_urls = []
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        if name == "clone_repository":
+            cloned_urls.append(kwargs["repository"])
+            return "ok"
+        if name == "list_project_merge_requests":
+            assert kwargs["project"] == "redhat/rhel/tests/shared"
+            return []
+        raise AssertionError(f"unexpected tool {name}")
+
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    input_data = ReproducerInputSchema(jira_issue="RHEL-3", package="bind")
+
+    await _bootstrap_tests_clone(working_dir, input_data, [], repository_url=repository_url)
+
+    assert cloned_urls == [repository_url]
 
 
 # =============================================================================
@@ -1048,6 +1176,7 @@ def test_render_prompt_includes_package_fmf_metadata():
     )
     config = PackageReproducerConfig(
         enabled=True,
+        test_directory_prefix="packages/bind",
         fmf={
             "require": ["runtime-package"],
             "recommend": ["optional-tool"],
@@ -1065,6 +1194,29 @@ def test_render_prompt_includes_package_fmf_metadata():
     assert '"PACKAGE_SETTING": "3.3"' in prompt
     assert '"duration": "30m"' in prompt
     assert "${runtime_version}" not in prompt
+    assert "Configured test directory prefix: `packages/bind`." in prompt
+
+
+def test_render_prompt_passes_configured_test_repository_to_template(monkeypatch):
+    captured = {}
+    config = PackageReproducerConfig(
+        enabled=True,
+        test_repository="https://gitlab.com/redhat/rhel/tests/shared.git",
+        test_directory_prefix="packages/bind",
+    )
+
+    def _capture_context(_template_name, context):
+        captured["context"] = context
+        return ""
+
+    monkeypatch.setattr(r_agent, "render_template", _capture_context)
+    _render_prompt(
+        ReproducerInputSchema(jira_issue="RHEL-12345", package="bind"),
+        reproducer_config=config,
+    )
+
+    assert captured["context"].test_repository_url == config.test_repository
+    assert captured["context"].test_directory_prefix == config.test_directory_prefix
 
 
 def test_render_fmf_templates_rejects_unknown_variable():

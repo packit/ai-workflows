@@ -111,15 +111,21 @@ You must decide between one of the following actions. Follow these guidelines to
      - Search for the issue that performed this rebase using search_jira_issues
        with a query like: 'project = RHEL AND component = "<package>" AND
        (summary ~ "rebase" OR summary ~ "update") AND summary ~ "<target_version>"
-       AND status in (Closed, Done, In Progress) AND fixVersion = "<fix_version>"'
+       AND status in (Closed, Done) AND fixVersion = "<fix_version>"
+       AND customfield_10578 is not EMPTY'
        Include fields ["key", "summary", "status", "customfield_10578"] (Fixed in Build)
-     - Return resolution "not-affected" instead of "rebase"
-     - In the summary field, reference the existing issue if found: "Package is
-       already at version X.Y.Z in the <branch> branch (tracked by ISSUE-KEY with
-       Fixed in Build: package-X.Y.Z-R.elN). Please add this ticket to that build's
-       Errata." If no issue found, provide generic guidance: "Package is already
-       at version X.Y.Z in the <branch> branch. Please search for existing builds
-       and add this ticket to the appropriate Errata."
+     - If a completed issue with Fixed in Build is found:
+       * Return resolution "already-fixed" instead of "rebase"
+       * In the explanation field: "Package is already at version X.Y.Z in the <branch>
+         branch (tracked by ISSUE-KEY with Fixed in Build: package-X.Y.Z-R.elN).
+         Please add this ticket to that build's Errata."
+     - If no completed issue with a build is found (spec matches but no build exists):
+       * Return resolution "clarification-needed"
+       * In findings: "Package spec is already at version X.Y.Z in the <branch> branch,
+         but no completed Jira issue with a Fixed in Build value was found."
+       * In additional_info_needed: "Please verify if a build exists for version X.Y.Z.
+         If a build exists, provide the issue key and NVR so this ticket can be added to
+         the appropriate Errata. If no build exists, proceed with the rebase."
    * You must provide a clear justification explaining why this version addresses the issue.
    * Set the Jira fields as per the instructions below.
 

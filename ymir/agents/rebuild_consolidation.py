@@ -5,6 +5,7 @@ from textwrap import dedent
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.tools import Tool
 from pydantic import BaseModel, Field
+from specfile.utils import NEVR
 
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
 from ymir.agents.reasoning_agent import ReasoningAgent
@@ -44,6 +45,7 @@ def build_rebuild_siblings_jql(
         fix_version=fix_version,
         excluded_labels=[
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
+            JiraLabels.TRIAGED_ALREADY_FIXED.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBASE.value,
         ],
@@ -206,10 +208,11 @@ async def find_rebuild_siblings(
                         )
                         fib = dep_details.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
                         # fix_version is already normalized by run_triage_analysis
-                        if fib and not await check_build_in_buildroot(
+                        fib_nevr = NEVR.from_string(fib) if fib else None
+                        if fib_nevr and not await check_build_in_buildroot(
                             target_branch,
                             analysis.dependency_component,
-                            fib,
+                            fib_nevr,
                             fix_version=rebuild_data.fix_version or "",
                         ):
                             logger.info(

@@ -500,6 +500,15 @@ run-preliminary-testing-agent-standalone:
 		-e IGNORE_NEEDS_ATTENTION=$(IGNORE_NEEDS_ATTENTION) \
 		preliminary-testing-agent
 
+.PHONY: run-mr-testing-analyzer-agent-standalone
+run-mr-testing-analyzer-agent-standalone:
+	$(COMPOSE_AGENTS) run --rm \
+		-e MR_URL=$(MR_URL) \
+		-e DRY_RUN=$(DRY_RUN) \
+		-e POC=$(POC) \
+		-e NO_JIRA_COMMENTS=$(NO_JIRA_COMMENTS) \
+		mr-testing-analyzer-agent
+
 
 # Common utility targets
 

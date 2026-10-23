@@ -962,6 +962,50 @@ class AddMergeRequestLabelsTool(Tool[AddMergeRequestLabelsToolInput, ToolRunOpti
         )
 
 
+class RemoveMergeRequestLabelsToolInput(BaseModel):
+    merge_request_url: str = Field(description="URL of the merge request")
+    labels: list[str] = Field(description="List of labels to remove from the merge request")
+
+
+class RemoveMergeRequestLabelsTool(Tool[RemoveMergeRequestLabelsToolInput, ToolRunOptions, StringToolOutput]):
+    name = "remove_merge_request_labels"
+    timeout = 120
+    description = """
+    Removes labels from an existing merge request.
+    """
+    input_schema = RemoveMergeRequestLabelsToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: RemoveMergeRequestLabelsToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        merge_request_url = tool_input.merge_request_url
+        labels = tool_input.labels
+        with tool_error_context(
+            "Failed to remove labels from merge request",
+            merge_request_url=merge_request_url,
+            labels=str(labels),
+        ):
+            mr = await _get_merge_request_from_url(merge_request_url)
+
+            def _remove_labels():
+                mr._raw_pr.labels = [label for label in mr._raw_pr.labels if label not in labels]
+                mr._raw_pr.save()
+
+            await asyncio.to_thread(_remove_labels)
+        return StringToolOutput(
+            result=f"Successfully removed labels {labels} from merge request {merge_request_url}"
+        )
+
+
 class SetMergeRequestReviewersToolInput(BaseModel):
     merge_request_url: str = Field(description="URL of the merge request")
     reviewer_ids: list[int] = Field(description="List of GitLab user IDs to set as reviewers")
@@ -1102,6 +1146,59 @@ class AddMergeRequestCommentTool(Tool[AddMergeRequestCommentToolInput, ToolRunOp
             mr = await _get_merge_request_from_url(merge_request_url)
             await asyncio.to_thread(mr._raw_pr.notes.create, {"body": comment})
         return StringToolOutput(result=f"Successfully added comment to merge request {merge_request_url}")
+
+
+class UpdateMergeRequestCommentToolInput(BaseModel):
+    merge_request_url: str = Field(description="URL of the merge request")
+    note_id: int = Field(description="ID of the existing comment/note to update")
+    comment: str = Field(description="New comment text to replace the existing comment's body")
+
+
+class UpdateMergeRequestCommentTool(
+    Tool[UpdateMergeRequestCommentToolInput, ToolRunOptions, StringToolOutput]
+):
+    name = "update_merge_request_comment"
+    timeout = 120
+    description = """
+    Updates the body of an existing comment/note on a merge request in place,
+    identified by its note_id, instead of posting a new comment.
+    """
+    input_schema = UpdateMergeRequestCommentToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: UpdateMergeRequestCommentToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        merge_request_url = tool_input.merge_request_url
+        note_id = tool_input.note_id
+        comment = tool_input.comment
+        with tool_error_context(
+            "Failed to update comment on merge request",
+            merge_request_url=merge_request_url,
+            note_id=note_id,
+        ):
+            mr = await _get_merge_request_from_url(merge_request_url)
+
+            def update_note():
+                try:
+                    note = mr._raw_pr.notes.get(note_id)
+                except gitlab.GitlabGetError as ex:
+                    raise ToolError(f"Note {note_id} not found on merge request {merge_request_url}") from ex
+                note.body = comment
+                note.save()
+
+            await asyncio.to_thread(update_note)
+        return StringToolOutput(
+            result=f"Successfully updated comment {note_id} on merge request {merge_request_url}"
+        )
 
 
 class AddBlockingMergeRequestCommentToolInput(BaseModel):

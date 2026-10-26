@@ -559,6 +559,46 @@ def test_canonical_changelog_title_replaces_only_new_entry(tmp_path):
     assert changelog[1].content == ["- Canonical title", "- Resolves: RHEL-1"]
 
 
+def test_canonical_changelog_title_removes_wrapped_continuation(tmp_path):
+    class Entry:
+        def __init__(self, content):
+            self.content = content
+
+    class Changelog(list):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    changelog = Changelog(
+        [
+            Entry(["- Previous title"]),
+            Entry(["- Wrapped title", "  continuation", "  Resolves: RHEL-1"]),
+        ]
+    )
+
+    class FakeSpecfile:
+        has_autochangelog = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def changelog(self):
+            return changelog
+
+    flexmock(agent_tasks).should_receive("find_spec").with_args(tmp_path, "curl").and_return(
+        "curl.spec"
+    ).once()
+    flexmock(agent_tasks).should_receive("Specfile").and_return(FakeSpecfile()).once()
+    ensure_canonical_changelog_title(tmp_path, "curl", "Canonical title", expected_entry_count=1)
+
+    assert changelog[1].content == ["- Canonical title", "  Resolves: RHEL-1"]
+
+
 def test_canonical_changelog_title_escapes_rpm_macro_syntax(tmp_path):
     class Entry:
         def __init__(self, content):

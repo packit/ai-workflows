@@ -1132,6 +1132,15 @@ def ensure_canonical_changelog_title(
                 is_jira_reference = re.match(r"^\s*(?:[-*]\s*)?(?:Resolves|Related):", line, re.IGNORECASE)
                 if line.strip() and not is_jira_reference:
                     entry.content[index] = f"- {escape_rpm_changelog_text(title)}"
+                    while index + 1 < len(entry.content):
+                        continuation = entry.content[index + 1]
+                        if not continuation.startswith((" ", "\t")) or re.match(
+                            r"^\s*(?:[-*]\s*)?(?:Resolves|Related):",
+                            continuation,
+                            re.IGNORECASE,
+                        ):
+                            break
+                        del entry.content[index + 1]
                     return
     raise RuntimeError(f"New changelog entry for {package} has no descriptive line")
 

@@ -1,0 +1,6 @@
+NAME                 HOST/PORT                                                                       PATH   SERVICES          PORT       TERMINATION     WILDCARD
+api                  api-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com                      api               8080-tcp   edge/Redirect   None
+phoenix              phoenix-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com                  phoenix           6006-tcp   edge/Redirect   None
+redis-commander      redis-commander-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com          redis-commander   8081-tcp   edge/Redirect   None
+trace-server         trace-server-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com             otel-collector    8080-tcp   edge/Redirect   None
+trace-server-cname   ymir.redhat.com                                                                        otel-collector    8080-tcp   edge/Redirect   None

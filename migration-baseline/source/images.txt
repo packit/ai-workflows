@@ -1,0 +1,13 @@
+NAME                      IMAGE REFERENCE                                                                                             UPDATED
+beeai-agent:c9s           quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5                3 hours ago
+beeai-agent:c10s          quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6                3 hours ago
+jira-issue-fetcher:prod   quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f   3 hours ago
+mcp-server:prod           quay.io/jotnar/mcp-server@sha256:b8d351f304799b35aa20d812f418701a0a19f1a20621b9a697da93210a059457           3 hours ago
+mr-cleanup:prod           quay.io/jotnar/mr-cleanup@sha256:a1bc74b9e9b7a33f5437d28c014d14d6b4430683d4a18b960f8038a1870f0904           3 hours ago
+phoenix:prod              quay.io/jotnar/phoenix@sha256:51f52f728be6684d48c7797fcf2eb3f9674e85b2b700d4e8628d27024f6f1653              3 hours ago
+phoenix-db:prod           quay.io/sclorg/postgresql-16-c9s@sha256:c9990e93bf07321bf5f8cc31ef97951ec181d0f40293c0438422e8e53e2ef06e    5 days ago
+redis-commander:prod      quay.io/jotnar/redis-commander@sha256:4143a32885b1ae81feea8080a423aab9127cdf4fd8cb13a1b8c2a48002159f97      3 hours ago
+sweep:prod                quay.io/jotnar/sweep@sha256:fd343d8daaa582cc0f2eaf2254ad5a87404527557d1873917ffac3c3c5b038c2                3 hours ago
+trace-server:prod         quay.io/jotnar/trace-server@sha256:be63c3df7efe41a6d3e3412ae6b16a7489427563986a9fe32abf7b660d122bff         3 hours ago
+valkey:prod               docker.io/valkey/valkey@sha256:0f62bfecc0b713dc2111af3ee307d5cd53c6877b7a112c6143c4de20f1325e4c             5 weeks ago
+ymir-api:prod             quay.io/jotnar/ymir-api@sha256:206be70e91e1b07fc5f784bfed084a8355b11baac9947aeee3c910a018926888             3 hours ago

@@ -1,0 +1,792 @@
+LAST SEEN   TYPE      REASON                   OBJECT                                              MESSAGE
+162m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883640-nz7dj          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883640-nz7dj to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+161m        Normal    Scheduled                pod/redis-commander-767c67d4cf-w7qc9                Successfully assigned jotnar-ymir--jotnar-ymir/redis-commander-767c67d4cf-w7qc9 to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+107m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883695-kmcm7          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883695-kmcm7 to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+22m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883780-22x8b          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883780-22x8b to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+158m        Normal    Scheduled                pod/rebuild-agent-c10s-7fdc6445c7-nh6nc             Successfully assigned jotnar-ymir--jotnar-ymir/rebuild-agent-c10s-7fdc6445c7-nh6nc to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+82m         Normal    Scheduled                pod/jira-issue-fetcher-29883720-88xvs               Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-29883720-88xvs to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+173m        Normal    Scheduled                pod/redis-commander-59957dfd9f-wxg6q                Successfully assigned jotnar-ymir--jotnar-ymir/redis-commander-59957dfd9f-wxg6q to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+67m         Normal    Scheduled                pod/jira-issue-fetcher-29883735-cpsn6               Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-29883735-cpsn6 to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+160m        Normal    Scheduled                pod/mcp-gateway-5f75d45db8-knxmz                    Successfully assigned jotnar-ymir--jotnar-ymir/mcp-gateway-5f75d45db8-knxmz to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+167m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883635-lw2ch          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883635-lw2ch to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+160m        Normal    Scheduled                pod/mr-consolidation-agent-c10s-f6c465b8c-mrhqs     Successfully assigned jotnar-ymir--jotnar-ymir/mr-consolidation-agent-c10s-f6c465b8c-mrhqs to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+159m        Normal    Scheduled                pod/backport-agent-c10s-8cdcf684-59vk9              Successfully assigned jotnar-ymir--jotnar-ymir/backport-agent-c10s-8cdcf684-59vk9 to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+160m        Normal    Scheduled                pod/mr-consolidation-agent-c10s-f6c465b8c-h7sf4     Successfully assigned jotnar-ymir--jotnar-ymir/mr-consolidation-agent-c10s-f6c465b8c-h7sf4 to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+169m        Normal    Scheduled                pod/phoenix-659bfb5d99-xqnj5                        Successfully assigned jotnar-ymir--jotnar-ymir/phoenix-659bfb5d99-xqnj5 to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+12m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883790-h8l8m          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883790-h8l8m to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+97m         Normal    Scheduled                pod/jira-issue-fetcher-29883705-5wvmn               Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-29883705-5wvmn to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+160m        Normal    Scheduled                pod/backport-agent-c10s-8cdcf684-5gm4w              Successfully assigned jotnar-ymir--jotnar-ymir/backport-agent-c10s-8cdcf684-5gm4w to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+17m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883785-2lp6l          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883785-2lp6l to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+97m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883705-6mn87          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883705-6mn87 to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+112m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883690-rntrq          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883690-rntrq to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+92m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883710-rn9q8          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883710-rn9q8 to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+157m        Normal    Scheduled                pod/rebase-agent-c9s-796b9cdb5c-t9m2m               Successfully assigned jotnar-ymir--jotnar-ymir/rebase-agent-c9s-796b9cdb5c-t9m2m to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+159m        Normal    Scheduled                pod/backport-agent-c10s-8cdcf684-8br89              Successfully assigned jotnar-ymir--jotnar-ymir/backport-agent-c10s-8cdcf684-8br89 to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+157m        Normal    Scheduled                pod/backport-agent-c9s-8565bf96f6-w44tl             Successfully assigned jotnar-ymir--jotnar-ymir/backport-agent-c9s-8565bf96f6-w44tl to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+177m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883625-9scsd          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883625-9scsd to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+52m         Normal    Scheduled                pod/jira-issue-fetcher-29883750-r6wzk               Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-29883750-r6wzk to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+27m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883775-dlzv2          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883775-dlzv2 to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+159m        Normal    Scheduled                pod/backport-agent-c10s-8cdcf684-ctkwx              Successfully assigned jotnar-ymir--jotnar-ymir/backport-agent-c10s-8cdcf684-ctkwx to hosted-worker-009.nodes.prod.psi.rdu2.redhat.com
+160m        Normal    Scheduled                pod/triage-agent-6b4f544dfc-xdxts                   Successfully assigned jotnar-ymir--jotnar-ymir/triage-agent-6b4f544dfc-xdxts to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+7m49s       Normal    Scheduled                pod/jira-issue-fetcher-todo-29883795-8bkfn          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883795-8bkfn to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+112m        Normal    Scheduled                pod/jira-issue-fetcher-29883690-p5cwl               Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-29883690-p5cwl to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+157m        Normal    Scheduled                pod/rebuild-agent-c9s-6596894447-m9fnl              Successfully assigned jotnar-ymir--jotnar-ymir/rebuild-agent-c9s-6596894447-m9fnl to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+157m        Normal    Scheduled                pod/backport-agent-c9s-8565bf96f6-sm5qc             Successfully assigned jotnar-ymir--jotnar-ymir/backport-agent-c9s-8565bf96f6-sm5qc to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+2m49s       Normal    Scheduled                pod/jira-issue-fetcher-todo-29883800-55zbt          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883800-55zbt to hosted-worker-006.nodes.prod.psi.rdu2.redhat.com
+87m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883715-tmjwf          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883715-tmjwf to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+158m        Normal    Scheduled                pod/rebuild-agent-c10s-7fdc6445c7-62kvk             Successfully assigned jotnar-ymir--jotnar-ymir/rebuild-agent-c10s-7fdc6445c7-62kvk to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+7m49s       Normal    Scheduled                pod/jira-issue-fetcher-29883795-c72jq               Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-29883795-c72jq to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+117m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883685-gvf7p          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883685-gvf7p to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+160m        Normal    Scheduled                pod/rebase-agent-c9s-796b9cdb5c-krhkh               Successfully assigned jotnar-ymir--jotnar-ymir/rebase-agent-c9s-796b9cdb5c-krhkh to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+82m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883720-fhkcf          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883720-fhkcf to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+77m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883725-4c58r          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883725-4c58r to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+122m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883680-pg2qp          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883680-pg2qp to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+72m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883730-hz79w          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883730-hz79w to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+160m        Normal    Scheduled                pod/rebuild-agent-c9s-6596894447-5mghv              Successfully assigned jotnar-ymir--jotnar-ymir/rebuild-agent-c9s-6596894447-5mghv to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+37m         Normal    Scheduled                pod/jira-issue-fetcher-29883765-rq8m6               Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-29883765-rq8m6 to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+127m        Normal    Scheduled                pod/jira-issue-fetcher-29883675-t287c               Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-29883675-t287c to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+142m        Normal    Scheduled                pod/jira-issue-fetcher-29883660-q6vng               Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-29883660-q6vng to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+102m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883700-h8jkt          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883700-h8jkt to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+127m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883675-4k8xq          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883675-4k8xq to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+172m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883630-nsf4z          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883630-nsf4z to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+168m        Normal    Scheduled                pod/otel-collector-59554cdbf7-xdm88                 Successfully assigned jotnar-ymir--jotnar-ymir/otel-collector-59554cdbf7-xdm88 to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+67m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883735-g5z4p          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883735-g5z4p to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+159m        Normal    Scheduled                pod/rebase-agent-c10s-744754cb4f-c5wnz              Successfully assigned jotnar-ymir--jotnar-ymir/rebase-agent-c10s-744754cb4f-c5wnz to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+132m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883670-p49js          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883670-p49js to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+62m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883740-6gbdv          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883740-6gbdv to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+160m        Normal    Scheduled                pod/rebase-agent-c10s-744754cb4f-67l2p              Successfully assigned jotnar-ymir--jotnar-ymir/rebase-agent-c10s-744754cb4f-67l2p to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+137m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883665-xxbnw          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883665-xxbnw to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+157m        Normal    Scheduled                pod/jira-issue-fetcher-29883645-5plw6               Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-29883645-5plw6 to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+57m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883745-sdvdg          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883745-sdvdg to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+165m        Normal    Scheduled                pod/api-5c894f4686-zkfdk                            Successfully assigned jotnar-ymir--jotnar-ymir/api-5c894f4686-zkfdk to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+159m        Normal    Scheduled                pod/triage-agent-6b4f544dfc-jl4pf                   Successfully assigned jotnar-ymir--jotnar-ymir/triage-agent-6b4f544dfc-jl4pf to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+172m        Normal    Scheduled                pod/jira-issue-fetcher-29883630-jdh9x               Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-29883630-jdh9x to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+52m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883750-285t4          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883750-285t4 to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+142m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883660-qlq4z          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883660-qlq4z to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+47m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883755-nlj59          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883755-nlj59 to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+160m        Normal    Scheduled                pod/mr-consolidation-agent-c9s-58fdddcb69-j87jt     Successfully assigned jotnar-ymir--jotnar-ymir/mr-consolidation-agent-c9s-58fdddcb69-j87jt to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+147m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883655-px9q7          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883655-px9q7 to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+160m        Normal    Scheduled                pod/reproducer-agent-5877df45c4-s6vc4               Successfully assigned jotnar-ymir--jotnar-ymir/reproducer-agent-5877df45c4-s6vc4 to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+160m        Normal    Scheduled                pod/mr-consolidation-agent-c9s-58fdddcb69-7nwlg     Successfully assigned jotnar-ymir--jotnar-ymir/mr-consolidation-agent-c9s-58fdddcb69-7nwlg to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+42m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883760-2npzs          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883760-2npzs to hosted-worker-012.nodes.prod.psi.rdu2.redhat.com
+152m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883650-zdzpt          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883650-zdzpt to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+157m        Normal    Scheduled                pod/backport-agent-c9s-8565bf96f6-6vdkz             Successfully assigned jotnar-ymir--jotnar-ymir/backport-agent-c9s-8565bf96f6-6vdkz to hosted-worker-009.nodes.prod.psi.rdu2.redhat.com
+22m         Normal    Scheduled                pod/jira-issue-fetcher-29883780-65kpc               Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-29883780-65kpc to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+32m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883770-5pbxk          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883770-5pbxk to hosted-worker-011.nodes.prod.psi.rdu2.redhat.com
+157m        Normal    Scheduled                pod/jira-issue-fetcher-todo-29883645-h65cg          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883645-h65cg to hosted-worker-046.nodes.prod.psi.rdu2.redhat.com
+160m        Normal    Scheduled                pod/backport-agent-c9s-8565bf96f6-nwq7l             Successfully assigned jotnar-ymir--jotnar-ymir/backport-agent-c9s-8565bf96f6-nwq7l to hosted-worker-010.nodes.prod.psi.rdu2.redhat.com
+37m         Normal    Scheduled                pod/jira-issue-fetcher-todo-29883765-8w8jn          Successfully assigned jotnar-ymir--jotnar-ymir/jira-issue-fetcher-todo-29883765-8w8jn to hosted-worker-048.nodes.prod.psi.rdu2.redhat.com
+177m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883625                Created pod: jira-issue-fetcher-todo-29883625-9scsd
+177m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883625-9scsd          Add eth0 [172.19.0.226/23 fd01:0:0:4::1897/64] from ovn-kubernetes
+177m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883625-9scsd          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:4371e80a29aad35807474e0e310ff02845e8a46fb8dfbc4151e600ded205e844"
+177m        Normal    Started                  pod/jira-issue-fetcher-todo-29883625-9scsd          Started container jira-issue-fetcher-env
+177m        Normal    Created                  pod/jira-issue-fetcher-todo-29883625-9scsd          Created container: jira-issue-fetcher-env
+177m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883625-9scsd          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:4371e80a29aad35807474e0e310ff02845e8a46fb8dfbc4151e600ded205e844" in 437ms (437ms including waiting). Image size: 286673495 bytes.
+177m        Normal    Completed                job/jira-issue-fetcher-todo-29883625                Job completed
+173m        Normal    ScalingReplicaSet        deployment/redis-commander                          Scaled up replica set redis-commander-59957dfd9f to 1
+173m        Normal    SuccessfulCreate         replicaset/redis-commander-59957dfd9f               Created pod: redis-commander-59957dfd9f-wxg6q
+173m        Normal    Pulled                   pod/redis-commander-59957dfd9f-wxg6q                Container image "quay.io/jotnar/redis-commander@sha256:37991b998d908573a8d2335e01b70969497cb1945baa30fcbb4def52c498e713" already present on machine
+173m        Normal    Started                  pod/redis-commander-59957dfd9f-wxg6q                Started container copy-config
+173m        Normal    Created                  pod/redis-commander-59957dfd9f-wxg6q                Created container: copy-config
+173m        Normal    AddedInterface           pod/redis-commander-59957dfd9f-wxg6q                Add eth0 [172.19.0.228/23 fd01:0:0:4::1899/64] from ovn-kubernetes
+173m        Normal    Pulling                  pod/redis-commander-59957dfd9f-wxg6q                Pulling image "quay.io/jotnar/redis-commander@sha256:4143a32885b1ae81feea8080a423aab9127cdf4fd8cb13a1b8c2a48002159f97"
+172m        Normal    Pulled                   pod/redis-commander-59957dfd9f-wxg6q                Successfully pulled image "quay.io/jotnar/redis-commander@sha256:4143a32885b1ae81feea8080a423aab9127cdf4fd8cb13a1b8c2a48002159f97" in 4.535s (4.535s including waiting). Image size: 346551981 bytes.
+172m        Normal    Created                  pod/redis-commander-59957dfd9f-wxg6q                Created container: redis-commander
+172m        Normal    Started                  pod/redis-commander-59957dfd9f-wxg6q                Started container redis-commander
+172m        Normal    ScalingReplicaSet        deployment/redis-commander                          Scaled down replica set redis-commander-bd657ff76 to 0 from 1
+172m        Normal    Killing                  pod/redis-commander-bd657ff76-c8lxd                 Stopping container redis-commander
+172m        Normal    SuccessfulDelete         replicaset/redis-commander-bd657ff76                Deleted pod: redis-commander-bd657ff76-c8lxd
+172m        Normal    SuccessfulCreate         job/jira-issue-fetcher-29883630                     Created pod: jira-issue-fetcher-29883630-jdh9x
+172m        Normal    SuccessfulCreate         cronjob/jira-issue-fetcher                          Created job jira-issue-fetcher-29883630
+172m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883630                Created pod: jira-issue-fetcher-todo-29883630-nsf4z
+172m        Normal    AddedInterface           pod/jira-issue-fetcher-29883630-jdh9x               Add eth0 [172.19.0.230/23 fd01:0:0:4::189b/64] from ovn-kubernetes
+172m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883630-nsf4z          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:4371e80a29aad35807474e0e310ff02845e8a46fb8dfbc4151e600ded205e844"
+172m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883630-nsf4z          Add eth0 [172.19.0.231/23 fd01:0:0:4::189c/64] from ovn-kubernetes
+172m        Normal    Started                  pod/jira-issue-fetcher-29883630-jdh9x               Started container jira-issue-fetcher-env
+172m        Normal    Created                  pod/jira-issue-fetcher-29883630-jdh9x               Created container: jira-issue-fetcher-env
+172m        Normal    Pulled                   pod/jira-issue-fetcher-29883630-jdh9x               Container image "quay.io/jotnar/jira-issue-fetcher@sha256:4371e80a29aad35807474e0e310ff02845e8a46fb8dfbc4151e600ded205e844" already present on machine
+172m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883630-nsf4z          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:4371e80a29aad35807474e0e310ff02845e8a46fb8dfbc4151e600ded205e844" in 643ms (643ms including waiting). Image size: 286673495 bytes.
+172m        Normal    Started                  pod/jira-issue-fetcher-todo-29883630-nsf4z          Started container jira-issue-fetcher-env
+172m        Normal    Created                  pod/jira-issue-fetcher-todo-29883630-nsf4z          Created container: jira-issue-fetcher-env
+172m        Normal    SawCompletedJob          cronjob/jira-issue-fetcher                          Saw completed job: jira-issue-fetcher-29883630, condition: Complete
+172m        Normal    Completed                job/jira-issue-fetcher-29883630                     Job completed
+172m        Normal    SuccessfulDelete         cronjob/jira-issue-fetcher                          Deleted job jira-issue-fetcher-29883615
+172m        Normal    Completed                job/jira-issue-fetcher-todo-29883630                Job completed
+169m        Normal    Killing                  pod/phoenix-8bf54b744-hh8l7                         Stopping container phoenix
+169m        Normal    SuccessfulDelete         replicaset/phoenix-8bf54b744                        Deleted pod: phoenix-8bf54b744-hh8l7
+169m        Normal    ScalingReplicaSet        deployment/phoenix                                  Scaled down replica set phoenix-8bf54b744 to 0 from 1
+169m        Normal    Killing                  pod/otel-collector-6c48d67d75-8vm7s                 Stopping container otel-collector
+169m        Normal    ScalingReplicaSet        deployment/otel-collector                           Scaled down replica set otel-collector-6c48d67d75 to 0 from 1
+169m        Normal    Killing                  pod/otel-collector-6c48d67d75-8vm7s                 Stopping container trace-server
+169m        Normal    SuccessfulDelete         replicaset/otel-collector-6c48d67d75                Deleted pod: otel-collector-6c48d67d75-8vm7s
+169m        Normal    SuccessfulCreate         replicaset/phoenix-659bfb5d99                       Created pod: phoenix-659bfb5d99-xqnj5
+169m        Normal    ScalingReplicaSet        deployment/phoenix                                  Scaled up replica set phoenix-659bfb5d99 to 1
+169m        Warning   FailedAttachVolume       pod/phoenix-659bfb5d99-xqnj5                        Multi-Attach error for volume "pvc-4d13ae1b-e3c5-406c-b285-11255f59dca8" Volume is already exclusively attached to one node and can't be attached to another
+169m        Normal    SuccessfulAttachVolume   pod/phoenix-659bfb5d99-xqnj5                        AttachVolume.Attach succeeded for volume "pvc-4d13ae1b-e3c5-406c-b285-11255f59dca8"
+169m        Normal    AddedInterface           pod/phoenix-659bfb5d99-xqnj5                        Add eth0 [172.19.0.235/23 fd01:0:0:4::18a0/64] from ovn-kubernetes
+169m        Normal    Pulling                  pod/phoenix-659bfb5d99-xqnj5                        Pulling image "quay.io/jotnar/phoenix@sha256:51f52f728be6684d48c7797fcf2eb3f9674e85b2b700d4e8628d27024f6f1653"
+168m        Warning   Unhealthy                pod/otel-collector-6c48d67d75-8vm7s                 Readiness probe failed: Get "http://172.16.0.222:13133/": dial tcp 172.16.0.222:13133: connect: connection refused
+168m        Normal    ScalingReplicaSet        deployment/otel-collector                           Scaled up replica set otel-collector-59554cdbf7 to 1
+168m        Warning   FailedAttachVolume       pod/otel-collector-59554cdbf7-xdm88                 Multi-Attach error for volume "pvc-152b09b0-628a-4874-8dc9-d57d0802730d" Volume is already exclusively attached to one node and can't be attached to another
+168m        Normal    SuccessfulCreate         replicaset/otel-collector-59554cdbf7                Created pod: otel-collector-59554cdbf7-xdm88
+168m        Normal    SuccessfulAttachVolume   pod/otel-collector-59554cdbf7-xdm88                 AttachVolume.Attach succeeded for volume "pvc-152b09b0-628a-4874-8dc9-d57d0802730d"
+168m        Normal    Started                  pod/otel-collector-59554cdbf7-xdm88                 Started container otel-collector
+168m        Normal    AddedInterface           pod/otel-collector-59554cdbf7-xdm88                 Add eth0 [172.17.5.132/23 fd01:0:0:3::cb22/64] from ovn-kubernetes
+168m        Normal    Pulling                  pod/otel-collector-59554cdbf7-xdm88                 Pulling image "quay.io/jotnar/trace-server@sha256:be63c3df7efe41a6d3e3412ae6b16a7489427563986a9fe32abf7b660d122bff"
+168m        Normal    Pulled                   pod/otel-collector-59554cdbf7-xdm88                 Container image "docker.io/otel/opentelemetry-collector-contrib" already present on machine
+168m        Normal    Created                  pod/otel-collector-59554cdbf7-xdm88                 Created container: otel-collector
+168m        Normal    Created                  pod/otel-collector-59554cdbf7-xdm88                 Created container: trace-server
+168m        Normal    Started                  pod/otel-collector-59554cdbf7-xdm88                 Started container trace-server
+168m        Normal    Pulled                   pod/otel-collector-59554cdbf7-xdm88                 Successfully pulled image "quay.io/jotnar/trace-server@sha256:be63c3df7efe41a6d3e3412ae6b16a7489427563986a9fe32abf7b660d122bff" in 4.019s (4.019s including waiting). Image size: 267061868 bytes.
+168m        Normal    Created                  pod/phoenix-659bfb5d99-xqnj5                        Created container: phoenix
+168m        Normal    Pulled                   pod/phoenix-659bfb5d99-xqnj5                        Successfully pulled image "quay.io/jotnar/phoenix@sha256:51f52f728be6684d48c7797fcf2eb3f9674e85b2b700d4e8628d27024f6f1653" in 32.811s (32.811s including waiting). Image size: 1177843560 bytes.
+168m        Normal    Started                  pod/phoenix-659bfb5d99-xqnj5                        Started container phoenix
+167m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883635                Created pod: jira-issue-fetcher-todo-29883635-lw2ch
+167m        Normal    Started                  pod/jira-issue-fetcher-todo-29883635-lw2ch          Started container jira-issue-fetcher-env
+167m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883635-lw2ch          Add eth0 [172.17.5.133/23 fd01:0:0:3::cb23/64] from ovn-kubernetes
+167m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883635-lw2ch          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:4371e80a29aad35807474e0e310ff02845e8a46fb8dfbc4151e600ded205e844"
+167m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883635-lw2ch          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:4371e80a29aad35807474e0e310ff02845e8a46fb8dfbc4151e600ded205e844" in 506ms (506ms including waiting). Image size: 286673495 bytes.
+167m        Normal    Created                  pod/jira-issue-fetcher-todo-29883635-lw2ch          Created container: jira-issue-fetcher-env
+167m        Normal    Completed                job/jira-issue-fetcher-todo-29883635                Job completed
+165m        Warning   Unhealthy                pod/otel-collector-59554cdbf7-xdm88                 Startup probe failed: Get "http://172.17.5.132:8080/health": dial tcp 172.17.5.132:8080: connect: connection refused
+165m        Normal    ScalingReplicaSet        deployment/api                                      Scaled down replica set api-8647b797b to 0 from 1
+165m        Normal    SuccessfulDelete         replicaset/api-8647b797b                            Deleted pod: api-8647b797b-p92vw
+165m        Normal    Killing                  pod/api-8647b797b-p92vw                             Stopping container api
+165m        Normal    ScalingReplicaSet        deployment/api                                      Scaled up replica set api-5c894f4686 to 1
+165m        Normal    SuccessfulCreate         replicaset/api-5c894f4686                           Created pod: api-5c894f4686-zkfdk
+165m        Normal    Pulling                  pod/api-5c894f4686-zkfdk                            Pulling image "quay.io/jotnar/ymir-api@sha256:206be70e91e1b07fc5f784bfed084a8355b11baac9947aeee3c910a018926888"
+165m        Normal    AddedInterface           pod/api-5c894f4686-zkfdk                            Add eth0 [172.17.5.136/23 fd01:0:0:3::cb26/64] from ovn-kubernetes
+165m        Normal    Started                  pod/api-5c894f4686-zkfdk                            Started container api
+165m        Normal    Created                  pod/api-5c894f4686-zkfdk                            Created container: api
+165m        Normal    Pulled                   pod/api-5c894f4686-zkfdk                            Successfully pulled image "quay.io/jotnar/ymir-api@sha256:206be70e91e1b07fc5f784bfed084a8355b11baac9947aeee3c910a018926888" in 5.112s (5.112s including waiting). Image size: 302659212 bytes.
+162m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883640                Created pod: jira-issue-fetcher-todo-29883640-nz7dj
+162m        Normal    Created                  pod/jira-issue-fetcher-todo-29883640-nz7dj          Created container: jira-issue-fetcher-env
+162m        Normal    Started                  pod/jira-issue-fetcher-todo-29883640-nz7dj          Started container jira-issue-fetcher-env
+162m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883640-nz7dj          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:4371e80a29aad35807474e0e310ff02845e8a46fb8dfbc4151e600ded205e844" in 435ms (435ms including waiting). Image size: 286673495 bytes.
+162m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883640-nz7dj          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:4371e80a29aad35807474e0e310ff02845e8a46fb8dfbc4151e600ded205e844"
+162m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883640-nz7dj          Add eth0 [172.17.5.138/23 fd01:0:0:3::cb28/64] from ovn-kubernetes
+162m        Normal    Completed                job/jira-issue-fetcher-todo-29883640                Job completed
+161m        Normal    SuccessfulCreate         replicaset/redis-commander-767c67d4cf               Created pod: redis-commander-767c67d4cf-w7qc9
+161m        Normal    ScalingReplicaSet        deployment/redis-commander                          Scaled up replica set redis-commander-767c67d4cf to 1
+161m        Normal    AddedInterface           pod/redis-commander-767c67d4cf-w7qc9                Add eth0 [172.19.0.238/23 fd01:0:0:4::18a3/64] from ovn-kubernetes
+161m        Normal    Pulled                   pod/redis-commander-767c67d4cf-w7qc9                Container image "quay.io/jotnar/redis-commander@sha256:4143a32885b1ae81feea8080a423aab9127cdf4fd8cb13a1b8c2a48002159f97" already present on machine
+161m        Normal    Started                  pod/redis-commander-767c67d4cf-w7qc9                Started container copy-config
+161m        Normal    Created                  pod/redis-commander-767c67d4cf-w7qc9                Created container: copy-config
+161m        Normal    Pulled                   pod/redis-commander-767c67d4cf-w7qc9                Container image "quay.io/jotnar/redis-commander@sha256:4143a32885b1ae81feea8080a423aab9127cdf4fd8cb13a1b8c2a48002159f97" already present on machine
+161m        Normal    Killing                  pod/redis-commander-59957dfd9f-wxg6q                Stopping container redis-commander
+161m        Normal    Created                  pod/redis-commander-767c67d4cf-w7qc9                Created container: redis-commander
+161m        Normal    Started                  pod/redis-commander-767c67d4cf-w7qc9                Started container redis-commander
+161m        Normal    ScalingReplicaSet        deployment/redis-commander                          Scaled down replica set redis-commander-59957dfd9f to 0 from 1
+161m        Normal    SuccessfulDelete         replicaset/redis-commander-59957dfd9f               Deleted pod: redis-commander-59957dfd9f-wxg6q
+160m        Normal    SuccessfulDelete         replicaset/mcp-gateway-56c77f8577                   Deleted pod: mcp-gateway-56c77f8577-6zpgf
+160m        Normal    Killing                  pod/mcp-gateway-56c77f8577-6zpgf                    Stopping container mcp-gateway
+160m        Normal    ScalingReplicaSet        deployment/mcp-gateway                              Scaled down replica set mcp-gateway-56c77f8577 to 0 from 1
+160m        Normal    SuccessfulCreate         replicaset/triage-agent-6b4f544dfc                  Created pod: triage-agent-6b4f544dfc-xdxts
+160m        Normal    ScalingReplicaSet        deployment/triage-agent                             Scaled up replica set triage-agent-6b4f544dfc to 1
+160m        Normal    ScalingReplicaSet        deployment/backport-agent-c9s                       Scaled up replica set backport-agent-c9s-8565bf96f6 to 1
+160m        Normal    ScalingReplicaSet        deployment/mcp-gateway                              Scaled up replica set mcp-gateway-5f75d45db8 to 1
+160m        Normal    AddedInterface           pod/triage-agent-6b4f544dfc-xdxts                   Add eth0 [172.17.5.139/23 fd01:0:0:3::cb29/64] from ovn-kubernetes
+160m        Normal    Pulling                  pod/triage-agent-6b4f544dfc-xdxts                   Pulling image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6"
+160m        Normal    SuccessfulCreate         replicaset/mcp-gateway-5f75d45db8                   Created pod: mcp-gateway-5f75d45db8-knxmz
+160m        Normal    SuccessfulCreate         replicaset/backport-agent-c9s-8565bf96f6            Created pod: backport-agent-c9s-8565bf96f6-nwq7l
+160m        Normal    ScalingReplicaSet        deployment/backport-agent-c10s                      Scaled up replica set backport-agent-c10s-8cdcf684 to 1
+160m        Normal    SuccessfulCreate         replicaset/backport-agent-c10s-8cdcf684             Created pod: backport-agent-c10s-8cdcf684-5gm4w
+160m        Normal    AddedInterface           pod/backport-agent-c9s-8565bf96f6-nwq7l             Add eth0 [172.17.5.140/23 fd01:0:0:3::cb2a/64] from ovn-kubernetes
+160m        Normal    SuccessfulCreate         replicaset/rebase-agent-c9s-796b9cdb5c              Created pod: rebase-agent-c9s-796b9cdb5c-krhkh
+160m        Normal    Pulling                  pod/backport-agent-c9s-8565bf96f6-nwq7l             Pulling image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5"
+160m        Normal    ScalingReplicaSet        deployment/rebase-agent-c9s                         Scaled up replica set rebase-agent-c9s-796b9cdb5c to 1
+160m        Normal    ScalingReplicaSet        deployment/rebase-agent-c10s                        Scaled up replica set rebase-agent-c10s-744754cb4f to 1
+160m        Normal    AddedInterface           pod/mcp-gateway-5f75d45db8-knxmz                    Add eth0 [172.19.0.240/23 fd01:0:0:4::18a5/64] from ovn-kubernetes
+160m        Normal    SuccessfulCreate         replicaset/rebase-agent-c10s-744754cb4f             Created pod: rebase-agent-c10s-744754cb4f-67l2p
+160m        Normal    AddedInterface           pod/backport-agent-c10s-8cdcf684-5gm4w              Add eth0 [172.17.5.142/23 fd01:0:0:3::cb2b/64] from ovn-kubernetes
+160m        Normal    Pulling                  pod/backport-agent-c10s-8cdcf684-5gm4w              Pulling image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6"
+160m        Normal    Pulling                  pod/mcp-gateway-5f75d45db8-knxmz                    Pulling image "quay.io/jotnar/mcp-server@sha256:b8d351f304799b35aa20d812f418701a0a19f1a20621b9a697da93210a059457"
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c9s-6596894447             Error creating: pods "rebuild-agent-c9s-6596894447-tdznf" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c9s-6596894447             Error creating: pods "rebuild-agent-c9s-6596894447-7wktw" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c9s-6596894447             Error creating: pods "rebuild-agent-c9s-6596894447-m7zvg" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c9s-6596894447             Error creating: pods "rebuild-agent-c9s-6596894447-j9nqr" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Normal    ScalingReplicaSet        deployment/rebuild-agent-c9s                        Scaled up replica set rebuild-agent-c9s-6596894447 to 1
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c9s-6596894447             Error creating: pods "rebuild-agent-c9s-6596894447-frfrs" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c9s-6596894447             Error creating: pods "rebuild-agent-c9s-6596894447-gxtn6" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c9s-6596894447             Error creating: pods "rebuild-agent-c9s-6596894447-slq8b" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c9s-6596894447             Error creating: pods "rebuild-agent-c9s-6596894447-g82d4" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Normal    AddedInterface           pod/rebase-agent-c9s-796b9cdb5c-krhkh               Add eth0 [172.17.5.143/23 fd01:0:0:3::cb2c/64] from ovn-kubernetes
+160m        Normal    AddedInterface           pod/rebase-agent-c10s-744754cb4f-67l2p              Add eth0 [172.17.5.144/23 fd01:0:0:3::cb2d/64] from ovn-kubernetes
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c10s-7fdc6445c7            Error creating: pods "rebuild-agent-c10s-7fdc6445c7-7x8cq" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c10s-7fdc6445c7            Error creating: pods "rebuild-agent-c10s-7fdc6445c7-mjzth" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Normal    Pulling                  pod/rebase-agent-c9s-796b9cdb5c-krhkh               Pulling image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5"
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c10s-7fdc6445c7            Error creating: pods "rebuild-agent-c10s-7fdc6445c7-qnlj7" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c10s-7fdc6445c7            Error creating: pods "rebuild-agent-c10s-7fdc6445c7-46gds" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c9s-6596894447             Error creating: pods "rebuild-agent-c9s-6596894447-w8d4d" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c10s-7fdc6445c7            Error creating: pods "rebuild-agent-c10s-7fdc6445c7-l887h" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Normal    Pulling                  pod/rebase-agent-c10s-744754cb4f-67l2p              Pulling image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6"
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c10s-7fdc6445c7            Error creating: pods "rebuild-agent-c10s-7fdc6445c7-mbv4q" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c10s-7fdc6445c7            Error creating: pods "rebuild-agent-c10s-7fdc6445c7-rwrrf" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Normal    ScalingReplicaSet        deployment/rebuild-agent-c10s                       Scaled up replica set rebuild-agent-c10s-7fdc6445c7 to 1
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c10s-7fdc6445c7            Error creating: pods "rebuild-agent-c10s-7fdc6445c7-9ht22" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Normal    Killing                  pod/reproducer-agent-5db6666c74-4n2bg               Stopping container reproducer-agent
+160m        Normal    SuccessfulDelete         replicaset/reproducer-agent-5db6666c74              Deleted pod: reproducer-agent-5db6666c74-4n2bg
+160m        Normal    ScalingReplicaSet        deployment/reproducer-agent                         Scaled down replica set reproducer-agent-5db6666c74 to 0 from 1
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c10s-7fdc6445c7            Error creating: pods "rebuild-agent-c10s-7fdc6445c7-vnjpk" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Normal    SuccessfulDelete         replicaset/mr-consolidation-agent-c9s-748ddc5d8     Deleted pod: mr-consolidation-agent-c9s-748ddc5d8-zwzv2
+160m        Normal    SuccessfulAttachVolume   pod/reproducer-agent-5877df45c4-s6vc4               AttachVolume.Attach succeeded for volume "pvc-6feac07f-6442-4116-ad59-5ab3d2da555a"
+160m        Normal    SuccessfulCreate         replicaset/reproducer-agent-5877df45c4              Created pod: reproducer-agent-5877df45c4-s6vc4
+160m        Normal    ScalingReplicaSet        deployment/mr-consolidation-agent-c9s               Scaled down replica set mr-consolidation-agent-c9s-748ddc5d8 to 0 from 2
+160m        Normal    ScalingReplicaSet        deployment/reproducer-agent                         Scaled up replica set reproducer-agent-5877df45c4 to 1
+160m        Normal    SuccessfulDelete         replicaset/mr-consolidation-agent-c9s-748ddc5d8     Deleted pod: mr-consolidation-agent-c9s-748ddc5d8-d9nnj
+160m        Normal    Killing                  pod/mr-consolidation-agent-c9s-748ddc5d8-zwzv2      Stopping container mr-consolidation-agent-c9s
+160m        Normal    Killing                  pod/mr-consolidation-agent-c9s-748ddc5d8-d9nnj      Stopping container mr-consolidation-agent-c9s
+160m        Normal    ScalingReplicaSet        deployment/mr-consolidation-agent-c10s              Scaled down replica set mr-consolidation-agent-c10s-6cb6587b6c to 0 from 2
+160m        Normal    SuccessfulDelete         replicaset/mr-consolidation-agent-c10s-6cb6587b6c   Deleted pod: mr-consolidation-agent-c10s-6cb6587b6c-kgmhw
+160m        Normal    Killing                  pod/mr-consolidation-agent-c10s-6cb6587b6c-vdcb9    Stopping container mr-consolidation-agent-c10s
+160m        Normal    Killing                  pod/mr-consolidation-agent-c10s-6cb6587b6c-kgmhw    Stopping container mr-consolidation-agent-c10s
+160m        Normal    SuccessfulDelete         replicaset/mr-consolidation-agent-c10s-6cb6587b6c   Deleted pod: mr-consolidation-agent-c10s-6cb6587b6c-vdcb9
+160m        Normal    SuccessfulCreate         replicaset/mr-consolidation-agent-c10s-f6c465b8c    Created pod: mr-consolidation-agent-c10s-f6c465b8c-h7sf4
+160m        Normal    SuccessfulCreate         replicaset/mr-consolidation-agent-c9s-58fdddcb69    Created pod: mr-consolidation-agent-c9s-58fdddcb69-j87jt
+160m        Normal    SuccessfulCreate         replicaset/mr-consolidation-agent-c10s-f6c465b8c    Created pod: mr-consolidation-agent-c10s-f6c465b8c-mrhqs
+160m        Normal    AddedInterface           pod/reproducer-agent-5877df45c4-s6vc4               Add eth0 [172.17.8.198/23 fd01:0:0:12::321a/64] from ovn-kubernetes
+160m        Normal    Pulling                  pod/reproducer-agent-5877df45c4-s6vc4               Pulling image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6"
+160m        Normal    ScalingReplicaSet        deployment/mr-consolidation-agent-c9s               Scaled up replica set mr-consolidation-agent-c9s-58fdddcb69 to 2
+160m        Normal    ScalingReplicaSet        deployment/mr-consolidation-agent-c10s              Scaled up replica set mr-consolidation-agent-c10s-f6c465b8c to 2
+160m        Normal    SuccessfulCreate         replicaset/mr-consolidation-agent-c9s-58fdddcb69    Created pod: mr-consolidation-agent-c9s-58fdddcb69-7nwlg
+160m        Normal    AddedInterface           pod/mr-consolidation-agent-c9s-58fdddcb69-j87jt     Add eth0 [172.17.8.199/23 fd01:0:0:12::321b/64] from ovn-kubernetes
+160m        Normal    Pulling                  pod/mr-consolidation-agent-c9s-58fdddcb69-7nwlg     Pulling image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5"
+160m        Normal    AddedInterface           pod/mr-consolidation-agent-c9s-58fdddcb69-7nwlg     Add eth0 [172.17.5.145/23 fd01:0:0:3::cb2e/64] from ovn-kubernetes
+160m        Warning   FailedCreate             replicaset/rebuild-agent-c9s-6596894447             (combined from similar events): Error creating: pods "rebuild-agent-c9s-6596894447-c2g85" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19750m, limited: limits.cpu=20
+160m        Normal    AddedInterface           pod/mr-consolidation-agent-c10s-f6c465b8c-mrhqs     Add eth0 [172.17.8.201/23 fd01:0:0:12::321c/64] from ovn-kubernetes
+160m        Normal    Pulling                  pod/mr-consolidation-agent-c9s-58fdddcb69-j87jt     Pulling image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5"
+160m        Normal    Pulling                  pod/mr-consolidation-agent-c10s-f6c465b8c-h7sf4     Pulling image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6"
+160m        Normal    AddedInterface           pod/mr-consolidation-agent-c10s-f6c465b8c-h7sf4     Add eth0 [172.19.0.241/23 fd01:0:0:4::18a6/64] from ovn-kubernetes
+160m        Normal    Pulling                  pod/mr-consolidation-agent-c10s-f6c465b8c-mrhqs     Pulling image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6"
+160m        Normal    SuccessfulCreate         replicaset/rebuild-agent-c9s-6596894447             Created pod: rebuild-agent-c9s-6596894447-5mghv
+160m        Normal    AddedInterface           pod/rebuild-agent-c9s-6596894447-5mghv              Add eth0 [172.17.5.146/23 fd01:0:0:3::cb2f/64] from ovn-kubernetes
+160m        Normal    Pulling                  pod/rebuild-agent-c9s-6596894447-5mghv              Pulling image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5"
+159m        Normal    Pulled                   pod/reproducer-agent-5877df45c4-s6vc4               Successfully pulled image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" in 1m3.489s (1m3.489s including waiting). Image size: 2878546025 bytes.
+159m        Normal    Pulled                   pod/backport-agent-c10s-8cdcf684-5gm4w              Successfully pulled image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" in 1m12.088s (1m12.088s including waiting). Image size: 2878546025 bytes.
+159m        Normal    Pulled                   pod/triage-agent-6b4f544dfc-xdxts                   Successfully pulled image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" in 1m14.929s (1m14.929s including waiting). Image size: 2878546025 bytes.
+159m        Normal    Pulled                   pod/mr-consolidation-agent-c10s-f6c465b8c-mrhqs     Successfully pulled image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" in 1m0.726s (1m0.726s including waiting). Image size: 2878546025 bytes.
+159m        Normal    Pulled                   pod/mcp-gateway-5f75d45db8-knxmz                    Successfully pulled image "quay.io/jotnar/mcp-server@sha256:b8d351f304799b35aa20d812f418701a0a19f1a20621b9a697da93210a059457" in 1m12.7s (1m12.7s including waiting). Image size: 1973331878 bytes.
+159m        Normal    Pulled                   pod/mr-consolidation-agent-c10s-f6c465b8c-h7sf4     Successfully pulled image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" in 1m0.542s (1m0.542s including waiting). Image size: 2878546025 bytes.
+159m        Normal    Pulled                   pod/rebase-agent-c10s-744754cb4f-67l2p              Successfully pulled image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" in 1m9.533s (1m9.533s including waiting). Image size: 2878546025 bytes.
+159m        Normal    ScalingReplicaSet        deployment/backport-agent-c10s                      Scaled down replica set backport-agent-c10s-cc895695b to 3 from 4
+159m        Normal    Created                  pod/mcp-gateway-5f75d45db8-knxmz                    Created container: mcp-gateway
+159m        Normal    Started                  pod/mcp-gateway-5f75d45db8-knxmz                    Started container mcp-gateway
+159m        Normal    SuccessfulDelete         replicaset/rebase-agent-c10s-6966dd965              Deleted pod: rebase-agent-c10s-6966dd965-zsflx
+159m        Normal    Created                  pod/rebase-agent-c10s-744754cb4f-67l2p              Created container: rebase-agent-c10s
+159m        Normal    Started                  pod/rebase-agent-c10s-744754cb4f-67l2p              Started container rebase-agent-c10s
+159m        Normal    Killing                  pod/rebase-agent-c10s-6966dd965-zsflx               Stopping container rebase-agent-c10s
+159m        Normal    SuccessfulDelete         replicaset/backport-agent-c10s-cc895695b            Deleted pod: backport-agent-c10s-cc895695b-l5tmr
+159m        Normal    ScalingReplicaSet        deployment/backport-agent-c10s                      Scaled up replica set backport-agent-c10s-8cdcf684 to 2 from 1
+159m        Warning   FailedCreate             replicaset/rebase-agent-c10s-744754cb4f             Error creating: pods "rebase-agent-c10s-744754cb4f-qrhth" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/rebase-agent-c10s-744754cb4f             Error creating: pods "rebase-agent-c10s-744754cb4f-cd68z" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Normal    Killing                  pod/backport-agent-c10s-cc895695b-l5tmr             Stopping container backport-agent-c10s
+159m        Warning   FailedCreate             replicaset/rebase-agent-c10s-744754cb4f             Error creating: pods "rebase-agent-c10s-744754cb4f-xb685" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/rebase-agent-c10s-744754cb4f             Error creating: pods "rebase-agent-c10s-744754cb4f-zpsfc" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/backport-agent-c10s-8cdcf684             Error creating: pods "backport-agent-c10s-8cdcf684-gqddw" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/rebase-agent-c10s-744754cb4f             Error creating: pods "rebase-agent-c10s-744754cb4f-78zmc" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/rebase-agent-c10s-744754cb4f             Error creating: pods "rebase-agent-c10s-744754cb4f-t25vq" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/rebase-agent-c10s-744754cb4f             Error creating: pods "rebase-agent-c10s-744754cb4f-zn96p" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/rebase-agent-c10s-744754cb4f             Error creating: pods "rebase-agent-c10s-744754cb4f-n92lp" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/backport-agent-c10s-8cdcf684             Error creating: pods "backport-agent-c10s-8cdcf684-jgbbf" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/backport-agent-c10s-8cdcf684             Error creating: pods "backport-agent-c10s-8cdcf684-4b7h5" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Normal    ScalingReplicaSet        deployment/rebase-agent-c10s                        Scaled down replica set rebase-agent-c10s-6966dd965 to 1 from 2
+159m        Normal    Started                  pod/reproducer-agent-5877df45c4-s6vc4               Started container reproducer-agent
+159m        Normal    ScalingReplicaSet        deployment/rebase-agent-c10s                        Scaled up replica set rebase-agent-c10s-744754cb4f to 2 from 1
+159m        Warning   FailedCreate             replicaset/backport-agent-c10s-8cdcf684             Error creating: pods "backport-agent-c10s-8cdcf684-5477s" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/backport-agent-c10s-8cdcf684             Error creating: pods "backport-agent-c10s-8cdcf684-fjtnl" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Normal    Created                  pod/triage-agent-6b4f544dfc-xdxts                   Created container: triage-agent
+159m        Warning   FailedCreate             replicaset/backport-agent-c10s-8cdcf684             Error creating: pods "backport-agent-c10s-8cdcf684-lkrhp" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/backport-agent-c10s-8cdcf684             Error creating: pods "backport-agent-c10s-8cdcf684-9w98q" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Normal    Started                  pod/triage-agent-6b4f544dfc-xdxts                   Started container triage-agent
+159m        Warning   FailedCreate             replicaset/backport-agent-c10s-8cdcf684             Error creating: pods "backport-agent-c10s-8cdcf684-62hdf" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Normal    Created                  pod/reproducer-agent-5877df45c4-s6vc4               Created container: reproducer-agent
+159m        Normal    Started                  pod/backport-agent-c10s-8cdcf684-5gm4w              Started container backport-agent-c10s
+159m        Normal    Started                  pod/mr-consolidation-agent-c10s-f6c465b8c-mrhqs     Started container mr-consolidation-agent-c10s
+159m        Normal    Created                  pod/backport-agent-c10s-8cdcf684-5gm4w              Created container: backport-agent-c10s
+159m        Normal    Created                  pod/mr-consolidation-agent-c10s-f6c465b8c-mrhqs     Created container: mr-consolidation-agent-c10s
+159m        Normal    Created                  pod/mr-consolidation-agent-c10s-f6c465b8c-h7sf4     Created container: mr-consolidation-agent-c10s
+159m        Normal    Started                  pod/mr-consolidation-agent-c10s-f6c465b8c-h7sf4     Started container mr-consolidation-agent-c10s
+159m        Warning   FailedCreate             replicaset/triage-agent-6b4f544dfc                  Error creating: pods "triage-agent-6b4f544dfc-2vzx4" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/triage-agent-6b4f544dfc                  Error creating: pods "triage-agent-6b4f544dfc-9fnxh" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/rebase-agent-c10s-744754cb4f             Error creating: pods "rebase-agent-c10s-744754cb4f-r5j2s" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/triage-agent-6b4f544dfc                  Error creating: pods "triage-agent-6b4f544dfc-nj278" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Normal    ScalingReplicaSet        deployment/triage-agent                             Scaled up replica set triage-agent-6b4f544dfc to 2 from 1
+159m        Normal    SuccessfulDelete         replicaset/triage-agent-5d49ff74b9                  Deleted pod: triage-agent-5d49ff74b9-5r8l5
+159m        Warning   FailedCreate             replicaset/triage-agent-6b4f544dfc                  Error creating: pods "triage-agent-6b4f544dfc-t7pbs" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/triage-agent-6b4f544dfc                  Error creating: pods "triage-agent-6b4f544dfc-wns7r" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/triage-agent-6b4f544dfc                  Error creating: pods "triage-agent-6b4f544dfc-k6jv4" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Normal    Killing                  pod/triage-agent-5d49ff74b9-5r8l5                   Stopping container triage-agent
+159m        Normal    ScalingReplicaSet        deployment/triage-agent                             Scaled down replica set triage-agent-5d49ff74b9 to 1 from 2
+159m        Warning   FailedCreate             replicaset/backport-agent-c10s-8cdcf684             Error creating: pods "backport-agent-c10s-8cdcf684-sgzl2" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/triage-agent-6b4f544dfc                  Error creating: pods "triage-agent-6b4f544dfc-l2j8l" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/triage-agent-6b4f544dfc                  Error creating: pods "triage-agent-6b4f544dfc-jk9l8" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/triage-agent-6b4f544dfc                  Error creating: pods "triage-agent-6b4f544dfc-b5bzm" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/triage-agent-6b4f544dfc                  (combined from similar events): Error creating: pods "triage-agent-6b4f544dfc-fsw49" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Normal    SuccessfulCreate         replicaset/backport-agent-c10s-8cdcf684             Created pod: backport-agent-c10s-8cdcf684-8br89
+159m        Normal    SuccessfulCreate         replicaset/triage-agent-6b4f544dfc                  Created pod: triage-agent-6b4f544dfc-jl4pf
+159m        Normal    Pulled                   pod/backport-agent-c10s-8cdcf684-8br89              Container image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" already present on machine
+159m        Normal    AddedInterface           pod/backport-agent-c10s-8cdcf684-8br89              Add eth0 [172.17.8.202/23 fd01:0:0:12::321d/64] from ovn-kubernetes
+159m        Normal    Started                  pod/backport-agent-c10s-8cdcf684-8br89              Started container backport-agent-c10s
+159m        Normal    ScalingReplicaSet        deployment/backport-agent-c10s                      Scaled down replica set backport-agent-c10s-cc895695b to 2 from 3
+159m        Normal    AddedInterface           pod/triage-agent-6b4f544dfc-jl4pf                   Add eth0 [172.17.8.203/23 fd01:0:0:12::321e/64] from ovn-kubernetes
+159m        Normal    SuccessfulDelete         replicaset/backport-agent-c10s-cc895695b            Deleted pod: backport-agent-c10s-cc895695b-5mdrp
+159m        Normal    Created                  pod/backport-agent-c10s-8cdcf684-8br89              Created container: backport-agent-c10s
+159m        Normal    Pulled                   pod/triage-agent-6b4f544dfc-jl4pf                   Container image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" already present on machine
+159m        Normal    ScalingReplicaSet        deployment/backport-agent-c10s                      Scaled up replica set backport-agent-c10s-8cdcf684 to 3 from 2
+159m        Normal    Killing                  pod/backport-agent-c10s-cc895695b-5mdrp             Stopping container backport-agent-c10s
+159m        Normal    Created                  pod/triage-agent-6b4f544dfc-jl4pf                   Created container: triage-agent
+159m        Normal    ScalingReplicaSet        deployment/triage-agent                             Scaled down replica set triage-agent-5d49ff74b9 to 0 from 1
+159m        Normal    Killing                  pod/triage-agent-5d49ff74b9-g797d                   Stopping container triage-agent
+159m        Normal    SuccessfulDelete         replicaset/triage-agent-5d49ff74b9                  Deleted pod: triage-agent-5d49ff74b9-g797d
+159m        Normal    Started                  pod/triage-agent-6b4f544dfc-jl4pf                   Started container triage-agent
+159m        Normal    SuccessfulCreate         replicaset/backport-agent-c10s-8cdcf684             Created pod: backport-agent-c10s-8cdcf684-59vk9
+159m        Warning   FailedCreate             replicaset/rebase-agent-c10s-744754cb4f             (combined from similar events): Error creating: pods "rebase-agent-c10s-744754cb4f-gd84r" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Warning   FailedCreate             replicaset/rebuild-agent-c10s-7fdc6445c7            (combined from similar events): Error creating: pods "rebuild-agent-c10s-7fdc6445c7-kpwm6" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Normal    Created                  pod/backport-agent-c10s-8cdcf684-59vk9              Created container: backport-agent-c10s
+159m        Normal    ScalingReplicaSet        deployment/backport-agent-c10s                      Scaled down replica set backport-agent-c10s-cc895695b to 1 from 2
+159m        Normal    SuccessfulDelete         replicaset/backport-agent-c10s-cc895695b            Deleted pod: backport-agent-c10s-cc895695b-z4q29
+159m        Normal    ScalingReplicaSet        deployment/backport-agent-c10s                      Scaled up replica set backport-agent-c10s-8cdcf684 to 4 from 3
+159m        Normal    Killing                  pod/backport-agent-c10s-cc895695b-z4q29             Stopping container backport-agent-c10s
+159m        Warning   FailedCreate             replicaset/backport-agent-c10s-8cdcf684             (combined from similar events): Error creating: pods "backport-agent-c10s-8cdcf684-8zgfk" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19850m, limited: limits.cpu=20
+159m        Normal    Started                  pod/backport-agent-c10s-8cdcf684-59vk9              Started container backport-agent-c10s
+159m        Normal    AddedInterface           pod/backport-agent-c10s-8cdcf684-59vk9              Add eth0 [172.19.0.242/23 fd01:0:0:4::18a7/64] from ovn-kubernetes
+159m        Normal    Pulled                   pod/backport-agent-c10s-8cdcf684-59vk9              Container image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" already present on machine
+159m        Normal    SuccessfulAttachVolume   pod/backport-agent-c10s-8cdcf684-ctkwx              AttachVolume.Attach succeeded for volume "pvc-6feac07f-6442-4116-ad59-5ab3d2da555a"
+159m        Normal    SuccessfulCreate         replicaset/rebase-agent-c10s-744754cb4f             Created pod: rebase-agent-c10s-744754cb4f-c5wnz
+159m        Normal    Created                  pod/rebase-agent-c10s-744754cb4f-c5wnz              Created container: rebase-agent-c10s
+159m        Normal    AddedInterface           pod/rebase-agent-c10s-744754cb4f-c5wnz              Add eth0 [172.17.8.205/23 fd01:0:0:12::3220/64] from ovn-kubernetes
+159m        Normal    Started                  pod/rebase-agent-c10s-744754cb4f-c5wnz              Started container rebase-agent-c10s
+159m        Normal    Pulled                   pod/rebase-agent-c10s-744754cb4f-c5wnz              Container image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" already present on machine
+159m        Normal    ScalingReplicaSet        deployment/rebase-agent-c10s                        Scaled down replica set rebase-agent-c10s-6966dd965 to 0 from 1
+159m        Normal    SuccessfulDelete         replicaset/rebase-agent-c10s-6966dd965              Deleted pod: rebase-agent-c10s-6966dd965-jtpwf
+159m        Normal    Killing                  pod/rebase-agent-c10s-6966dd965-jtpwf               Stopping container rebase-agent-c10s
+159m        Normal    AddedInterface           pod/backport-agent-c10s-8cdcf684-ctkwx              Add eth0 [172.16.0.252/23 fd01:0:0:2::2d1b/64] from ovn-kubernetes
+159m        Normal    Pulling                  pod/backport-agent-c10s-8cdcf684-ctkwx              Pulling image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6"
+158m        Normal    Pulled                   pod/backport-agent-c10s-8cdcf684-ctkwx              Successfully pulled image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" in 45.107s (45.107s including waiting). Image size: 2878546025 bytes.
+158m        Normal    Created                  pod/backport-agent-c10s-8cdcf684-ctkwx              Created container: backport-agent-c10s
+158m        Normal    Started                  pod/backport-agent-c10s-8cdcf684-ctkwx              Started container backport-agent-c10s
+158m        Normal    SuccessfulDelete         replicaset/backport-agent-c10s-cc895695b            Deleted pod: backport-agent-c10s-cc895695b-xzxp4
+158m        Normal    ScalingReplicaSet        deployment/backport-agent-c10s                      Scaled down replica set backport-agent-c10s-cc895695b to 0 from 1
+158m        Normal    Killing                  pod/backport-agent-c10s-cc895695b-xzxp4             Stopping container backport-agent-c10s
+158m        Normal    SuccessfulCreate         replicaset/rebuild-agent-c10s-7fdc6445c7            Created pod: rebuild-agent-c10s-7fdc6445c7-62kvk
+158m        Normal    Created                  pod/rebuild-agent-c10s-7fdc6445c7-62kvk             Created container: rebuild-agent-c10s
+158m        Normal    Pulled                   pod/rebuild-agent-c10s-7fdc6445c7-62kvk             Container image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" already present on machine
+158m        Normal    AddedInterface           pod/rebuild-agent-c10s-7fdc6445c7-62kvk             Add eth0 [172.17.5.149/23 fd01:0:0:3::cb32/64] from ovn-kubernetes
+158m        Normal    Started                  pod/rebuild-agent-c10s-7fdc6445c7-62kvk             Started container rebuild-agent-c10s
+158m        Normal    ScalingReplicaSet        deployment/rebuild-agent-c10s                       Scaled down replica set rebuild-agent-c10s-5ffb57bc8f to 1 from 2
+158m        Normal    SuccessfulDelete         replicaset/rebuild-agent-c10s-5ffb57bc8f            Deleted pod: rebuild-agent-c10s-5ffb57bc8f-d5qjt
+158m        Normal    Killing                  pod/rebuild-agent-c10s-5ffb57bc8f-d5qjt             Stopping container rebuild-agent-c10s
+158m        Normal    ScalingReplicaSet        deployment/rebuild-agent-c10s                       Scaled up replica set rebuild-agent-c10s-7fdc6445c7 to 2 from 1
+158m        Normal    SuccessfulCreate         replicaset/rebuild-agent-c10s-7fdc6445c7            Created pod: rebuild-agent-c10s-7fdc6445c7-nh6nc
+158m        Normal    AddedInterface           pod/rebuild-agent-c10s-7fdc6445c7-nh6nc             Add eth0 [172.19.0.244/23 fd01:0:0:4::18a9/64] from ovn-kubernetes
+158m        Normal    Pulled                   pod/rebuild-agent-c10s-7fdc6445c7-nh6nc             Container image "quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6" already present on machine
+158m        Normal    Killing                  pod/rebuild-agent-c10s-5ffb57bc8f-bs2zt             Stopping container rebuild-agent-c10s
+158m        Normal    SuccessfulDelete         replicaset/rebuild-agent-c10s-5ffb57bc8f            Deleted pod: rebuild-agent-c10s-5ffb57bc8f-bs2zt
+158m        Normal    Created                  pod/rebuild-agent-c10s-7fdc6445c7-nh6nc             Created container: rebuild-agent-c10s
+158m        Normal    ScalingReplicaSet        deployment/rebuild-agent-c10s                       Scaled down replica set rebuild-agent-c10s-5ffb57bc8f to 0 from 1
+158m        Normal    Started                  pod/rebuild-agent-c10s-7fdc6445c7-nh6nc             Started container rebuild-agent-c10s
+157m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883645                Created pod: jira-issue-fetcher-todo-29883645-h65cg
+157m        Normal    Created                  pod/mr-consolidation-agent-c9s-58fdddcb69-j87jt     Created container: mr-consolidation-agent-c9s
+157m        Normal    SuccessfulCreate         job/jira-issue-fetcher-29883645                     Created pod: jira-issue-fetcher-29883645-5plw6
+157m        Normal    SuccessfulCreate         cronjob/jira-issue-fetcher                          Created job jira-issue-fetcher-29883645
+157m        Normal    Started                  pod/mr-consolidation-agent-c9s-58fdddcb69-j87jt     Started container mr-consolidation-agent-c9s
+157m        Normal    Pulled                   pod/mr-consolidation-agent-c9s-58fdddcb69-j87jt     Successfully pulled image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5" in 2m43.23s (2m43.23s including waiting). Image size: 3331854280 bytes.
+157m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883645-h65cg          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+157m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883645-h65cg          Add eth0 [172.17.8.207/23 fd01:0:0:12::3222/64] from ovn-kubernetes
+157m        Normal    AddedInterface           pod/jira-issue-fetcher-29883645-5plw6               Add eth0 [172.17.8.206/23 fd01:0:0:12::3221/64] from ovn-kubernetes
+157m        Normal    Pulling                  pod/jira-issue-fetcher-29883645-5plw6               Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+157m        Normal    Created                  pod/jira-issue-fetcher-29883645-5plw6               Created container: jira-issue-fetcher-env
+157m        Normal    Pulled                   pod/jira-issue-fetcher-29883645-5plw6               Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 3.328s (3.328s including waiting). Image size: 286639702 bytes.
+157m        Normal    Started                  pod/jira-issue-fetcher-29883645-5plw6               Started container jira-issue-fetcher-env
+157m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883645-h65cg          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 3.775s (3.775s including waiting). Image size: 286639702 bytes.
+157m        Normal    Created                  pod/jira-issue-fetcher-todo-29883645-h65cg          Created container: jira-issue-fetcher-env
+157m        Normal    Started                  pod/jira-issue-fetcher-todo-29883645-h65cg          Started container jira-issue-fetcher-env
+157m        Normal    Pulled                   pod/mr-consolidation-agent-c9s-58fdddcb69-7nwlg     Successfully pulled image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5" in 2m53.082s (2m53.082s including waiting). Image size: 3331854280 bytes.
+157m        Normal    Pulled                   pod/backport-agent-c9s-8565bf96f6-nwq7l             Successfully pulled image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5" in 3m4.992s (3m4.992s including waiting). Image size: 3331854280 bytes.
+157m        Normal    Pulled                   pod/rebase-agent-c9s-796b9cdb5c-krhkh               Successfully pulled image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5" in 3m1.116s (3m1.116s including waiting). Image size: 3331854280 bytes.
+157m        Normal    Pulled                   pod/rebuild-agent-c9s-6596894447-5mghv              Successfully pulled image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5" in 2m39.623s (2m39.623s including waiting). Image size: 3331854280 bytes.
+157m        Normal    SuccessfulDelete         replicaset/rebuild-agent-c9s-6c7f67bdc6             Deleted pod: rebuild-agent-c9s-6c7f67bdc6-9b56f
+157m        Normal    Started                  pod/rebase-agent-c9s-796b9cdb5c-krhkh               Started container rebase-agent-c9s
+157m        Normal    SuccessfulCreate         replicaset/rebuild-agent-c9s-6596894447             Created pod: rebuild-agent-c9s-6596894447-m9fnl
+157m        Normal    ScalingReplicaSet        deployment/rebase-agent-c9s                         Scaled down replica set rebase-agent-c9s-544cfd5686 to 1 from 2
+157m        Normal    SuccessfulCreate         replicaset/rebase-agent-c9s-796b9cdb5c              Created pod: rebase-agent-c9s-796b9cdb5c-t9m2m
+157m        Normal    ScalingReplicaSet        deployment/rebuild-agent-c9s                        Scaled up replica set rebuild-agent-c9s-6596894447 to 2 from 1
+157m        Normal    Started                  pod/rebuild-agent-c9s-6596894447-5mghv              Started container rebuild-agent-c9s
+157m        Normal    ScalingReplicaSet        deployment/rebase-agent-c9s                         Scaled up replica set rebase-agent-c9s-796b9cdb5c to 2 from 1
+157m        Normal    Started                  pod/mr-consolidation-agent-c9s-58fdddcb69-7nwlg     Started container mr-consolidation-agent-c9s
+157m        Normal    Created                  pod/mr-consolidation-agent-c9s-58fdddcb69-7nwlg     Created container: mr-consolidation-agent-c9s
+157m        Normal    Killing                  pod/rebase-agent-c9s-544cfd5686-jtfwb               Stopping container rebase-agent-c9s
+157m        Normal    Killing                  pod/backport-agent-c9s-5cc7dd7f85-ltszp             Stopping container backport-agent-c9s
+157m        Normal    SuccessfulDelete         replicaset/rebase-agent-c9s-544cfd5686              Deleted pod: rebase-agent-c9s-544cfd5686-jtfwb
+157m        Normal    SuccessfulDelete         replicaset/backport-agent-c9s-5cc7dd7f85            Deleted pod: backport-agent-c9s-5cc7dd7f85-ltszp
+157m        Normal    Killing                  pod/rebuild-agent-c9s-6c7f67bdc6-9b56f              Stopping container rebuild-agent-c9s
+157m        Normal    ScalingReplicaSet        deployment/rebuild-agent-c9s                        Scaled down replica set rebuild-agent-c9s-6c7f67bdc6 to 1 from 2
+157m        Normal    Created                  pod/backport-agent-c9s-8565bf96f6-nwq7l             Created container: backport-agent-c9s
+157m        Normal    Started                  pod/backport-agent-c9s-8565bf96f6-nwq7l             Started container backport-agent-c9s
+157m        Warning   FailedCreate             replicaset/backport-agent-c9s-8565bf96f6            Error creating: pods "backport-agent-c9s-8565bf96f6-k9n5x" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19650m, limited: limits.cpu=20
+157m        Warning   FailedCreate             replicaset/backport-agent-c9s-8565bf96f6            Error creating: pods "backport-agent-c9s-8565bf96f6-d2ggt" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19650m, limited: limits.cpu=20
+157m        Warning   FailedCreate             replicaset/backport-agent-c9s-8565bf96f6            Error creating: pods "backport-agent-c9s-8565bf96f6-g2cn7" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19650m, limited: limits.cpu=20
+157m        Warning   FailedCreate             replicaset/backport-agent-c9s-8565bf96f6            Error creating: pods "backport-agent-c9s-8565bf96f6-vt5zx" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19650m, limited: limits.cpu=20
+157m        Warning   FailedCreate             replicaset/backport-agent-c9s-8565bf96f6            Error creating: pods "backport-agent-c9s-8565bf96f6-cxnzz" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19650m, limited: limits.cpu=20
+157m        Warning   FailedCreate             replicaset/backport-agent-c9s-8565bf96f6            Error creating: pods "backport-agent-c9s-8565bf96f6-56frh" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19650m, limited: limits.cpu=20
+157m        Normal    Created                  pod/rebase-agent-c9s-796b9cdb5c-krhkh               Created container: rebase-agent-c9s
+157m        Normal    ScalingReplicaSet        deployment/backport-agent-c9s                       Scaled up replica set backport-agent-c9s-8565bf96f6 to 2 from 1
+157m        Normal    ScalingReplicaSet        deployment/backport-agent-c9s                       Scaled down replica set backport-agent-c9s-5cc7dd7f85 to 3 from 4
+157m        Normal    Created                  pod/rebuild-agent-c9s-6596894447-5mghv              Created container: rebuild-agent-c9s
+157m        Warning   FailedCreate             replicaset/backport-agent-c9s-8565bf96f6            Error creating: pods "backport-agent-c9s-8565bf96f6-lzwgh" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19650m, limited: limits.cpu=20
+157m        Warning   FailedCreate             replicaset/backport-agent-c9s-8565bf96f6            Error creating: pods "backport-agent-c9s-8565bf96f6-kwzqt" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19650m, limited: limits.cpu=20
+157m        Warning   FailedCreate             replicaset/backport-agent-c9s-8565bf96f6            Error creating: pods "backport-agent-c9s-8565bf96f6-2thz8" is forbidden: exceeded quota: jotnar-ymir--notterminating, requested: limits.cpu=600m, used: limits.cpu=19650m, limited: limits.cpu=20
+157m        Normal    SuccessfulCreate         replicaset/backport-agent-c9s-8565bf96f6            Created pod: backport-agent-c9s-8565bf96f6-6vdkz
+157m        Normal    Pulled                   pod/rebuild-agent-c9s-6596894447-m9fnl              Container image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5" already present on machine
+157m        Normal    AddedInterface           pod/rebase-agent-c9s-796b9cdb5c-t9m2m               Add eth0 [172.17.8.209/23 fd01:0:0:12::3224/64] from ovn-kubernetes
+157m        Normal    Pulled                   pod/rebase-agent-c9s-796b9cdb5c-t9m2m               Container image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5" already present on machine
+157m        Normal    AddedInterface           pod/rebuild-agent-c9s-6596894447-m9fnl              Add eth0 [172.17.8.210/23 fd01:0:0:12::3225/64] from ovn-kubernetes
+157m        Normal    Created                  pod/rebuild-agent-c9s-6596894447-m9fnl              Created container: rebuild-agent-c9s
+157m        Normal    Started                  pod/rebuild-agent-c9s-6596894447-m9fnl              Started container rebuild-agent-c9s
+157m        Normal    Created                  pod/rebase-agent-c9s-796b9cdb5c-t9m2m               Created container: rebase-agent-c9s
+157m        Normal    Started                  pod/rebase-agent-c9s-796b9cdb5c-t9m2m               Started container rebase-agent-c9s
+157m        Normal    SawCompletedJob          cronjob/jira-issue-fetcher                          Saw completed job: jira-issue-fetcher-29883645, condition: Complete
+157m        Normal    Killing                  pod/rebase-agent-c9s-544cfd5686-4d8p7               Stopping container rebase-agent-c9s
+157m        Normal    SuccessfulDelete         cronjob/jira-issue-fetcher                          Deleted job jira-issue-fetcher-29883630
+157m        Normal    Completed                job/jira-issue-fetcher-29883645                     Job completed
+157m        Normal    ScalingReplicaSet        deployment/rebuild-agent-c9s                        Scaled down replica set rebuild-agent-c9s-6c7f67bdc6 to 0 from 1
+157m        Normal    SuccessfulDelete         replicaset/rebase-agent-c9s-544cfd5686              Deleted pod: rebase-agent-c9s-544cfd5686-4d8p7
+157m        Normal    SuccessfulDelete         replicaset/rebuild-agent-c9s-6c7f67bdc6             Deleted pod: rebuild-agent-c9s-6c7f67bdc6-x9sdq
+157m        Normal    Killing                  pod/rebuild-agent-c9s-6c7f67bdc6-x9sdq              Stopping container rebuild-agent-c9s
+157m        Normal    ScalingReplicaSet        deployment/rebase-agent-c9s                         Scaled down replica set rebase-agent-c9s-544cfd5686 to 0 from 1
+157m        Normal    Pulling                  pod/backport-agent-c9s-8565bf96f6-6vdkz             Pulling image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5"
+157m        Normal    AddedInterface           pod/backport-agent-c9s-8565bf96f6-6vdkz             Add eth0 [172.16.1.0/23 fd01:0:0:2::2d1f/64] from ovn-kubernetes
+157m        Normal    Completed                job/jira-issue-fetcher-todo-29883645                Job completed
+157m        Normal    Started                  pod/backport-agent-c9s-8565bf96f6-6vdkz             Started container backport-agent-c9s
+157m        Normal    Created                  pod/backport-agent-c9s-8565bf96f6-6vdkz             Created container: backport-agent-c9s
+157m        Normal    Pulled                   pod/backport-agent-c9s-8565bf96f6-6vdkz             Successfully pulled image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5" in 28.798s (28.798s including waiting). Image size: 3331854280 bytes.
+157m        Normal    Killing                  pod/backport-agent-c9s-5cc7dd7f85-jtljq             Stopping container backport-agent-c9s
+157m        Normal    ScalingReplicaSet        deployment/backport-agent-c9s                       Scaled up replica set backport-agent-c9s-8565bf96f6 to 3 from 2
+157m        Normal    ScalingReplicaSet        deployment/backport-agent-c9s                       Scaled down replica set backport-agent-c9s-5cc7dd7f85 to 2 from 3
+157m        Normal    SuccessfulDelete         replicaset/backport-agent-c9s-5cc7dd7f85            Deleted pod: backport-agent-c9s-5cc7dd7f85-jtljq
+157m        Normal    SuccessfulCreate         replicaset/backport-agent-c9s-8565bf96f6            Created pod: backport-agent-c9s-8565bf96f6-w44tl
+157m        Normal    AddedInterface           pod/backport-agent-c9s-8565bf96f6-w44tl             Add eth0 [172.17.8.211/23 fd01:0:0:12::3226/64] from ovn-kubernetes
+157m        Normal    Started                  pod/backport-agent-c9s-8565bf96f6-w44tl             Started container backport-agent-c9s
+157m        Normal    Pulled                   pod/backport-agent-c9s-8565bf96f6-w44tl             Container image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5" already present on machine
+157m        Normal    Created                  pod/backport-agent-c9s-8565bf96f6-w44tl             Created container: backport-agent-c9s
+157m        Normal    SuccessfulDelete         replicaset/backport-agent-c9s-5cc7dd7f85            Deleted pod: backport-agent-c9s-5cc7dd7f85-kg4ps
+157m        Normal    ScalingReplicaSet        deployment/backport-agent-c9s                       Scaled down replica set backport-agent-c9s-5cc7dd7f85 to 1 from 2
+157m        Normal    ScalingReplicaSet        deployment/backport-agent-c9s                       Scaled up replica set backport-agent-c9s-8565bf96f6 to 4 from 3
+157m        Normal    Killing                  pod/backport-agent-c9s-5cc7dd7f85-kg4ps             Stopping container backport-agent-c9s
+157m        Normal    SuccessfulCreate         replicaset/backport-agent-c9s-8565bf96f6            Created pod: backport-agent-c9s-8565bf96f6-sm5qc
+156m        Normal    AddedInterface           pod/backport-agent-c9s-8565bf96f6-sm5qc             Add eth0 [172.19.0.247/23 fd01:0:0:4::18ac/64] from ovn-kubernetes
+156m        Normal    Pulling                  pod/backport-agent-c9s-8565bf96f6-sm5qc             Pulling image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5"
+156m        Normal    Pulled                   pod/backport-agent-c9s-8565bf96f6-sm5qc             Successfully pulled image "quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5" in 35.643s (35.643s including waiting). Image size: 3331854280 bytes.
+156m        Normal    Created                  pod/backport-agent-c9s-8565bf96f6-sm5qc             Created container: backport-agent-c9s
+156m        Normal    ScalingReplicaSet        deployment/backport-agent-c9s                       Scaled down replica set backport-agent-c9s-5cc7dd7f85 to 0 from 1
+156m        Normal    Started                  pod/backport-agent-c9s-8565bf96f6-sm5qc             Started container backport-agent-c9s
+156m        Normal    SuccessfulDelete         replicaset/backport-agent-c9s-5cc7dd7f85            Deleted pod: backport-agent-c9s-5cc7dd7f85-97pfq
+156m        Normal    Killing                  pod/backport-agent-c9s-5cc7dd7f85-97pfq             Stopping container backport-agent-c9s
+152m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883650                Created pod: jira-issue-fetcher-todo-29883650-zdzpt
+152m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883650-zdzpt          Add eth0 [172.17.5.156/23 fd01:0:0:3::cb39/64] from ovn-kubernetes
+152m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883650-zdzpt          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+152m        Normal    Created                  pod/jira-issue-fetcher-todo-29883650-zdzpt          Created container: jira-issue-fetcher-env
+152m        Normal    Started                  pod/jira-issue-fetcher-todo-29883650-zdzpt          Started container jira-issue-fetcher-env
+152m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883650-zdzpt          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 1.856s (1.856s including waiting). Image size: 286639702 bytes.
+152m        Normal    Completed                job/jira-issue-fetcher-todo-29883650                Job completed
+147m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883655                Created pod: jira-issue-fetcher-todo-29883655-px9q7
+147m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883655-px9q7          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+147m        Normal    Started                  pod/jira-issue-fetcher-todo-29883655-px9q7          Started container jira-issue-fetcher-env
+147m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883655-px9q7          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 377ms (377ms including waiting). Image size: 286639702 bytes.
+147m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883655-px9q7          Add eth0 [172.17.5.158/23 fd01:0:0:3::cb3b/64] from ovn-kubernetes
+147m        Normal    Created                  pod/jira-issue-fetcher-todo-29883655-px9q7          Created container: jira-issue-fetcher-env
+147m        Normal    Completed                job/jira-issue-fetcher-todo-29883655                Job completed
+142m        Normal    SuccessfulCreate         job/jira-issue-fetcher-29883660                     Created pod: jira-issue-fetcher-29883660-q6vng
+142m        Normal    SuccessfulCreate         cronjob/jira-issue-fetcher                          Created job jira-issue-fetcher-29883660
+142m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883660                Created pod: jira-issue-fetcher-todo-29883660-qlq4z
+142m        Normal    Pulled                   pod/jira-issue-fetcher-29883660-q6vng               Container image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" already present on machine
+142m        Normal    AddedInterface           pod/jira-issue-fetcher-29883660-q6vng               Add eth0 [172.17.5.161/23 fd01:0:0:3::cb3d/64] from ovn-kubernetes
+142m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883660-qlq4z          Add eth0 [172.19.0.251/23 fd01:0:0:4::18b0/64] from ovn-kubernetes
+142m        Normal    Started                  pod/jira-issue-fetcher-29883660-q6vng               Started container jira-issue-fetcher-env
+142m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883660-qlq4z          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+142m        Normal    Created                  pod/jira-issue-fetcher-29883660-q6vng               Created container: jira-issue-fetcher-env
+142m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883660-qlq4z          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 1.859s (1.859s including waiting). Image size: 286639702 bytes.
+142m        Normal    Started                  pod/jira-issue-fetcher-todo-29883660-qlq4z          Started container jira-issue-fetcher-env
+142m        Normal    Created                  pod/jira-issue-fetcher-todo-29883660-qlq4z          Created container: jira-issue-fetcher-env
+142m        Normal    SawCompletedJob          cronjob/jira-issue-fetcher                          Saw completed job: jira-issue-fetcher-29883660, condition: Complete
+142m        Normal    SuccessfulDelete         cronjob/jira-issue-fetcher                          Deleted job jira-issue-fetcher-29883645
+142m        Normal    Completed                job/jira-issue-fetcher-29883660                     Job completed
+142m        Normal    Completed                job/jira-issue-fetcher-todo-29883660                Job completed
+137m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883665                Created pod: jira-issue-fetcher-todo-29883665-xxbnw
+137m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883665-xxbnw          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 403ms (403ms including waiting). Image size: 286639702 bytes.
+137m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883665-xxbnw          Add eth0 [172.19.1.0/23 fd01:0:0:4::18b5/64] from ovn-kubernetes
+137m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883665-xxbnw          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+137m        Normal    Started                  pod/jira-issue-fetcher-todo-29883665-xxbnw          Started container jira-issue-fetcher-env
+137m        Normal    Created                  pod/jira-issue-fetcher-todo-29883665-xxbnw          Created container: jira-issue-fetcher-env
+137m        Normal    Completed                job/jira-issue-fetcher-todo-29883665                Job completed
+132m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883670                Created pod: jira-issue-fetcher-todo-29883670-p49js
+132m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883670-p49js          Add eth0 [172.19.1.5/23 fd01:0:0:4::18ba/64] from ovn-kubernetes
+132m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883670-p49js          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 387ms (387ms including waiting). Image size: 286639702 bytes.
+132m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883670-p49js          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+132m        Normal    Created                  pod/jira-issue-fetcher-todo-29883670-p49js          Created container: jira-issue-fetcher-env
+132m        Normal    Started                  pod/jira-issue-fetcher-todo-29883670-p49js          Started container jira-issue-fetcher-env
+132m        Normal    Completed                job/jira-issue-fetcher-todo-29883670                Job completed
+127m        Normal    SuccessfulCreate         cronjob/jira-issue-fetcher                          Created job jira-issue-fetcher-29883675
+127m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883675                Created pod: jira-issue-fetcher-todo-29883675-4k8xq
+127m        Normal    SuccessfulCreate         job/jira-issue-fetcher-29883675                     Created pod: jira-issue-fetcher-29883675-t287c
+127m        Normal    Pulled                   pod/jira-issue-fetcher-29883675-t287c               Container image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" already present on machine
+127m        Normal    Started                  pod/jira-issue-fetcher-29883675-t287c               Started container jira-issue-fetcher-env
+127m        Normal    Created                  pod/jira-issue-fetcher-29883675-t287c               Created container: jira-issue-fetcher-env
+127m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883675-4k8xq          Add eth0 [172.17.5.170/23 fd01:0:0:3::cb46/64] from ovn-kubernetes
+127m        Normal    AddedInterface           pod/jira-issue-fetcher-29883675-t287c               Add eth0 [172.19.1.6/23 fd01:0:0:4::18bb/64] from ovn-kubernetes
+127m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883675-4k8xq          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+127m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883675-4k8xq          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 344ms (344ms including waiting). Image size: 286639702 bytes.
+127m        Normal    Started                  pod/jira-issue-fetcher-todo-29883675-4k8xq          Started container jira-issue-fetcher-env
+127m        Normal    Created                  pod/jira-issue-fetcher-todo-29883675-4k8xq          Created container: jira-issue-fetcher-env
+127m        Normal    SawCompletedJob          cronjob/jira-issue-fetcher                          Saw completed job: jira-issue-fetcher-29883675, condition: Complete
+127m        Normal    SuccessfulDelete         cronjob/jira-issue-fetcher                          Deleted job jira-issue-fetcher-29883660
+127m        Normal    Completed                job/jira-issue-fetcher-29883675                     Job completed
+127m        Normal    Completed                job/jira-issue-fetcher-todo-29883675                Job completed
+122m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883680                Created pod: jira-issue-fetcher-todo-29883680-pg2qp
+122m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883680-pg2qp          Add eth0 [172.17.5.172/23 fd01:0:0:3::cb48/64] from ovn-kubernetes
+122m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883680-pg2qp          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+122m        Normal    Created                  pod/jira-issue-fetcher-todo-29883680-pg2qp          Created container: jira-issue-fetcher-env
+122m        Normal    Started                  pod/jira-issue-fetcher-todo-29883680-pg2qp          Started container jira-issue-fetcher-env
+122m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883680-pg2qp          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 4.219s (4.219s including waiting). Image size: 286639702 bytes.
+122m        Normal    Completed                job/jira-issue-fetcher-todo-29883680                Job completed
+117m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883685                Created pod: jira-issue-fetcher-todo-29883685-gvf7p
+117m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883685-gvf7p          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+117m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883685-gvf7p          Add eth0 [172.17.5.175/23 fd01:0:0:3::cb4b/64] from ovn-kubernetes
+117m        Normal    Started                  pod/jira-issue-fetcher-todo-29883685-gvf7p          Started container jira-issue-fetcher-env
+117m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883685-gvf7p          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 586ms (586ms including waiting). Image size: 286639702 bytes.
+117m        Normal    Created                  pod/jira-issue-fetcher-todo-29883685-gvf7p          Created container: jira-issue-fetcher-env
+117m        Normal    Completed                job/jira-issue-fetcher-todo-29883685                Job completed
+112m        Normal    SuccessfulCreate         job/jira-issue-fetcher-29883690                     Created pod: jira-issue-fetcher-29883690-p5cwl
+112m        Normal    SuccessfulCreate         cronjob/jira-issue-fetcher                          Created job jira-issue-fetcher-29883690
+112m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883690                Created pod: jira-issue-fetcher-todo-29883690-rntrq
+112m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883690-rntrq          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 337ms (337ms including waiting). Image size: 286639702 bytes.
+112m        Normal    Pulled                   pod/jira-issue-fetcher-29883690-p5cwl               Container image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" already present on machine
+112m        Normal    Created                  pod/jira-issue-fetcher-29883690-p5cwl               Created container: jira-issue-fetcher-env
+112m        Normal    Started                  pod/jira-issue-fetcher-29883690-p5cwl               Started container jira-issue-fetcher-env
+112m        Normal    AddedInterface           pod/jira-issue-fetcher-29883690-p5cwl               Add eth0 [172.17.5.178/23 fd01:0:0:3::cb4d/64] from ovn-kubernetes
+112m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883690-rntrq          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+112m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883690-rntrq          Add eth0 [172.17.5.179/23 fd01:0:0:3::cb4e/64] from ovn-kubernetes
+112m        Normal    Started                  pod/jira-issue-fetcher-todo-29883690-rntrq          Started container jira-issue-fetcher-env
+112m        Normal    Created                  pod/jira-issue-fetcher-todo-29883690-rntrq          Created container: jira-issue-fetcher-env
+112m        Normal    SawCompletedJob          cronjob/jira-issue-fetcher                          Saw completed job: jira-issue-fetcher-29883690, condition: Complete
+112m        Normal    Completed                job/jira-issue-fetcher-29883690                     Job completed
+112m        Normal    SuccessfulDelete         cronjob/jira-issue-fetcher                          Deleted job jira-issue-fetcher-29883675
+112m        Normal    Completed                job/jira-issue-fetcher-todo-29883690                Job completed
+107m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883695                Created pod: jira-issue-fetcher-todo-29883695-kmcm7
+107m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883695-kmcm7          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+107m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883695-kmcm7          Add eth0 [172.19.1.14/23 fd01:0:0:4::18bf/64] from ovn-kubernetes
+107m        Normal    Created                  pod/jira-issue-fetcher-todo-29883695-kmcm7          Created container: jira-issue-fetcher-env
+107m        Normal    Started                  pod/jira-issue-fetcher-todo-29883695-kmcm7          Started container jira-issue-fetcher-env
+107m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883695-kmcm7          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 425ms (425ms including waiting). Image size: 286639702 bytes.
+107m        Normal    Completed                job/jira-issue-fetcher-todo-29883695                Job completed
+102m        Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883700                Created pod: jira-issue-fetcher-todo-29883700-h8jkt
+102m        Normal    Pulled                   pod/jira-issue-fetcher-todo-29883700-h8jkt          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 436ms (436ms including waiting). Image size: 286639702 bytes.
+102m        Normal    Created                  pod/jira-issue-fetcher-todo-29883700-h8jkt          Created container: jira-issue-fetcher-env
+102m        Normal    Pulling                  pod/jira-issue-fetcher-todo-29883700-h8jkt          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+102m        Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883700-h8jkt          Add eth0 [172.17.5.186/23 fd01:0:0:3::cb55/64] from ovn-kubernetes
+102m        Normal    Started                  pod/jira-issue-fetcher-todo-29883700-h8jkt          Started container jira-issue-fetcher-env
+102m        Normal    Completed                job/jira-issue-fetcher-todo-29883700                Job completed
+97m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883705                Created pod: jira-issue-fetcher-todo-29883705-6mn87
+97m         Normal    SuccessfulCreate         job/jira-issue-fetcher-29883705                     Created pod: jira-issue-fetcher-29883705-5wvmn
+97m         Normal    SuccessfulCreate         cronjob/jira-issue-fetcher                          Created job jira-issue-fetcher-29883705
+97m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883705-6mn87          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+97m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883705-6mn87          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 402ms (402ms including waiting). Image size: 286639702 bytes.
+97m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883705-6mn87          Add eth0 [172.17.5.190/23 fd01:0:0:3::cb59/64] from ovn-kubernetes
+97m         Normal    Started                  pod/jira-issue-fetcher-29883705-5wvmn               Started container jira-issue-fetcher-env
+97m         Normal    Created                  pod/jira-issue-fetcher-29883705-5wvmn               Created container: jira-issue-fetcher-env
+97m         Normal    Pulled                   pod/jira-issue-fetcher-29883705-5wvmn               Container image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" already present on machine
+97m         Normal    AddedInterface           pod/jira-issue-fetcher-29883705-5wvmn               Add eth0 [172.17.5.189/23 fd01:0:0:3::cb58/64] from ovn-kubernetes
+97m         Normal    Started                  pod/jira-issue-fetcher-todo-29883705-6mn87          Started container jira-issue-fetcher-env
+97m         Normal    Created                  pod/jira-issue-fetcher-todo-29883705-6mn87          Created container: jira-issue-fetcher-env
+97m         Normal    Completed                job/jira-issue-fetcher-29883705                     Job completed
+97m         Normal    SawCompletedJob          cronjob/jira-issue-fetcher                          Saw completed job: jira-issue-fetcher-29883705, condition: Complete
+97m         Normal    SuccessfulDelete         cronjob/jira-issue-fetcher                          Deleted job jira-issue-fetcher-29883690
+97m         Normal    Completed                job/jira-issue-fetcher-todo-29883705                Job completed
+92m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883710                Created pod: jira-issue-fetcher-todo-29883710-rn9q8
+92m         Normal    Started                  pod/jira-issue-fetcher-todo-29883710-rn9q8          Started container jira-issue-fetcher-env
+92m         Normal    Created                  pod/jira-issue-fetcher-todo-29883710-rn9q8          Created container: jira-issue-fetcher-env
+92m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883710-rn9q8          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 440ms (440ms including waiting). Image size: 286639702 bytes.
+92m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883710-rn9q8          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+92m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883710-rn9q8          Add eth0 [172.17.5.198/23 fd01:0:0:3::cb5f/64] from ovn-kubernetes
+92m         Normal    Completed                job/jira-issue-fetcher-todo-29883710                Job completed
+87m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883715                Created pod: jira-issue-fetcher-todo-29883715-tmjwf
+87m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883715-tmjwf          Add eth0 [172.17.5.200/23 fd01:0:0:3::cb61/64] from ovn-kubernetes
+87m         Normal    Started                  pod/jira-issue-fetcher-todo-29883715-tmjwf          Started container jira-issue-fetcher-env
+87m         Normal    Created                  pod/jira-issue-fetcher-todo-29883715-tmjwf          Created container: jira-issue-fetcher-env
+87m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883715-tmjwf          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 409ms (409ms including waiting). Image size: 286639702 bytes.
+87m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883715-tmjwf          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+87m         Normal    Completed                job/jira-issue-fetcher-todo-29883715                Job completed
+82m         Normal    SuccessfulCreate         cronjob/jira-issue-fetcher                          Created job jira-issue-fetcher-29883720
+82m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883720                Created pod: jira-issue-fetcher-todo-29883720-fhkcf
+82m         Normal    SuccessfulCreate         job/jira-issue-fetcher-29883720                     Created pod: jira-issue-fetcher-29883720-88xvs
+82m         Normal    Started                  pod/jira-issue-fetcher-29883720-88xvs               Started container jira-issue-fetcher-env
+82m         Normal    Pulled                   pod/jira-issue-fetcher-29883720-88xvs               Container image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" already present on machine
+82m         Normal    Created                  pod/jira-issue-fetcher-29883720-88xvs               Created container: jira-issue-fetcher-env
+82m         Normal    AddedInterface           pod/jira-issue-fetcher-29883720-88xvs               Add eth0 [172.19.1.16/23 fd01:0:0:4::18c1/64] from ovn-kubernetes
+82m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883720-fhkcf          Add eth0 [172.17.5.204/23 fd01:0:0:3::cb65/64] from ovn-kubernetes
+82m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883720-fhkcf          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+82m         Normal    Started                  pod/jira-issue-fetcher-todo-29883720-fhkcf          Started container jira-issue-fetcher-env
+82m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883720-fhkcf          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 582ms (582ms including waiting). Image size: 286639702 bytes.
+82m         Normal    Created                  pod/jira-issue-fetcher-todo-29883720-fhkcf          Created container: jira-issue-fetcher-env
+82m         Normal    SuccessfulDelete         cronjob/jira-issue-fetcher                          Deleted job jira-issue-fetcher-29883705
+82m         Normal    Completed                job/jira-issue-fetcher-29883720                     Job completed
+82m         Normal    SawCompletedJob          cronjob/jira-issue-fetcher                          Saw completed job: jira-issue-fetcher-29883720, condition: Complete
+82m         Normal    Completed                job/jira-issue-fetcher-todo-29883720                Job completed
+77m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883725                Created pod: jira-issue-fetcher-todo-29883725-4c58r
+77m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883725-4c58r          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+77m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883725-4c58r          Add eth0 [172.17.5.209/23 fd01:0:0:3::cb6a/64] from ovn-kubernetes
+77m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883725-4c58r          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 490ms (490ms including waiting). Image size: 286639702 bytes.
+77m         Normal    Created                  pod/jira-issue-fetcher-todo-29883725-4c58r          Created container: jira-issue-fetcher-env
+77m         Normal    Started                  pod/jira-issue-fetcher-todo-29883725-4c58r          Started container jira-issue-fetcher-env
+77m         Normal    Completed                job/jira-issue-fetcher-todo-29883725                Job completed
+72m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883730                Created pod: jira-issue-fetcher-todo-29883730-hz79w
+72m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883730-hz79w          Add eth0 [172.19.1.22/23 fd01:0:0:4::18c7/64] from ovn-kubernetes
+72m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883730-hz79w          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+72m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883730-hz79w          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 417ms (417ms including waiting). Image size: 286639702 bytes.
+72m         Normal    Created                  pod/jira-issue-fetcher-todo-29883730-hz79w          Created container: jira-issue-fetcher-env
+72m         Normal    Started                  pod/jira-issue-fetcher-todo-29883730-hz79w          Started container jira-issue-fetcher-env
+72m         Normal    Completed                job/jira-issue-fetcher-todo-29883730                Job completed
+67m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883735                Created pod: jira-issue-fetcher-todo-29883735-g5z4p
+67m         Normal    SuccessfulCreate         job/jira-issue-fetcher-29883735                     Created pod: jira-issue-fetcher-29883735-cpsn6
+67m         Normal    SuccessfulCreate         cronjob/jira-issue-fetcher                          Created job jira-issue-fetcher-29883735
+67m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883735-g5z4p          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+67m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883735-g5z4p          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 407ms (407ms including waiting). Image size: 286639702 bytes.
+67m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883735-g5z4p          Add eth0 [172.19.1.24/23 fd01:0:0:4::18c9/64] from ovn-kubernetes
+67m         Normal    AddedInterface           pod/jira-issue-fetcher-29883735-cpsn6               Add eth0 [172.19.1.23/23 fd01:0:0:4::18c8/64] from ovn-kubernetes
+67m         Normal    Pulled                   pod/jira-issue-fetcher-29883735-cpsn6               Container image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" already present on machine
+67m         Normal    Created                  pod/jira-issue-fetcher-29883735-cpsn6               Created container: jira-issue-fetcher-env
+67m         Normal    Started                  pod/jira-issue-fetcher-29883735-cpsn6               Started container jira-issue-fetcher-env
+67m         Normal    Created                  pod/jira-issue-fetcher-todo-29883735-g5z4p          Created container: jira-issue-fetcher-env
+67m         Normal    Started                  pod/jira-issue-fetcher-todo-29883735-g5z4p          Started container jira-issue-fetcher-env
+67m         Normal    SawCompletedJob          cronjob/jira-issue-fetcher                          Saw completed job: jira-issue-fetcher-29883735, condition: Complete
+67m         Normal    Completed                job/jira-issue-fetcher-29883735                     Job completed
+67m         Normal    SuccessfulDelete         cronjob/jira-issue-fetcher                          Deleted job jira-issue-fetcher-29883720
+67m         Normal    Completed                job/jira-issue-fetcher-todo-29883735                Job completed
+62m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883740                Created pod: jira-issue-fetcher-todo-29883740-6gbdv
+62m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883740-6gbdv          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+62m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883740-6gbdv          Add eth0 [172.17.5.221/23 fd01:0:0:3::cb76/64] from ovn-kubernetes
+62m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883740-6gbdv          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 554ms (554ms including waiting). Image size: 286639702 bytes.
+62m         Normal    Created                  pod/jira-issue-fetcher-todo-29883740-6gbdv          Created container: jira-issue-fetcher-env
+62m         Normal    Started                  pod/jira-issue-fetcher-todo-29883740-6gbdv          Started container jira-issue-fetcher-env
+62m         Normal    Completed                job/jira-issue-fetcher-todo-29883740                Job completed
+57m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883745                Created pod: jira-issue-fetcher-todo-29883745-sdvdg
+57m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883745-sdvdg          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+57m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883745-sdvdg          Add eth0 [172.17.5.223/23 fd01:0:0:3::cb78/64] from ovn-kubernetes
+57m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883745-sdvdg          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 627ms (627ms including waiting). Image size: 286639702 bytes.
+57m         Normal    Created                  pod/jira-issue-fetcher-todo-29883745-sdvdg          Created container: jira-issue-fetcher-env
+57m         Normal    Started                  pod/jira-issue-fetcher-todo-29883745-sdvdg          Started container jira-issue-fetcher-env
+57m         Normal    Completed                job/jira-issue-fetcher-todo-29883745                Job completed
+52m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883750                Created pod: jira-issue-fetcher-todo-29883750-285t4
+52m         Normal    SuccessfulCreate         cronjob/jira-issue-fetcher                          Created job jira-issue-fetcher-29883750
+52m         Normal    SuccessfulCreate         job/jira-issue-fetcher-29883750                     Created pod: jira-issue-fetcher-29883750-r6wzk
+52m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883750-285t4          Add eth0 [172.17.5.230/23 fd01:0:0:3::cb7f/64] from ovn-kubernetes
+52m         Normal    Created                  pod/jira-issue-fetcher-todo-29883750-285t4          Created container: jira-issue-fetcher-env
+52m         Normal    Started                  pod/jira-issue-fetcher-todo-29883750-285t4          Started container jira-issue-fetcher-env
+52m         Normal    Started                  pod/jira-issue-fetcher-29883750-r6wzk               Started container jira-issue-fetcher-env
+52m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883750-285t4          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+52m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883750-285t4          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 401ms (401ms including waiting). Image size: 286639702 bytes.
+52m         Normal    Created                  pod/jira-issue-fetcher-29883750-r6wzk               Created container: jira-issue-fetcher-env
+52m         Normal    Pulled                   pod/jira-issue-fetcher-29883750-r6wzk               Container image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" already present on machine
+52m         Normal    AddedInterface           pod/jira-issue-fetcher-29883750-r6wzk               Add eth0 [172.17.5.228/23 fd01:0:0:3::cb7d/64] from ovn-kubernetes
+52m         Normal    Completed                job/jira-issue-fetcher-29883750                     Job completed
+52m         Normal    SuccessfulDelete         cronjob/jira-issue-fetcher                          Deleted job jira-issue-fetcher-29883735
+52m         Normal    SawCompletedJob          cronjob/jira-issue-fetcher                          Saw completed job: jira-issue-fetcher-29883750, condition: Complete
+52m         Normal    Completed                job/jira-issue-fetcher-todo-29883750                Job completed
+47m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883755                Created pod: jira-issue-fetcher-todo-29883755-nlj59
+47m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883755-nlj59          Add eth0 [172.17.8.228/23 fd01:0:0:12::3237/64] from ovn-kubernetes
+47m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883755-nlj59          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+47m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883755-nlj59          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 387ms (387ms including waiting). Image size: 286639702 bytes.
+47m         Normal    Created                  pod/jira-issue-fetcher-todo-29883755-nlj59          Created container: jira-issue-fetcher-env
+47m         Normal    Started                  pod/jira-issue-fetcher-todo-29883755-nlj59          Started container jira-issue-fetcher-env
+47m         Normal    Completed                job/jira-issue-fetcher-todo-29883755                Job completed
+42m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883760                Created pod: jira-issue-fetcher-todo-29883760-2npzs
+42m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883760-2npzs          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+42m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883760-2npzs          Add eth0 [172.19.1.34/23 fd01:0:0:4::18d2/64] from ovn-kubernetes
+42m         Normal    Started                  pod/jira-issue-fetcher-todo-29883760-2npzs          Started container jira-issue-fetcher-env
+42m         Normal    Created                  pod/jira-issue-fetcher-todo-29883760-2npzs          Created container: jira-issue-fetcher-env
+42m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883760-2npzs          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 417ms (417ms including waiting). Image size: 286639702 bytes.
+42m         Normal    Completed                job/jira-issue-fetcher-todo-29883760                Job completed
+37m         Normal    SuccessfulCreate         cronjob/jira-issue-fetcher                          Created job jira-issue-fetcher-29883765
+37m         Normal    SuccessfulCreate         job/jira-issue-fetcher-29883765                     Created pod: jira-issue-fetcher-29883765-rq8m6
+37m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883765                Created pod: jira-issue-fetcher-todo-29883765-8w8jn
+37m         Normal    Pulled                   pod/jira-issue-fetcher-29883765-rq8m6               Container image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" already present on machine
+37m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883765-8w8jn          Add eth0 [172.19.8.200/23 fd01:0:0:14::fcc6/64] from ovn-kubernetes
+37m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883765-8w8jn          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+37m         Normal    Created                  pod/jira-issue-fetcher-29883765-rq8m6               Created container: jira-issue-fetcher-env
+37m         Normal    Started                  pod/jira-issue-fetcher-29883765-rq8m6               Started container jira-issue-fetcher-env
+37m         Normal    AddedInterface           pod/jira-issue-fetcher-29883765-rq8m6               Add eth0 [172.17.8.230/23 fd01:0:0:12::3239/64] from ovn-kubernetes
+37m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883765-8w8jn          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 3.82s (3.82s including waiting). Image size: 286639702 bytes.
+37m         Normal    Created                  pod/jira-issue-fetcher-todo-29883765-8w8jn          Created container: jira-issue-fetcher-env
+37m         Normal    Started                  pod/jira-issue-fetcher-todo-29883765-8w8jn          Started container jira-issue-fetcher-env
+37m         Normal    SawCompletedJob          cronjob/jira-issue-fetcher                          Saw completed job: jira-issue-fetcher-29883765, condition: Complete
+37m         Normal    Completed                job/jira-issue-fetcher-29883765                     Job completed
+37m         Normal    SuccessfulDelete         cronjob/jira-issue-fetcher                          Deleted job jira-issue-fetcher-29883750
+37m         Normal    Completed                job/jira-issue-fetcher-todo-29883765                Job completed
+32m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883770                Created pod: jira-issue-fetcher-todo-29883770-5pbxk
+32m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883770-5pbxk          Add eth0 [172.16.2.224/23 fd01:0:0:1::c314/64] from ovn-kubernetes
+32m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883770-5pbxk          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+32m         Normal    Created                  pod/jira-issue-fetcher-todo-29883770-5pbxk          Created container: jira-issue-fetcher-env
+32m         Normal    Started                  pod/jira-issue-fetcher-todo-29883770-5pbxk          Started container jira-issue-fetcher-env
+32m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883770-5pbxk          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 4.144s (4.144s including waiting). Image size: 286639702 bytes.
+32m         Normal    Completed                job/jira-issue-fetcher-todo-29883770                Job completed
+27m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883775                Created pod: jira-issue-fetcher-todo-29883775-dlzv2
+27m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883775-dlzv2          Add eth0 [172.17.5.248/23 fd01:0:0:3::cb90/64] from ovn-kubernetes
+27m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883775-dlzv2          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+27m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883775-dlzv2          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 420ms (420ms including waiting). Image size: 286639702 bytes.
+27m         Normal    Started                  pod/jira-issue-fetcher-todo-29883775-dlzv2          Started container jira-issue-fetcher-env
+27m         Normal    Created                  pod/jira-issue-fetcher-todo-29883775-dlzv2          Created container: jira-issue-fetcher-env
+27m         Normal    Completed                job/jira-issue-fetcher-todo-29883775                Job completed
+22m         Normal    SuccessfulCreate         job/jira-issue-fetcher-29883780                     Created pod: jira-issue-fetcher-29883780-65kpc
+22m         Normal    SuccessfulCreate         cronjob/jira-issue-fetcher                          Created job jira-issue-fetcher-29883780
+22m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883780                Created pod: jira-issue-fetcher-todo-29883780-22x8b
+22m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883780-22x8b          Add eth0 [172.17.5.250/23 fd01:0:0:3::cb92/64] from ovn-kubernetes
+22m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883780-22x8b          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+22m         Normal    AddedInterface           pod/jira-issue-fetcher-29883780-65kpc               Add eth0 [172.17.5.249/23 fd01:0:0:3::cb91/64] from ovn-kubernetes
+22m         Normal    Pulled                   pod/jira-issue-fetcher-29883780-65kpc               Container image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" already present on machine
+22m         Normal    Created                  pod/jira-issue-fetcher-29883780-65kpc               Created container: jira-issue-fetcher-env
+22m         Normal    Started                  pod/jira-issue-fetcher-29883780-65kpc               Started container jira-issue-fetcher-env
+22m         Normal    Started                  pod/jira-issue-fetcher-todo-29883780-22x8b          Started container jira-issue-fetcher-env
+22m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883780-22x8b          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 880ms (880ms including waiting). Image size: 286639702 bytes.
+22m         Normal    Created                  pod/jira-issue-fetcher-todo-29883780-22x8b          Created container: jira-issue-fetcher-env
+22m         Normal    SuccessfulDelete         cronjob/jira-issue-fetcher                          Deleted job jira-issue-fetcher-29883765
+22m         Normal    SawCompletedJob          cronjob/jira-issue-fetcher                          Saw completed job: jira-issue-fetcher-29883780, condition: Complete
+22m         Normal    Completed                job/jira-issue-fetcher-29883780                     Job completed
+22m         Normal    Completed                job/jira-issue-fetcher-todo-29883780                Job completed
+17m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883785                Created pod: jira-issue-fetcher-todo-29883785-2lp6l
+17m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883785-2lp6l          Add eth0 [172.17.4.12/23 fd01:0:0:3::cb9f/64] from ovn-kubernetes
+17m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883785-2lp6l          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+17m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883785-2lp6l          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 483ms (484ms including waiting). Image size: 286639702 bytes.
+17m         Normal    Started                  pod/jira-issue-fetcher-todo-29883785-2lp6l          Started container jira-issue-fetcher-env
+17m         Normal    Created                  pod/jira-issue-fetcher-todo-29883785-2lp6l          Created container: jira-issue-fetcher-env
+17m         Normal    Completed                job/jira-issue-fetcher-todo-29883785                Job completed
+12m         Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883790                Created pod: jira-issue-fetcher-todo-29883790-h8l8m
+12m         Normal    Started                  pod/jira-issue-fetcher-todo-29883790-h8l8m          Started container jira-issue-fetcher-env
+12m         Normal    Created                  pod/jira-issue-fetcher-todo-29883790-h8l8m          Created container: jira-issue-fetcher-env
+12m         Normal    Pulled                   pod/jira-issue-fetcher-todo-29883790-h8l8m          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 396ms (396ms including waiting). Image size: 286639702 bytes.
+12m         Normal    Pulling                  pod/jira-issue-fetcher-todo-29883790-h8l8m          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+12m         Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883790-h8l8m          Add eth0 [172.19.1.43/23 fd01:0:0:4::18da/64] from ovn-kubernetes
+12m         Normal    Completed                job/jira-issue-fetcher-todo-29883790                Job completed
+7m49s       Normal    SuccessfulCreate         cronjob/jira-issue-fetcher                          Created job jira-issue-fetcher-29883795
+7m49s       Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883795                Created pod: jira-issue-fetcher-todo-29883795-8bkfn
+7m49s       Normal    SuccessfulCreate         job/jira-issue-fetcher-29883795                     Created pod: jira-issue-fetcher-29883795-c72jq
+7m47s       Normal    Started                  pod/jira-issue-fetcher-29883795-c72jq               Started container jira-issue-fetcher-env
+7m47s       Normal    AddedInterface           pod/jira-issue-fetcher-29883795-c72jq               Add eth0 [172.17.8.234/23 fd01:0:0:12::323d/64] from ovn-kubernetes
+7m47s       Normal    Created                  pod/jira-issue-fetcher-29883795-c72jq               Created container: jira-issue-fetcher-env
+7m47s       Normal    Pulled                   pod/jira-issue-fetcher-29883795-c72jq               Container image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" already present on machine
+7m47s       Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883795-8bkfn          Add eth0 [172.17.8.235/23 fd01:0:0:12::323e/64] from ovn-kubernetes
+7m47s       Normal    Pulling                  pod/jira-issue-fetcher-todo-29883795-8bkfn          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+7m47s       Normal    Pulled                   pod/jira-issue-fetcher-todo-29883795-8bkfn          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 667ms (667ms including waiting). Image size: 286639702 bytes.
+7m46s       Normal    Started                  pod/jira-issue-fetcher-todo-29883795-8bkfn          Started container jira-issue-fetcher-env
+7m46s       Normal    Created                  pod/jira-issue-fetcher-todo-29883795-8bkfn          Created container: jira-issue-fetcher-env
+7m39s       Normal    SawCompletedJob          cronjob/jira-issue-fetcher                          Saw completed job: jira-issue-fetcher-29883795, condition: Complete
+7m39s       Normal    Completed                job/jira-issue-fetcher-29883795                     Job completed
+7m39s       Normal    SuccessfulDelete         cronjob/jira-issue-fetcher                          Deleted job jira-issue-fetcher-29883780
+7m36s       Normal    Completed                job/jira-issue-fetcher-todo-29883795                Job completed
+2m49s       Normal    SuccessfulCreate         job/jira-issue-fetcher-todo-29883800                Created pod: jira-issue-fetcher-todo-29883800-55zbt
+2m49s       Normal    SuccessfulCreate         cronjob/jira-issue-fetcher-todo                     (combined from similar events): Created job jira-issue-fetcher-todo-29883800
+2m47s       Normal    Pulling                  pod/jira-issue-fetcher-todo-29883800-55zbt          Pulling image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f"
+2m47s       Normal    AddedInterface           pod/jira-issue-fetcher-todo-29883800-55zbt          Add eth0 [172.17.1.104/23 fd01:0:0:7::e6ba/64] from ovn-kubernetes
+2m43s       Normal    Started                  pod/jira-issue-fetcher-todo-29883800-55zbt          Started container jira-issue-fetcher-env
+2m43s       Normal    Created                  pod/jira-issue-fetcher-todo-29883800-55zbt          Created container: jira-issue-fetcher-env
+2m43s       Normal    Pulled                   pod/jira-issue-fetcher-todo-29883800-55zbt          Successfully pulled image "quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f" in 3.836s (3.836s including waiting). Image size: 286639702 bytes.
+2m33s       Normal    Completed                job/jira-issue-fetcher-todo-29883800                Job completed

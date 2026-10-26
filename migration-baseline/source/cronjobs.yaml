@@ -1,0 +1,588 @@
+apiVersion: v1
+items:
+- apiVersion: batch/v1
+  kind: CronJob
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"batch/v1","kind":"CronJob","metadata":{"annotations":{},"labels":{"app":"jira-issue-fetcher","component":"scheduler"},"name":"jira-issue-fetcher","namespace":"jotnar-ymir--jotnar-ymir"},"spec":{"concurrencyPolicy":"Forbid","failedJobsHistoryLimit":1,"jobTemplate":{"metadata":{"labels":{"app":"jira-issue-fetcher","component":"job"}},"spec":{"activeDeadlineSeconds":600,"backoffLimit":2,"template":{"metadata":{"labels":{"app":"jira-issue-fetcher","component":"pod"}},"spec":{"containers":[{"envFrom":[{"configMapRef":{"name":"endpoints-env"}},{"configMapRef":{"name":"jira-env"}},{"secretRef":{"name":"jira-env"}},{"configMapRef":{"name":"jira-issue-fetcher-env"}},{"configMapRef":{"name":"jira-issue-fetcher-filter-env"}}],"image":"jira-issue-fetcher:prod","imagePullPolicy":"IfNotPresent","name":"jira-issue-fetcher-env","resources":{"limits":{"cpu":"200m","memory":"128Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}}],"dnsPolicy":"ClusterFirst","restartPolicy":"Never","schedulerName":"default-scheduler","securityContext":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}},"terminationGracePeriodSeconds":30}}}},"schedule":"*/15 * * * *","successfulJobsHistoryLimit":1,"suspend":false}}
+    creationTimestamp: "2026-05-27T10:08:27Z"
+    generation: 76
+    labels:
+      app: jira-issue-fetcher
+      component: scheduler
+    name: jira-issue-fetcher
+    namespace: jotnar-ymir--jotnar-ymir
+    resourceVersion: "2938428386"
+    uid: cdba1994-4730-4082-ab98-04dc517dc8c7
+  spec:
+    concurrencyPolicy: Forbid
+    failedJobsHistoryLimit: 1
+    jobTemplate:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: jira-issue-fetcher
+          component: job
+      spec:
+        activeDeadlineSeconds: 600
+        backoffLimit: 2
+        template:
+          metadata:
+            creationTimestamp: null
+            labels:
+              app: jira-issue-fetcher
+              component: pod
+              paas.redhat.com/appcode: JTNR-001
+          spec:
+            containers:
+            - envFrom:
+              - configMapRef:
+                  name: endpoints-env
+              - configMapRef:
+                  name: jira-env
+              - secretRef:
+                  name: jira-env
+              - configMapRef:
+                  name: jira-issue-fetcher-env
+              - configMapRef:
+                  name: jira-issue-fetcher-filter-env
+              image: quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f
+              imagePullPolicy: IfNotPresent
+              name: jira-issue-fetcher-env
+              resources:
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                  - ALL
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+            dnsPolicy: ClusterFirst
+            restartPolicy: Never
+            schedulerName: default-scheduler
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+            terminationGracePeriodSeconds: 30
+    schedule: '*/15 * * * *'
+    successfulJobsHistoryLimit: 1
+    suspend: false
+  status:
+    lastScheduleTime: "2026-10-26T15:15:00Z"
+    lastSuccessfulTime: "2026-10-26T15:15:10Z"
+- apiVersion: batch/v1
+  kind: CronJob
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"batch/v1","kind":"CronJob","metadata":{"annotations":{},"labels":{"app":"jira-issue-fetcher-todo","component":"scheduler"},"name":"jira-issue-fetcher-todo","namespace":"jotnar-ymir--jotnar-ymir"},"spec":{"concurrencyPolicy":"Forbid","failedJobsHistoryLimit":1,"jobTemplate":{"metadata":{"labels":{"app":"jira-issue-fetcher-todo","component":"job"}},"spec":{"activeDeadlineSeconds":240,"backoffLimit":2,"template":{"metadata":{"labels":{"app":"jira-issue-fetcher-todo","component":"pod"}},"spec":{"containers":[{"envFrom":[{"configMapRef":{"name":"endpoints-env"}},{"configMapRef":{"name":"jira-env"}},{"secretRef":{"name":"jira-env"}},{"configMapRef":{"name":"jira-issue-fetcher-env"}},{"configMapRef":{"name":"jira-issue-fetcher-todo-env"}}],"image":"jira-issue-fetcher:prod","imagePullPolicy":"Always","name":"jira-issue-fetcher-env","resources":{"limits":{"cpu":"200m","memory":"128Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}}],"dnsPolicy":"ClusterFirst","restartPolicy":"Never","schedulerName":"default-scheduler","securityContext":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}},"terminationGracePeriodSeconds":30}}}},"schedule":"*/5 * * * *","successfulJobsHistoryLimit":1,"suspend":false}}
+    creationTimestamp: "2026-06-09T06:48:34Z"
+    generation: 65
+    labels:
+      app: jira-issue-fetcher-todo
+      component: scheduler
+    name: jira-issue-fetcher-todo
+    namespace: jotnar-ymir--jotnar-ymir
+    resourceVersion: "2938438187"
+    uid: 4d456c21-9c4b-437d-94d7-5f88ab04cff4
+  spec:
+    concurrencyPolicy: Forbid
+    failedJobsHistoryLimit: 1
+    jobTemplate:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: jira-issue-fetcher-todo
+          component: job
+      spec:
+        activeDeadlineSeconds: 240
+        backoffLimit: 2
+        template:
+          metadata:
+            creationTimestamp: null
+            labels:
+              app: jira-issue-fetcher-todo
+              component: pod
+              paas.redhat.com/appcode: JTNR-001
+          spec:
+            containers:
+            - envFrom:
+              - configMapRef:
+                  name: endpoints-env
+              - configMapRef:
+                  name: jira-env
+              - secretRef:
+                  name: jira-env
+              - configMapRef:
+                  name: jira-issue-fetcher-env
+              - configMapRef:
+                  name: jira-issue-fetcher-todo-env
+              image: quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f
+              imagePullPolicy: Always
+              name: jira-issue-fetcher-env
+              resources:
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                  - ALL
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+            dnsPolicy: ClusterFirst
+            restartPolicy: Never
+            schedulerName: default-scheduler
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+            terminationGracePeriodSeconds: 30
+    schedule: '*/5 * * * *'
+    successfulJobsHistoryLimit: 1
+    suspend: false
+  status:
+    lastScheduleTime: "2026-10-26T15:20:00Z"
+    lastSuccessfulTime: "2026-10-26T15:20:16Z"
+- apiVersion: batch/v1
+  kind: CronJob
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"batch/v1","kind":"CronJob","metadata":{"annotations":{},"labels":{"app":"mr-cleanup","component":"scheduler"},"name":"mr-cleanup","namespace":"jotnar-ymir--jotnar-ymir"},"spec":{"concurrencyPolicy":"Forbid","failedJobsHistoryLimit":1,"jobTemplate":{"metadata":{"labels":{"app":"mr-cleanup","component":"job"}},"spec":{"activeDeadlineSeconds":1800,"backoffLimit":2,"template":{"metadata":{"labels":{"app":"mr-cleanup","component":"pod"}},"spec":{"containers":[{"envFrom":[{"secretRef":{"name":"gitlab-env"}},{"configMapRef":{"name":"jira-env"}},{"secretRef":{"name":"jira-env"}}],"image":"mr-cleanup:prod","imagePullPolicy":"IfNotPresent","name":"mr-cleanup","resources":{"limits":{"cpu":"200m","memory":"128Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}}],"dnsPolicy":"ClusterFirst","restartPolicy":"Never","schedulerName":"default-scheduler","securityContext":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}},"terminationGracePeriodSeconds":30}}}},"schedule":"0 4 * * *","successfulJobsHistoryLimit":1,"suspend":false}}
+    creationTimestamp: "2026-07-13T11:30:09Z"
+    generation: 37
+    labels:
+      app: mr-cleanup
+      component: scheduler
+    name: mr-cleanup
+    namespace: jotnar-ymir--jotnar-ymir
+    resourceVersion: "2938135110"
+    uid: c5405f30-5269-4584-9db1-d664942f64a2
+  spec:
+    concurrencyPolicy: Forbid
+    failedJobsHistoryLimit: 1
+    jobTemplate:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: mr-cleanup
+          component: job
+      spec:
+        activeDeadlineSeconds: 1800
+        backoffLimit: 2
+        template:
+          metadata:
+            creationTimestamp: null
+            labels:
+              app: mr-cleanup
+              component: pod
+              paas.redhat.com/appcode: JTNR-001
+          spec:
+            containers:
+            - envFrom:
+              - secretRef:
+                  name: gitlab-env
+              - configMapRef:
+                  name: jira-env
+              - secretRef:
+                  name: jira-env
+              image: quay.io/jotnar/mr-cleanup@sha256:a1bc74b9e9b7a33f5437d28c014d14d6b4430683d4a18b960f8038a1870f0904
+              imagePullPolicy: IfNotPresent
+              name: mr-cleanup
+              resources:
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                  - ALL
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+            dnsPolicy: ClusterFirst
+            restartPolicy: Never
+            schedulerName: default-scheduler
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+            terminationGracePeriodSeconds: 30
+    schedule: 0 4 * * *
+    successfulJobsHistoryLimit: 1
+    suspend: false
+  status:
+    lastScheduleTime: "2026-10-26T04:00:00Z"
+    lastSuccessfulTime: "2026-10-26T04:15:43Z"
+- apiVersion: batch/v1
+  kind: CronJob
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"batch/v1","kind":"CronJob","metadata":{"annotations":{},"labels":{"app":"sweep-dependency","component":"scheduler"},"name":"sweep-dependency","namespace":"jotnar-ymir--jotnar-ymir"},"spec":{"concurrencyPolicy":"Forbid","failedJobsHistoryLimit":1,"jobTemplate":{"metadata":{"labels":{"app":"sweep-dependency","component":"job"}},"spec":{"activeDeadlineSeconds":600,"backoffLimit":2,"template":{"metadata":{"labels":{"app":"sweep-dependency","component":"pod"}},"spec":{"containers":[{"args":["python3","-m","ymir.sweep","--strategy","dependency"],"envFrom":[{"configMapRef":{"name":"endpoints-env"}},{"configMapRef":{"name":"jira-env"}},{"secretRef":{"name":"jira-env"}},{"secretRef":{"name":"sentry-env"}}],"image":"sweep:prod","imagePullPolicy":"IfNotPresent","name":"sweep-dependency","resources":{"limits":{"cpu":"200m","memory":"512Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}},"volumeMounts":[{"mountPath":"/home/sweepbot/rhel-config.json","name":"rhel-config","subPath":"rhel-config.json"}]}],"dnsPolicy":"ClusterFirst","restartPolicy":"Never","schedulerName":"default-scheduler","securityContext":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}},"terminationGracePeriodSeconds":30,"volumes":[{"configMap":{"name":"rhel-config"},"name":"rhel-config"}]}}}},"schedule":"0 */6 * * *","successfulJobsHistoryLimit":1,"suspend":false}}
+    creationTimestamp: "2026-09-03T12:16:27Z"
+    generation: 18
+    labels:
+      app: sweep-dependency
+      component: scheduler
+    name: sweep-dependency
+    namespace: jotnar-ymir--jotnar-ymir
+    resourceVersion: "2938135187"
+    uid: ab7b6a88-9028-4a38-aa29-6c4d21b935f6
+  spec:
+    concurrencyPolicy: Forbid
+    failedJobsHistoryLimit: 1
+    jobTemplate:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: sweep-dependency
+          component: job
+      spec:
+        activeDeadlineSeconds: 600
+        backoffLimit: 2
+        template:
+          metadata:
+            creationTimestamp: null
+            labels:
+              app: sweep-dependency
+              component: pod
+              paas.redhat.com/appcode: JTNR-001
+          spec:
+            containers:
+            - args:
+              - python3
+              - -m
+              - ymir.sweep
+              - --strategy
+              - dependency
+              envFrom:
+              - configMapRef:
+                  name: endpoints-env
+              - configMapRef:
+                  name: jira-env
+              - secretRef:
+                  name: jira-env
+              - secretRef:
+                  name: sentry-env
+              image: quay.io/jotnar/sweep@sha256:fd343d8daaa582cc0f2eaf2254ad5a87404527557d1873917ffac3c3c5b038c2
+              imagePullPolicy: IfNotPresent
+              name: sweep-dependency
+              resources:
+                limits:
+                  cpu: 200m
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                  - ALL
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+              volumeMounts:
+              - mountPath: /home/sweepbot/rhel-config.json
+                name: rhel-config
+                subPath: rhel-config.json
+            dnsPolicy: ClusterFirst
+            restartPolicy: Never
+            schedulerName: default-scheduler
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+            terminationGracePeriodSeconds: 30
+            volumes:
+            - configMap:
+                defaultMode: 420
+                name: rhel-config
+              name: rhel-config
+    schedule: 0 */6 * * *
+    successfulJobsHistoryLimit: 1
+    suspend: false
+  status:
+    lastScheduleTime: "2026-10-26T12:00:00Z"
+    lastSuccessfulTime: "2026-10-26T12:01:46Z"
+- apiVersion: batch/v1
+  kind: CronJob
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"batch/v1","kind":"CronJob","metadata":{"annotations":{},"labels":{"app":"sweep-no-patch","component":"scheduler"},"name":"sweep-no-patch","namespace":"jotnar-ymir--jotnar-ymir"},"spec":{"concurrencyPolicy":"Forbid","failedJobsHistoryLimit":1,"jobTemplate":{"metadata":{"labels":{"app":"sweep-no-patch","component":"job"}},"spec":{"activeDeadlineSeconds":300,"backoffLimit":2,"template":{"metadata":{"labels":{"app":"sweep-no-patch","component":"pod"}},"spec":{"containers":[{"args":["python3","-m","ymir.sweep","--strategy","no_patch"],"env":[{"name":"MAX_ISSUES_PER_RUN","value":"20"}],"envFrom":[{"configMapRef":{"name":"endpoints-env"}},{"configMapRef":{"name":"jira-env"}},{"secretRef":{"name":"jira-env"}},{"secretRef":{"name":"sentry-env"}}],"image":"sweep:prod","imagePullPolicy":"IfNotPresent","name":"sweep-no-patch","resources":{"limits":{"cpu":"200m","memory":"512Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}}],"dnsPolicy":"ClusterFirst","restartPolicy":"Never","schedulerName":"default-scheduler","securityContext":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}},"terminationGracePeriodSeconds":30}}}},"schedule":"0 4 * * *","successfulJobsHistoryLimit":1,"suspend":false}}
+    creationTimestamp: "2026-09-03T12:16:29Z"
+    generation: 17
+    labels:
+      app: sweep-no-patch
+      component: scheduler
+    name: sweep-no-patch
+    namespace: jotnar-ymir--jotnar-ymir
+    resourceVersion: "2938135295"
+    uid: 5e172c01-5e97-4b42-83f8-482b7911998b
+  spec:
+    concurrencyPolicy: Forbid
+    failedJobsHistoryLimit: 1
+    jobTemplate:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: sweep-no-patch
+          component: job
+      spec:
+        activeDeadlineSeconds: 300
+        backoffLimit: 2
+        template:
+          metadata:
+            creationTimestamp: null
+            labels:
+              app: sweep-no-patch
+              component: pod
+              paas.redhat.com/appcode: JTNR-001
+          spec:
+            containers:
+            - args:
+              - python3
+              - -m
+              - ymir.sweep
+              - --strategy
+              - no_patch
+              env:
+              - name: MAX_ISSUES_PER_RUN
+                value: "20"
+              envFrom:
+              - configMapRef:
+                  name: endpoints-env
+              - configMapRef:
+                  name: jira-env
+              - secretRef:
+                  name: jira-env
+              - secretRef:
+                  name: sentry-env
+              image: quay.io/jotnar/sweep@sha256:fd343d8daaa582cc0f2eaf2254ad5a87404527557d1873917ffac3c3c5b038c2
+              imagePullPolicy: IfNotPresent
+              name: sweep-no-patch
+              resources:
+                limits:
+                  cpu: 200m
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                  - ALL
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+            dnsPolicy: ClusterFirst
+            restartPolicy: Never
+            schedulerName: default-scheduler
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+            terminationGracePeriodSeconds: 30
+    schedule: 0 4 * * *
+    successfulJobsHistoryLimit: 1
+    suspend: false
+  status:
+    lastScheduleTime: "2026-10-26T04:00:00Z"
+    lastSuccessfulTime: "2026-10-26T04:01:04Z"
+- apiVersion: batch/v1
+  kind: CronJob
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"batch/v1","kind":"CronJob","metadata":{"annotations":{},"labels":{"app":"sweep-pr-pending","component":"scheduler"},"name":"sweep-pr-pending","namespace":"jotnar-ymir--jotnar-ymir"},"spec":{"concurrencyPolicy":"Forbid","failedJobsHistoryLimit":1,"jobTemplate":{"metadata":{"labels":{"app":"sweep-pr-pending","component":"job"}},"spec":{"activeDeadlineSeconds":600,"backoffLimit":2,"template":{"metadata":{"labels":{"app":"sweep-pr-pending","component":"pod"}},"spec":{"containers":[{"args":["python3","-m","ymir.sweep","--strategy","pr_pending"],"envFrom":[{"configMapRef":{"name":"endpoints-env"}},{"configMapRef":{"name":"jira-env"}},{"secretRef":{"name":"jira-env"}},{"secretRef":{"name":"gitlab-env"}},{"secretRef":{"name":"github-readonly-env"}},{"secretRef":{"name":"sentry-env"}}],"image":"sweep:prod","imagePullPolicy":"IfNotPresent","name":"sweep-pr-pending","resources":{"limits":{"cpu":"200m","memory":"512Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}}],"dnsPolicy":"ClusterFirst","restartPolicy":"Never","schedulerName":"default-scheduler","securityContext":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}},"terminationGracePeriodSeconds":30}}}},"schedule":"0 */8 * * *","successfulJobsHistoryLimit":1,"suspend":false}}
+    creationTimestamp: "2026-09-03T12:16:28Z"
+    generation: 17
+    labels:
+      app: sweep-pr-pending
+      component: scheduler
+    name: sweep-pr-pending
+    namespace: jotnar-ymir--jotnar-ymir
+    resourceVersion: "2938135264"
+    uid: 44aa6ccb-4bff-48b9-8b88-7776689e7af9
+  spec:
+    concurrencyPolicy: Forbid
+    failedJobsHistoryLimit: 1
+    jobTemplate:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: sweep-pr-pending
+          component: job
+      spec:
+        activeDeadlineSeconds: 600
+        backoffLimit: 2
+        template:
+          metadata:
+            creationTimestamp: null
+            labels:
+              app: sweep-pr-pending
+              component: pod
+              paas.redhat.com/appcode: JTNR-001
+          spec:
+            containers:
+            - args:
+              - python3
+              - -m
+              - ymir.sweep
+              - --strategy
+              - pr_pending
+              envFrom:
+              - configMapRef:
+                  name: endpoints-env
+              - configMapRef:
+                  name: jira-env
+              - secretRef:
+                  name: jira-env
+              - secretRef:
+                  name: gitlab-env
+              - secretRef:
+                  name: github-readonly-env
+              - secretRef:
+                  name: sentry-env
+              image: quay.io/jotnar/sweep@sha256:fd343d8daaa582cc0f2eaf2254ad5a87404527557d1873917ffac3c3c5b038c2
+              imagePullPolicy: IfNotPresent
+              name: sweep-pr-pending
+              resources:
+                limits:
+                  cpu: 200m
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                  - ALL
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+            dnsPolicy: ClusterFirst
+            restartPolicy: Never
+            schedulerName: default-scheduler
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+            terminationGracePeriodSeconds: 30
+    schedule: 0 */8 * * *
+    successfulJobsHistoryLimit: 1
+    suspend: false
+  status:
+    lastScheduleTime: "2026-10-26T08:00:00Z"
+    lastSuccessfulTime: "2026-10-26T08:00:48Z"
+- apiVersion: batch/v1
+  kind: CronJob
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"batch/v1","kind":"CronJob","metadata":{"annotations":{},"labels":{"app":"sweep-y-stream","component":"scheduler"},"name":"sweep-y-stream","namespace":"jotnar-ymir--jotnar-ymir"},"spec":{"concurrencyPolicy":"Forbid","failedJobsHistoryLimit":1,"jobTemplate":{"metadata":{"labels":{"app":"sweep-y-stream","component":"job"}},"spec":{"activeDeadlineSeconds":600,"backoffLimit":2,"template":{"metadata":{"labels":{"app":"sweep-y-stream","component":"pod"}},"spec":{"containers":[{"args":["python3","-m","ymir.sweep","--strategy","y_stream"],"envFrom":[{"configMapRef":{"name":"endpoints-env"}},{"configMapRef":{"name":"jira-env"}},{"secretRef":{"name":"jira-env"}},{"secretRef":{"name":"sentry-env"}}],"image":"sweep:prod","imagePullPolicy":"IfNotPresent","name":"sweep-y-stream","resources":{"limits":{"cpu":"200m","memory":"512Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}},"volumeMounts":[{"mountPath":"/home/sweepbot/rhel-config.json","name":"rhel-config","subPath":"rhel-config.json"}]}],"dnsPolicy":"ClusterFirst","restartPolicy":"Never","schedulerName":"default-scheduler","securityContext":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}},"terminationGracePeriodSeconds":30,"volumes":[{"configMap":{"name":"rhel-config"},"name":"rhel-config"}]}}}},"schedule":"0 */12 * * *","successfulJobsHistoryLimit":1,"suspend":false}}
+    creationTimestamp: "2026-09-03T12:16:27Z"
+    generation: 20
+    labels:
+      app: sweep-y-stream
+      component: scheduler
+    name: sweep-y-stream
+    namespace: jotnar-ymir--jotnar-ymir
+    resourceVersion: "2938135225"
+    uid: 2b67abdd-17c8-4abc-ad05-705e32315f26
+  spec:
+    concurrencyPolicy: Forbid
+    failedJobsHistoryLimit: 1
+    jobTemplate:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: sweep-y-stream
+          component: job
+      spec:
+        activeDeadlineSeconds: 600
+        backoffLimit: 2
+        template:
+          metadata:
+            creationTimestamp: null
+            labels:
+              app: sweep-y-stream
+              component: pod
+              paas.redhat.com/appcode: JTNR-001
+          spec:
+            containers:
+            - args:
+              - python3
+              - -m
+              - ymir.sweep
+              - --strategy
+              - y_stream
+              envFrom:
+              - configMapRef:
+                  name: endpoints-env
+              - configMapRef:
+                  name: jira-env
+              - secretRef:
+                  name: jira-env
+              - secretRef:
+                  name: sentry-env
+              image: quay.io/jotnar/sweep@sha256:fd343d8daaa582cc0f2eaf2254ad5a87404527557d1873917ffac3c3c5b038c2
+              imagePullPolicy: IfNotPresent
+              name: sweep-y-stream
+              resources:
+                limits:
+                  cpu: 200m
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                  - ALL
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+              volumeMounts:
+              - mountPath: /home/sweepbot/rhel-config.json
+                name: rhel-config
+                subPath: rhel-config.json
+            dnsPolicy: ClusterFirst
+            restartPolicy: Never
+            schedulerName: default-scheduler
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+            terminationGracePeriodSeconds: 30
+            volumes:
+            - configMap:
+                defaultMode: 420
+                name: rhel-config
+              name: rhel-config
+    schedule: 0 */12 * * *
+    successfulJobsHistoryLimit: 1
+    suspend: false
+  status:
+    lastScheduleTime: "2026-10-26T12:00:00Z"
+    lastSuccessfulTime: "2026-10-26T12:01:17Z"
+kind: List
+metadata:
+  resourceVersion: ""

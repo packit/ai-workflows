@@ -110,6 +110,22 @@ async def main() -> None:
 
             workflow = Workflow(State, name="RebuildWorkflow")
 
+            async def change_jira_status(state):
+                if dry_run:
+                    logger.info(f"Dry run: skipping Jira status change of {state.jira_issue} to In Progress")
+                    return "fork_and_prepare_dist_git"
+                # tasks.change_jira_status further gates the write on
+                # JIRA_ALLOW_STATUS_CHANGES; nothing else to check here.
+                try:
+                    await tasks.change_jira_status(
+                        jira_issue=state.jira_issue,
+                        status="In Progress",
+                        available_tools=gateway_tools,
+                    )
+                except Exception as status_error:
+                    logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
+                return "fork_and_prepare_dist_git"
+
             async def fork_and_prepare_dist_git(state):
                 (
                     state.local_clone,
@@ -409,6 +425,7 @@ async def main() -> None:
                         logger.warning(f"Failed to comment on issue {issue_key}: {e}")
                 return Workflow.END
 
+            workflow.add_step("change_jira_status", change_jira_status)
             workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
             workflow.add_step("update_release", update_release)
             workflow.add_step("stage_changes", stage_changes)

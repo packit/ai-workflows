@@ -9,6 +9,6 @@ spec:
     - name: prod
       from:
         kind: DockerImage
-        name: quay.io/jotnar/trace-server
+        name: quay.io/jotnar/trace-server@sha256:be63c3df7efe41a6d3e3412ae6b16a7489427563986a9fe32abf7b660d122bff
       importPolicy:
-        scheduled: true
+        scheduled: false

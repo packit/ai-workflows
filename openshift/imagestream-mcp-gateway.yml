@@ -8,10 +8,10 @@ spec:
     - name: prod
       from:
         kind: DockerImage
-        name: quay.io/jotnar/mcp-server:latest
+        name: quay.io/jotnar/mcp-server@sha256:b8d351f304799b35aa20d812f418701a0a19f1a20621b9a697da93210a059457
       importPolicy:
-        # Periodically query registry to synchronize tag and image metadata.
-        scheduled: true
+        # Keep the migration image reference immutable.
+        scheduled: false
   lookupPolicy:
     # allows all resources pointing to this image stream to use it in the image field
     local: true

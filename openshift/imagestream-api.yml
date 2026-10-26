@@ -7,8 +7,8 @@ spec:
     - name: prod
       from:
         kind: DockerImage
-        name: quay.io/jotnar/ymir-api:latest
+        name: quay.io/jotnar/ymir-api@sha256:206be70e91e1b07fc5f784bfed084a8355b11baac9947aeee3c910a018926888
       importPolicy:
-        scheduled: true
+        scheduled: false
   lookupPolicy:
     local: true

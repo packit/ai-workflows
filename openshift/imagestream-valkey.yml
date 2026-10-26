@@ -7,10 +7,10 @@ spec:
     - name: prod
       from:
         kind: DockerImage
-        name: docker.io/valkey/valkey:8
+        name: docker.io/valkey/valkey@sha256:0f62bfecc0b713dc2111af3ee307d5cd53c6877b7a112c6143c4de20f1325e4c
       importPolicy:
-        # Periodically query registry to synchronize tag and image metadata.
-        scheduled: true
+        # Keep the migration image reference immutable.
+        scheduled: false
   lookupPolicy:
     # allows all resources pointing to this image stream to use it in the image field
     local: true

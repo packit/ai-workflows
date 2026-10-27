@@ -216,6 +216,9 @@ def test_build_rebase_siblings_jql():
     assert '"ymir_triaged_not_affected"' in jql
     assert '"ymir_triaged_backport"' in jql
     assert '"ymir_triaged_rebuild"' in jql
+    assert '"ymir_triaged_deferred_rebase"' in jql
+    assert '"ymir_triaged_deferred_backport"' in jql
+    assert '"ymir_triaged_deferred_rebuild"' in jql
     assert '"ymir_triaged_postponed"' in jql
     assert 'status in ("New", "Planning")' in jql
 
@@ -263,6 +266,9 @@ def test_build_rebase_siblings_jql_excludes_correct_labels():
     assert '"ymir_triaged_backport"' in jql
     assert '"ymir_triaged_rebuild"' in jql
     assert '"ymir_triaged_rebase"' in jql
+    assert '"ymir_triaged_deferred_rebase"' in jql
+    assert '"ymir_triaged_deferred_backport"' in jql
+    assert '"ymir_triaged_deferred_rebuild"' in jql
     assert '"ymir_triaged_postponed"' in jql
 
     # Completion labels (non-retriable)

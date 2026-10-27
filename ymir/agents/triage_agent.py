@@ -50,6 +50,7 @@ from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     POSTPONED_RESOLUTIONS,
     AssessedApplicabilityResult,
+    AutoProcessingMode,
     ClarificationNeededData,
     ConfidenceAssessment,
     CVEEligibilityResult,
@@ -105,6 +106,7 @@ def _should_update_jira(
     resolution: Resolution = None,
     user_triggered: bool = False,
     requires_manual_branch_creation: bool = False,
+    triage_only: bool = False,
 ) -> bool:
     """Whether to post a user-facing Jira comment for this run.
 
@@ -122,6 +124,10 @@ def _should_update_jira(
     """
     if resolution == Resolution.ERROR:
         return False
+    if triage_only:
+        # Triage is the deliverable and no MR will be opened, so the result and
+        # the ymir_todo instructions must be visible.
+        return True
     if requires_manual_branch_creation:
         return True
     if user_triggered:
@@ -198,6 +204,32 @@ def _terminal_ymir_labels(labels: list[str]) -> list[str]:
     }
     known = JiraLabels.all_labels()
     return [label for label in labels if label in known and label not in non_terminal]
+
+
+# Terminal labels used instead of _RESOLUTION_TO_LABEL when the package is in
+# triage-only mode. They record the decision without implying a queued task.
+_DEFERRED_LABEL_BY_RESOLUTION: dict[Resolution, JiraLabels] = {
+    Resolution.BACKPORT: JiraLabels.TRIAGED_DEFERRED_BACKPORT,
+    Resolution.REBASE: JiraLabels.TRIAGED_DEFERRED_REBASE,
+    Resolution.REBUILD: JiraLabels.TRIAGED_DEFERRED_REBUILD,
+}
+
+
+def _resolution_label(resolution: Resolution, triage_only: bool) -> JiraLabels | None:
+    """Pick the terminal label, using the deferred variant in triage-only mode."""
+    if triage_only and (deferred := _DEFERRED_LABEL_BY_RESOLUTION.get(resolution)):
+        return deferred
+    return _RESOLUTION_TO_LABEL.get(resolution)
+
+
+def _defers_fix(resolution: Resolution, triage_only: bool) -> bool:
+    """Whether triage-only mode left a fix for a maintainer to request later.
+
+    Resolutions without a fix (not affected, clarification needed, ...) must not
+    advertise ``ymir_todo``, so the comment note is only shown when a fix was
+    actually deferred.
+    """
+    return triage_only and resolution in _DEFERRED_LABEL_BY_RESOLUTION
 
 
 _REPRODUCER_ELIGIBLE_RESOLUTIONS = frozenset(
@@ -547,12 +579,21 @@ class TriageState(BaseModel):
             "None means it has not been determined."
         ),
     )
+    triage_only: bool = Field(
+        default=False,
+        description=(
+            "Whether this run stops after triage because the package's ymir.yaml sets "
+            "auto_processing.mode: triage_only. A user-triggered (ymir_todo) run always "
+            "clears this so the full pipeline can run."
+        ),
+    )
 
     @property
     def hold_for_manual_branch_creation(self) -> bool:
         """Whether this task must wait for a maintainer to create the target branch."""
         return (
             self.automatic_branch_creation_disabled is True
+            and not self.triage_only
             and self.target_branch_exists is False
             and self.triage_result is not None
             and self.triage_result.resolution in (Resolution.REBASE, Resolution.BACKPORT, Resolution.REBUILD)
@@ -579,6 +620,25 @@ async def _record_target_branch_existence(state: TriageState, package: str, avai
     )
     if isinstance(available_branches, list):
         state.target_branch_exists = state.target_branch in available_branches
+
+
+async def _record_auto_processing_policy(
+    state: TriageState, package: str, available_tools, user_triggered: bool
+) -> None:
+    """Record whether this run should stop after triage.
+
+    A user-triggered run (ymir_todo) always runs the full pipeline, so it
+    clears triage-only mode even when the package config sets it.
+    """
+    config = await tasks.fetch_auto_processing_config(package, available_tools)
+    state.triage_only = config.mode is AutoProcessingMode.TRIAGE_ONLY and not user_triggered
+    logger.info(
+        "Auto-processing mode for %s: %s (effective triage_only=%s, user_triggered=%s)",
+        package,
+        config.mode.value,
+        state.triage_only,
+        user_triggered,
+    )
 
 
 async def _record_branch_creation_policy(state: TriageState, package: str, available_tools) -> None:
@@ -997,6 +1057,7 @@ async def run_workflow(
                 except Exception as e:
                     logger.warning(f"Failed to check branches for {package}: {e}")
                 await _record_branch_creation_policy(state, package, gateway_tools)
+                await _record_auto_processing_policy(state, package, gateway_tools, user_triggered)
 
             if (
                 state.cve_eligibility_result
@@ -1303,6 +1364,12 @@ async def run_workflow(
 
         async def consolidate_rebuild_siblings(state):
             """Find and analyze sibling issues that can share a single rebuild MR."""
+            if state.triage_only:
+                logger.info(
+                    "Triage-only mode for %s — skipping rebuild sibling consolidation",
+                    state.jira_issue,
+                )
+                return "comment_in_jira"
             rebuild_data = state.triage_result.data
             included, summary = await find_rebuild_siblings(
                 jira_issue=state.jira_issue,
@@ -1319,6 +1386,12 @@ async def run_workflow(
 
         async def consolidate_rebase_siblings(state):
             """Queue sibling issues for triage and decide whether to queue primary for rebase."""
+            if state.triage_only:
+                logger.info(
+                    "Triage-only mode for %s — skipping rebase sibling consolidation",
+                    state.jira_issue,
+                )
+                return "comment_in_jira"
             rebase_data = state.triage_result.data
 
             # Skip consolidation if this issue is already a sibling of another primary
@@ -1388,7 +1461,10 @@ async def run_workflow(
             return "comment_in_jira"
 
         async def comment_in_jira(state):
-            comment_text = state.triage_result.format_for_comment(auto_chain=auto_chain)
+            comment_text = state.triage_result.format_for_comment(
+                auto_chain=auto_chain,
+                triage_only=_defers_fix(state.triage_result.resolution, state.triage_only),
+            )
             if state.applicability_check_skipped:
                 comment_text += (
                     "\n\n_Note: CVE applicability check could not be performed (source preparation failed)._"
@@ -1410,6 +1486,7 @@ async def run_workflow(
                 resolution=state.triage_result.resolution,
                 user_triggered=user_triggered,
                 requires_manual_branch_creation=state.hold_for_manual_branch_creation,
+                triage_only=state.triage_only,
             ):
                 logger.info(
                     f"Skipping Jira comment for {state.jira_issue} "
@@ -1442,7 +1519,7 @@ async def run_workflow(
                         [state.jira_issue, *[issue.issue_key for issue in siblings]],
                     ),
                     agent_type="Triage",
-                    triaged_label=_RESOLUTION_TO_LABEL[state.triage_result.resolution].value,
+                    triaged_label=_resolution_label(state.triage_result.resolution, state.triage_only).value,
                     dry_run=dry_run,
                     user_triggered=user_triggered,
                     primary_comment=comment_text,
@@ -1614,7 +1691,7 @@ async def main() -> None:
                         jira_issue=jira_issue, output=output, dry_run=dry_run, user_triggered=user_triggered
                     )
                 else:
-                    resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
+                    resolution_label = _resolution_label(output.resolution, state.triage_only)
                     if (
                         resolution_label
                         and output.resolution != Resolution.ERROR
@@ -1912,7 +1989,7 @@ async def main() -> None:
                         jira_issue=input.issue, output=output, dry_run=dry_run, user_triggered=user_triggered
                     )
                 else:
-                    resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
+                    resolution_label = _resolution_label(output.resolution, state.triage_only)
                     if (
                         resolution_label
                         and output.resolution != Resolution.ERROR
@@ -2079,7 +2156,7 @@ async def main() -> None:
                     Resolution.CLARIFICATION_NEEDED,
                     Resolution.OPEN_ENDED_ANALYSIS,
                 ):
-                    if auto_chain:
+                    if auto_chain and not state.triage_only:
                         if output.resolution == Resolution.OPEN_ENDED_ANALYSIS:
                             queue = RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value
                             downstream_payload = output.data.model_dump_json()
@@ -2137,7 +2214,14 @@ async def main() -> None:
                             await fix_await(redis.lpush(queue, downstream_payload))
                             logger.info(f"Pushed {input.issue} to {queue}")
                     else:
-                        logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
+                        if state.triage_only:
+                            logger.info(
+                                "Triage-only mode for %s — skipping downstream queue "
+                                "(add ymir_todo to run the fix pipeline)",
+                                input.issue,
+                            )
+                        else:
+                            logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
 
                 if output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
                     _modular_component = detect_modular_issue(

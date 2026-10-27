@@ -38,6 +38,7 @@ from ymir.common.models import (
     CachedMRMetadata,
     MergeRequestDetails,
     OpenMergeRequestResult,
+    PackageAutoProcessingConfig,
     PackageBranchCreationConfig,
     PackageConsolidationConfig,
     PackageReleaseBumpingConfig,
@@ -457,6 +458,59 @@ async def fetch_branch_creation_config(
         raise InvalidBranchCreationConfigError(
             f"ymir.yaml branch_creation section for {package} is malformed: {e}"
         ) from e
+
+
+async def fetch_auto_processing_config(
+    package: str,
+    available_tools: list,
+) -> PackageAutoProcessingConfig:
+    """Fetch the auto-processing config from the per-package rules repo.
+
+    Reads the ``auto_processing`` section from ``ymir.yaml`` at
+    ``gitlab.com/redhat/centos-stream/rules/<package>``. Returns the default
+    config (full downstream pipeline) when the file is absent, empty, has no
+    ``auto_processing`` key, or is malformed — a broken section must not stop
+    triage, so this deliberately fails open.
+
+    Fetch failures propagate so callers can retry.
+
+    Args:
+        package: RPM package name.
+        available_tools: MCP gateway tools (must include ``get_maintainer_rules``).
+
+    Returns:
+        Parsed auto-processing config.
+    """
+    raw = await run_tool(
+        "get_maintainer_rules",
+        package=package,
+        file_path="ymir.yaml",
+        available_tools=available_tools,
+    )
+
+    if not isinstance(raw, str) or raw.startswith("No maintainer rules found"):
+        return PackageAutoProcessingConfig()
+
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        logger.warning(
+            "ymir.yaml for %s is not valid YAML; defaulting auto-processing to full: %s", package, e
+        )
+        return PackageAutoProcessingConfig()
+
+    if not isinstance(data, dict) or "auto_processing" not in data:
+        return PackageAutoProcessingConfig()
+
+    try:
+        return PackageAutoProcessingConfig.model_validate(data["auto_processing"])
+    except Exception as e:
+        logger.warning(
+            "ymir.yaml auto_processing section for %s is malformed; defaulting auto-processing to full: %s",
+            package,
+            e,
+        )
+        return PackageAutoProcessingConfig()
 
 
 async def fetch_release_bumping_config(

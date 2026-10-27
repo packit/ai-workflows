@@ -186,6 +186,9 @@ def build_rebase_siblings_jql(
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_REBASE.value,
+            JiraLabels.TRIAGED_DEFERRED_BACKPORT.value,
+            JiraLabels.TRIAGED_DEFERRED_REBASE.value,
+            JiraLabels.TRIAGED_DEFERRED_REBUILD.value,
             JiraLabels.TRIAGED_POSTPONED.value,
             JiraLabels.TRIAGED.value,  # Open-ended-analysis, no automated follow-up
             # Completion labels (non-retriable - work successfully finished)
@@ -314,6 +317,9 @@ async def queue_siblings_for_triage(
                 JiraLabels.TRIAGED_REBASE.value,
                 JiraLabels.TRIAGED_BACKPORT.value,
                 JiraLabels.TRIAGED_REBUILD.value,
+                JiraLabels.TRIAGED_DEFERRED_REBASE.value,
+                JiraLabels.TRIAGED_DEFERRED_BACKPORT.value,
+                JiraLabels.TRIAGED_DEFERRED_REBUILD.value,
                 JiraLabels.TRIAGED_NOT_AFFECTED.value,
                 JiraLabels.TRIAGED_POSTPONED.value,
                 JiraLabels.TRIAGED.value,
@@ -527,6 +533,9 @@ async def check_and_queue_primary_if_ready(
             JiraLabels.TRIAGED_REBASE.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBUILD.value,
+            JiraLabels.TRIAGED_DEFERRED_REBASE.value,
+            JiraLabels.TRIAGED_DEFERRED_BACKPORT.value,
+            JiraLabels.TRIAGED_DEFERRED_REBUILD.value,
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_POSTPONED.value,
             # Completions

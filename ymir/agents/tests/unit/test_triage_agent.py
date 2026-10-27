@@ -13,8 +13,11 @@ from ymir.agents.constants import JIRA_COMMENT_TEMPLATE
 from ymir.agents.triage_agent import (
     TriageState,
     _build_reproducer_input,
+    _defers_fix,
     _map_version_to_module_branch,
     _postponed_comment_exists,
+    _record_auto_processing_policy,
+    _resolution_label,
     _should_update_jira,
     _terminal_ymir_labels,
     determine_target_branch,
@@ -26,11 +29,13 @@ from ymir.agents.triage_agent import (
 from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels
 from ymir.common.models import (
     AssessedApplicabilityResult,
+    AutoProcessingMode,
     BackportData,
     ConfidenceAssessment,
     ConsolidatedIssue,
     CVEEligibilityResult,
     NotAffectedData,
+    PackageAutoProcessingConfig,
     PostponedData,
     RebaseData,
     RebuildData,
@@ -182,6 +187,84 @@ def test_error_deferred_to_terminal_retry_path():
     """ERROR is dispatched to retry() and commented once after retries are exhausted."""
     assert _should_update_jira(resolution=Resolution.ERROR, user_triggered=False) is False
     assert _should_update_jira(resolution=Resolution.ERROR, user_triggered=True) is False
+
+
+def test_triage_only_run_posts_result_and_resume_instructions():
+    """In triage-only mode no MR will be opened, so the result must be visible."""
+    assert (
+        _should_update_jira(
+            resolution=Resolution.BACKPORT,
+            user_triggered=False,
+            triage_only=True,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "resolution, expected_label",
+    [
+        (Resolution.BACKPORT, JiraLabels.TRIAGED_DEFERRED_BACKPORT),
+        (Resolution.REBASE, JiraLabels.TRIAGED_DEFERRED_REBASE),
+        (Resolution.REBUILD, JiraLabels.TRIAGED_DEFERRED_REBUILD),
+        # Resolutions without a deferred variant keep their normal terminal label.
+        (Resolution.NOT_AFFECTED, JiraLabels.TRIAGED_NOT_AFFECTED),
+    ],
+)
+def test_resolution_label_uses_deferred_variant_in_triage_only_mode(resolution, expected_label):
+    assert _resolution_label(resolution, triage_only=True) is expected_label
+
+
+@pytest.mark.parametrize("resolution", [Resolution.BACKPORT, Resolution.REBASE, Resolution.REBUILD])
+def test_resolution_label_unchanged_outside_triage_only_mode(resolution):
+    assert _resolution_label(resolution, triage_only=False) is t_agent._RESOLUTION_TO_LABEL[resolution]
+
+
+@pytest.mark.parametrize("resolution", [Resolution.BACKPORT, Resolution.REBASE, Resolution.REBUILD])
+def test_defers_fix_for_fix_resolutions(resolution):
+    assert _defers_fix(resolution, triage_only=True) is True
+
+
+@pytest.mark.parametrize(
+    "resolution", [Resolution.NOT_AFFECTED, Resolution.CLARIFICATION_NEEDED, Resolution.OPEN_ENDED_ANALYSIS]
+)
+def test_triage_only_does_not_advertise_ymir_todo_without_a_fix(resolution):
+    """No fix was deferred, so telling the maintainer to add ymir_todo is wrong."""
+    assert _defers_fix(resolution, triage_only=True) is False
+
+
+def test_triage_only_never_holds_for_manual_branch_creation():
+    """Triage-only runs stop after triage, so a missing branch must not hold them."""
+    state = TriageState(
+        jira_issue="RHEL-102",
+        target_branch="rhel-9.6.0.z",
+        target_branch_exists=False,
+        automatic_branch_creation_disabled=True,
+        triage_result=TriageOutputSchema(
+            resolution=Resolution.REBASE,
+            data=RebaseData(package="httpd", version="2.4.62", jira_issue="RHEL-102"),
+        ),
+    )
+
+    assert state.hold_for_manual_branch_creation is True
+    state.triage_only = True
+    assert state.hold_for_manual_branch_creation is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_triggered, expected", [(False, True), (True, False)])
+async def test_user_triggered_run_overrides_triage_only_config(monkeypatch, user_triggered, expected):
+    """ymir_todo must always run the full pipeline, even for triage-only packages."""
+
+    async def _fake_fetch(*_args, **_kwargs):
+        return PackageAutoProcessingConfig(mode=AutoProcessingMode.TRIAGE_ONLY)
+
+    monkeypatch.setattr(agent_tasks, "fetch_auto_processing_config", _fake_fetch)
+
+    state = TriageState(jira_issue="RHEL-99999")
+    await _record_auto_processing_policy(state, "bash", [], user_triggered)
+
+    assert state.triage_only is expected
 
 
 def _make_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> bytes:

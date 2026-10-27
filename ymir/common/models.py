@@ -220,6 +220,14 @@ class BackportOutputSchema(BaseModel):
     )
     srpm_path: Path | None = Field(description="Absolute path to generated SRPM")
     error: str | None = Field(description="Specific details about an error")
+    build_url: str | None = Field(
+        default=None,
+        description=(
+            "URL of the last Copr build submitted via the build_package tool "
+            "(e.g. during fix_build_error). Include so the caller can link "
+            "to the correct build in Jira comments."
+        ),
+    )
 
 
 class InheritAdaptationInputSchema(BaseModel):
@@ -787,6 +795,9 @@ class BuildResult(BaseModel):
     artifacts_urls: list[str] | None = Field(
         description="URLs to build artifacts (logs and RPM files)", default=None
     )
+    build_url: str | None = Field(
+        description="Link to the Copr build page (e.g. for linking from a Jira comment)", default=None
+    )
 
 
 class BuildFailureAnalysisInput(BuildInputSchema):
@@ -810,6 +821,9 @@ class BuildOutputSchema(BaseModel):
     is_infra_error: bool = Field(
         default=False,
         description="Whether the failure was caused by a Copr API or infrastructure error, not a build error",
+    )
+    build_url: str | None = Field(
+        description="Link to the Copr build page, when a build was actually submitted", default=None
     )
 
 

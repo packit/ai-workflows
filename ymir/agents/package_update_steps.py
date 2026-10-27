@@ -28,6 +28,9 @@ class PackageUpdateState(BaseModel):
     update_branch: str | None = Field(default=None)
     fork_url: str | None = Field(default=None)
     build_error: str | None = Field(default=None)
+    build_url: str | None = Field(
+        default=None, description="Link to the last submitted Copr build, for the Jira comment"
+    )
     log_result: LogOutputSchema | None = Field(default=None)
     canonical_title: str | None = Field(default=None, description="Resolved title shared by the issue family")
     changelog_entry_count: int | None = Field(

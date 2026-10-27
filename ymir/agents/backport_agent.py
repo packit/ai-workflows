@@ -1414,6 +1414,12 @@ async def run_workflow(
 
                 fix_result = BackportOutputSchema.model_validate_json(response.last_message.text)
 
+                # The fix agent calls build_package internally; capture the
+                # build URL it reports so the Jira comment links to the
+                # latest build, not the original failed one.
+                if fix_result.build_url:
+                    state.build_url = fix_result.build_url
+
                 if fix_result.success:
                     state.backport_result = fix_result
                     state.backport_log.append(fix_result.status)
@@ -1470,6 +1476,8 @@ async def run_workflow(
                 available_tools=gateway_tools,
                 local_tool_options=local_tool_options,
             )
+            if build_result.build_url:
+                state.build_url = build_result.build_url
             if build_result.success:
                 state.incremental_fix_attempts = 0
                 return "update_release"
@@ -1513,6 +1521,8 @@ async def run_workflow(
                 available_tools=gateway_tools,
                 local_tool_options=local_tool_options,
             )
+            if build_result.build_url:
+                state.build_url = build_result.build_url
             if build_result.success:
                 return "stage_changes"
 
@@ -1907,6 +1917,8 @@ async def run_workflow(
                     comment_text = (
                         state.merge_request_url if state.merge_request_url else state.backport_result.status
                     )
+                if state.build_url:
+                    comment_text += f"\nBuild: {state.build_url}"
                 if is_modular_issue:
                     comment_text += (
                         "\n\n*Note:* Modular package — Copr build was attempted with "

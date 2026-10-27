@@ -438,6 +438,8 @@ async def main() -> None:
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
                 )
+                if build_result.build_url:
+                    state.build_url = build_result.build_url
                 if build_result.success:
                     return "update_release"
                 if build_result.is_timeout:
@@ -638,6 +640,8 @@ async def main() -> None:
                     comment_text = (
                         state.merge_request_url if state.merge_request_url else state.rebase_result.status
                     )
+                    if state.build_url:
+                        comment_text += f"\nBuild: {state.build_url}"
                     if is_modular_issue:
                         comment_text += (
                             "\n\n*Note:* Modular package — Copr build was attempted with "

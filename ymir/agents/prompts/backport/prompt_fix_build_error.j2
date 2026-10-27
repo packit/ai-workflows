@@ -257,5 +257,7 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
 
 Report success=true with SRPM path if build passes.
 Report success=false with the extracted error if build fails or you can't find a fix.
+Always include the build_url returned by the build_package tool in your output so
+the caller can link to the correct Copr build in Jira.
 
 Unpacked upstream sources are in {{ unpacked_sources }}.

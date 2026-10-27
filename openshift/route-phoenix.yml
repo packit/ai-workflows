@@ -3,6 +3,7 @@ kind: Route
 metadata:
   labels:
     paas.redhat.com/appcode: JTNR-001
+    shard: internal
   name: phoenix
 spec:
   host: phoenix-jotnar-ymir--jotnar-ymir.apps.prod-scale-spoke1-dc-rdu3.itup.redhat.com

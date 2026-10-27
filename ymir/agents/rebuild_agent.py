@@ -51,6 +51,7 @@ from ymir.common.models import (
     TitleOutputSchema,
 )
 from ymir.common.utils import init_sentry
+from ymir.common.version_utils import detect_modular_issue
 
 logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
@@ -96,6 +97,7 @@ async def main() -> None:
         redis_conn=None,
         dist_git_namespace=None,
         workspace_id: UUID | None = None,
+        is_modular_issue=False,
     ):
         workspace_id = workspace_id or uuid4()
         local_tool_options = {"working_directory": None}
@@ -365,6 +367,13 @@ async def main() -> None:
                 ):
                     return "comment_in_jira"
 
+                if is_modular_issue:
+                    logger.info(
+                        "Modular issue %s — skipping consolidation job",
+                        state.jira_issue,
+                    )
+                    return "comment_in_jira"
+
                 try:
                     await tasks.try_submit_consolidation_job(
                         state.package,
@@ -532,6 +541,20 @@ async def main() -> None:
             dist_git_branch = triage_state["target_branch"]
             dist_git_namespace = triage_state.get("dist_git_namespace")
             user_triggered = task.user_triggered
+            _modular = detect_modular_issue(
+                jira_summary=triage_state.get("jira_summary"),
+                raw_downstream_component=triage_state.get("raw_downstream_component"),
+                downstream_component=triage_state.get("downstream_component"),
+            )
+            if _modular:
+                logger.info(
+                    "Modular check for %s: jira_summary=%r, downstream_component=%r, result=%s — "
+                    "MR consolidation will be skipped for this rebuild",
+                    rebuild_data.jira_issue,
+                    triage_state.get("jira_summary"),
+                    triage_state.get("downstream_component"),
+                    _modular,
+                )
 
             logger.info(
                 f"Processing rebuild for package: {rebuild_data.package}, "
@@ -628,6 +651,7 @@ async def main() -> None:
                         redis_conn=redis,
                         dist_git_namespace=dist_git_namespace,
                         workspace_id=task.execution_id,
+                        is_modular_issue=_modular,
                     )
                     logger.info(
                         f"Rebuild processing completed for {rebuild_data.jira_issue}, "

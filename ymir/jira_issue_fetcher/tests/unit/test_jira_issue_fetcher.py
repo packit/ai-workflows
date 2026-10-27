@@ -1751,3 +1751,80 @@ def test_label_added_by_rh_employee_walks_paginated_changelog(fetcher):
     ).one_by_one()
 
     assert fetcher._label_added_by_rh_employee("RHEL-LONG") is True
+
+
+def _consolidation_pair(
+    base_component="curl",
+    next_component="curl",
+    base_downstream="",
+    next_downstream="",
+):
+    """Build a base/next issue pair eligible for label-triggered consolidation."""
+    base = {
+        "key": "BASE-1",
+        "fields": {
+            "labels": [JiraLabels.CONSOLIDATE_BASE.value],
+            "components": [{"name": base_component}],
+            "customfield_10669": base_downstream,
+            "fixVersions": [{"name": "rhel-9.8"}],
+        },
+    }
+    next_ = {
+        "key": "NEXT-1",
+        "fields": {
+            "labels": [JiraLabels.CONSOLIDATE_NEXT.value],
+            "components": [{"name": next_component}],
+            "customfield_10669": next_downstream,
+            "fixVersions": [{"name": "rhel-9.8"}],
+        },
+    }
+    return [base, next_]
+
+
+@pytest.mark.asyncio
+async def test_process_consolidation_labels_submits_job_for_non_modular_pair(fetcher, mock_redis_context):
+    mock_redis, _ = mock_redis_context
+    issues = _consolidation_pair()
+
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    flexmock(jira_issue_fetcher_impl).should_receive("submit_merge_job").with_args(
+        mock_redis, "curl", "rhel-9.8.0", source_issues=["BASE-1", "NEXT-1"]
+    ).and_return(create_async_mock_return_value(jira_issue_fetcher_impl.SubmitResult.SUBMITTED)).once()
+    flexmock(fetcher).should_receive("_edit_jira_labels")
+    flexmock(fetcher).should_receive("_post_jira_comment")
+
+    submitted = await fetcher._process_consolidation_labels(issues)
+
+    assert submitted == 1
+
+
+@pytest.mark.asyncio
+async def test_process_consolidation_labels_skips_modular_base_issue(fetcher, mock_redis_context):
+    """A modular downstream component (module:stream/package) on either issue must
+    block the pairing — consolidation's Copr build doesn't enable module streams."""
+    _, _ = mock_redis_context
+    issues = _consolidation_pair(base_downstream="postgresql:16/postgis")
+
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    flexmock(jira_issue_fetcher_impl).should_receive("submit_merge_job").never()
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    flexmock(fetcher).should_receive("_post_jira_comment").never()
+
+    submitted = await fetcher._process_consolidation_labels(issues)
+
+    assert submitted == 0
+
+
+@pytest.mark.asyncio
+async def test_process_consolidation_labels_skips_modular_next_issue(fetcher, mock_redis_context):
+    _, _ = mock_redis_context
+    issues = _consolidation_pair(next_downstream="postgresql:16/postgis")
+
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    flexmock(jira_issue_fetcher_impl).should_receive("submit_merge_job").never()
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    flexmock(fetcher).should_receive("_post_jira_comment").never()
+
+    submitted = await fetcher._process_consolidation_labels(issues)
+
+    assert submitted == 0

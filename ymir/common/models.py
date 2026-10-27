@@ -603,7 +603,7 @@ class TriageOutputSchema(BaseModel):
         default=None, description="Confidence in target-source applicability; None means unassessed"
     )
 
-    def format_for_comment(self, auto_chain: bool = False) -> str:
+    def format_for_comment(self, auto_chain: bool = False, triage_only: bool = False) -> str:
         """Format the triage result in a human-readable format for Jira comments."""
         resolution = f"*Resolution*: {self.resolution.value}\n"
         confidence_text = (
@@ -611,14 +611,18 @@ class TriageOutputSchema(BaseModel):
             if self.confidence is not None
             else ""
         )
-        follow_up_note = (
-            ""
-            if auto_chain
-            else (
+        if triage_only:
+            follow_up_note = (
+                "\n\n_This package is configured for triage-only mode. "
+                "The fix pipeline was not started; add `ymir_todo` to run it._"
+            )
+        elif auto_chain:
+            follow_up_note = ""
+        else:
+            follow_up_note = (
                 "\n\n_Automated individual follow-up workflow for this "
                 "resolution type is planned for Q2 2026. Stay tuned._"
             )
-        )
 
         match self.data:
             case BackportData():
@@ -1000,6 +1004,30 @@ class PackageBranchCreationConfig(BaseModel):
     automatic: bool = Field(
         default=True,
         description="Whether Ymir may automatically create missing internal z-stream branches",
+    )
+
+
+class AutoProcessingMode(StrEnum):
+    """How far Ymir drives an issue after triage."""
+
+    FULL = "full"
+    TRIAGE_ONLY = "triage_only"
+
+
+class PackageAutoProcessingConfig(BaseModel):
+    """Machine-readable auto-processing config from the per-package rules repo.
+
+    Parsed from the ``auto_processing`` section of
+    ``gitlab.com/redhat/centos-stream/rules/<package>/ymir.yaml``.
+
+    ``triage_only`` stops after triage: the resolution is labeled with a
+    ``ymir_triaged_deferred_*`` label and the fix pipeline is not queued.
+    A maintainer can add ``ymir_todo`` later to run the full pipeline.
+    """
+
+    mode: AutoProcessingMode = Field(
+        default=AutoProcessingMode.FULL,
+        description="'full' runs the downstream fix pipeline; 'triage_only' stops after triage",
     )
 
 

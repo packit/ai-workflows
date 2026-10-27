@@ -248,6 +248,11 @@ class JiraLabels(Enum):
     # TRIAGE_IN_PROGRESS on enqueue.
     TODO = "ymir_todo"
 
+    # Per-issue counterpart of TODO: run triage only and defer the fix, even when
+    # the package's ymir.yaml does not set auto_processing.mode: triage_only.
+    # Adding TODO later runs the full pipeline.
+    TODO_TRIAGE = "ymir_todo_triage"
+
     # When issue has been postponed too many times it must be marked as abandoned
     ABANDONED = "ymir_abandoned"
 

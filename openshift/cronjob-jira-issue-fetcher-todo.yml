@@ -6,7 +6,7 @@ metadata:
     app: jira-issue-fetcher-todo
     component: scheduler
 spec:
-  schedule: "*/5 * * * *"  # Every 5 minutes — picks up ymir_todo maintainer requests promptly
+  schedule: "*/5 * * * *"  # Every 5 minutes — picks up ymir_todo / ymir_todo_triage requests promptly
   concurrencyPolicy: Forbid  # Prevent overlapping runs
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 1

@@ -198,6 +198,7 @@ def _terminal_ymir_labels(labels: list[str]) -> list[str]:
         JiraLabels.REBASE_SIBLING.value,
         JiraLabels.WAITING_FOR_SIBLINGS.value,
         JiraLabels.TODO.value,
+        JiraLabels.TODO_TRIAGE.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
@@ -582,9 +583,9 @@ class TriageState(BaseModel):
     triage_only: bool = Field(
         default=False,
         description=(
-            "Whether this run stops after triage because the package's ymir.yaml sets "
-            "auto_processing.mode: triage_only. A user-triggered (ymir_todo) run always "
-            "clears this so the full pipeline can run."
+            "Whether this run stops after triage. Set by auto_processing.mode: triage_only "
+            "in ymir.yaml, or forced on by the ymir_todo_triage label; a ymir_todo run "
+            "always clears it so the full pipeline runs."
         ),
     )
 
@@ -623,21 +624,33 @@ async def _record_target_branch_existence(state: TriageState, package: str, avai
 
 
 async def _record_auto_processing_policy(
-    state: TriageState, package: str, available_tools, user_triggered: bool
+    state: TriageState,
+    package: str,
+    available_tools,
+    user_triggered: bool,
+    triage_only_requested: bool = False,
 ) -> None:
     """Record whether this run should stop after triage.
 
-    A user-triggered run (ymir_todo) always runs the full pipeline, so it
-    clears triage-only mode even when the package config sets it.
+    Precedence: an explicit ymir_todo_triage request forces triage-only mode,
+    a ymir_todo request forces the full pipeline, and only otherwise does the
+    package config (auto_processing.mode) apply.
     """
     config = await tasks.fetch_auto_processing_config(package, available_tools)
-    state.triage_only = config.mode is AutoProcessingMode.TRIAGE_ONLY and not user_triggered
+    if triage_only_requested:
+        state.triage_only = True
+    elif user_triggered:
+        state.triage_only = False
+    else:
+        state.triage_only = config.mode is AutoProcessingMode.TRIAGE_ONLY
     logger.info(
-        "Auto-processing mode for %s: %s (effective triage_only=%s, user_triggered=%s)",
+        "Auto-processing mode for %s: %s (effective triage_only=%s, user_triggered=%s, "
+        "triage_only_requested=%s)",
         package,
         config.mode.value,
         state.triage_only,
         user_triggered,
+        triage_only_requested,
     )
 
 
@@ -747,6 +760,7 @@ async def run_workflow(
     auto_chain=False,
     force_cve_triage=False,
     user_triggered=False,
+    triage_only_requested=False,
 ):
     local_tool_options = None
     if mock_env := get_mock_local_tool_env(jira_issue):
@@ -1057,7 +1071,9 @@ async def run_workflow(
                 except Exception as e:
                     logger.warning(f"Failed to check branches for {package}: {e}")
                 await _record_branch_creation_policy(state, package, gateway_tools)
-                await _record_auto_processing_policy(state, package, gateway_tools, user_triggered)
+                await _record_auto_processing_policy(
+                    state, package, gateway_tools, user_triggered, triage_only_requested
+                )
 
             if (
                 state.cve_eligibility_result
@@ -1764,16 +1780,23 @@ async def main() -> None:
 
         async def _process_triage_locked(task, input) -> tuple[str, str] | tuple[str, str, int] | None:
             user_triggered = task.user_triggered
+            triage_only_requested = task.triage_only
+            trigger_note = ""
+            if user_triggered:
+                trigger_note = (
+                    " (user-triggered via ymir_todo_triage)"
+                    if triage_only_requested
+                    else " (user-triggered via ymir_todo)"
+                )
             logger.info(
-                f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}"
-                + (" (user-triggered via ymir_todo)" if user_triggered else "")
+                f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}{trigger_note}"
             )
             if task.attempts == 0:
                 if user_triggered:
                     sentry_sdk.metrics.count(
                         "ymir_todo.processed",
                         1,
-                        attributes={"issue": input.issue},
+                        attributes={"issue": input.issue, "triage_only": triage_only_requested},
                     )
                 else:
                     sentry_sdk.metrics.count("ymir.autoprocessed", 1)
@@ -1804,7 +1827,7 @@ async def main() -> None:
                 if user_triggered:
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
-                        labels_to_remove=["ymir_todo"],
+                        labels_to_remove=[JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value],
                         dry_run=dry_run,
                         user_triggered=True,
                     )
@@ -1958,6 +1981,7 @@ async def main() -> None:
                         auto_chain=auto_chain,
                         force_cve_triage=input.force_cve_triage,
                         user_triggered=user_triggered,
+                        triage_only_requested=triage_only_requested,
                     )
                     output = state.triage_result
                     logger.info(

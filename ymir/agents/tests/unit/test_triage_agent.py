@@ -252,17 +252,31 @@ def test_triage_only_never_holds_for_manual_branch_creation():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("user_triggered, expected", [(False, True), (True, False)])
-async def test_user_triggered_run_overrides_triage_only_config(monkeypatch, user_triggered, expected):
-    """ymir_todo must always run the full pipeline, even for triage-only packages."""
+@pytest.mark.parametrize(
+    "config_mode, user_triggered, triage_only_requested, expected",
+    [
+        # Automatic runs follow the package config.
+        (AutoProcessingMode.TRIAGE_ONLY, False, False, True),
+        (AutoProcessingMode.FULL, False, False, False),
+        # ymir_todo forces the full pipeline, even for triage-only packages.
+        (AutoProcessingMode.TRIAGE_ONLY, True, False, False),
+        # ymir_todo_triage forces triage-only, even for full-mode packages.
+        (AutoProcessingMode.FULL, True, True, True),
+        (AutoProcessingMode.TRIAGE_ONLY, True, True, True),
+    ],
+)
+async def test_auto_processing_precedence(
+    monkeypatch, config_mode, user_triggered, triage_only_requested, expected
+):
+    """An explicit trigger overrides the package config; automatic runs follow it."""
 
     async def _fake_fetch(*_args, **_kwargs):
-        return PackageAutoProcessingConfig(mode=AutoProcessingMode.TRIAGE_ONLY)
+        return PackageAutoProcessingConfig(mode=config_mode)
 
     monkeypatch.setattr(agent_tasks, "fetch_auto_processing_config", _fake_fetch)
 
     state = TriageState(jira_issue="RHEL-99999")
-    await _record_auto_processing_policy(state, "bash", [], user_triggered)
+    await _record_auto_processing_policy(state, "bash", [], user_triggered, triage_only_requested)
 
     assert state.triage_only is expected
 
@@ -347,7 +361,7 @@ async def test_process_task_skips_closed_issues(status, _mock_env_vars_redis):
 
 @pytest.mark.asyncio
 async def test_process_task_skips_closed_user_triggered_with_cleanup(_mock_env_vars_redis):
-    """User-triggered run on a closed issue removes ymir_todo and posts ack."""
+    """User-triggered run on a closed issue removes both trigger labels and posts ack."""
 
     async def _mock_jira_metadata(*_args, **_kwargs):
         return ["ymir_todo"], "Closed"
@@ -367,7 +381,7 @@ async def test_process_task_skips_closed_user_triggered_with_cleanup(_mock_env_v
     await process_task(_make_payload(user_triggered=True))
 
     _, kwargs = calls[0]
-    assert kwargs["labels_to_remove"] == ["ymir_todo"]
+    assert kwargs["labels_to_remove"] == [JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value]
     assert kwargs["dry_run"] is True
 
 

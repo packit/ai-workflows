@@ -6,7 +6,7 @@ metadata:
     shard: internal
   name: trace-server
 spec:
-  host: trace-server-jotnar-ymir--jotnar-ymir.apps.prod-scale-spoke1-dc-rdu3.itup.redhat.com
+  host: trace-server-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com
   port:
     targetPort: 8080-tcp
   tls:

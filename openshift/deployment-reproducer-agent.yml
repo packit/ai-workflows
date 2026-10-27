@@ -62,6 +62,8 @@ spec:
       schedulerName: default-scheduler
       securityContext:
         runAsNonRoot: true
+        supplementalGroups:
+        - 99
         seccompProfile:
           type: RuntimeDefault
       # Longer grace: TF reservation cleanup may run on shutdown.

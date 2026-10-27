@@ -115,16 +115,29 @@ class Task(BaseModel):
         "failure labels that are otherwise suppressed. Error comments are "
         "posted regardless of this flag.",
     )
+    triage_only: bool = Field(
+        default=False,
+        description="True when a maintainer requested a triage-only run via the "
+        "ymir_todo_triage label — overrides auto_processing.mode from the package's "
+        "ymir.yaml so the fix pipeline is not queued.",
+    )
 
     def to_json(self) -> str:
         """Convert to JSON string for Redis queue storage."""
         return self.model_dump_json()
 
     @classmethod
-    def from_issue(cls, issue: str, attempts: int = 0, user_triggered: bool = False) -> "Task":
+    def from_issue(
+        cls, issue: str, attempts: int = 0, user_triggered: bool = False, triage_only: bool = False
+    ) -> "Task":
         """Create a task from a JIRA issue key."""
         metadata = TriageInputSchema(issue=issue)
-        return cls(metadata=metadata.model_dump(), attempts=attempts, user_triggered=user_triggered)
+        return cls(
+            metadata=metadata.model_dump(),
+            attempts=attempts,
+            user_triggered=user_triggered,
+            triage_only=triage_only,
+        )
 
 
 # ============================================================================
@@ -613,7 +626,7 @@ class TriageOutputSchema(BaseModel):
         )
         if triage_only:
             follow_up_note = (
-                "\n\n_This package is configured for triage-only mode. "
+                "\n\n_This run stopped after triage (triage-only mode). "
                 "The fix pipeline was not started; add `ymir_todo` to run it._"
             )
         elif auto_chain:

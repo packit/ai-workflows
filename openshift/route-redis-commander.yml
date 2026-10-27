@@ -6,6 +6,7 @@ metadata:
     shard: internal
   name: redis-commander
 spec:
+  host: redis-commander-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com
   port:
     targetPort: 8081-tcp
   tls:

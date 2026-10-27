@@ -6,7 +6,7 @@ metadata:
     shard: internal
   name: phoenix
 spec:
-  host: phoenix-jotnar-ymir--jotnar-ymir.apps.prod-scale-spoke1-dc-rdu3.itup.redhat.com
+  host: phoenix-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com
   port:
     targetPort: 6006-tcp
   tls:

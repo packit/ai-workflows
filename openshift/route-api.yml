@@ -6,6 +6,7 @@ metadata:
     shard: internal
   name: api
 spec:
+  host: api-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com
   port:
     targetPort: 8080-tcp
   tls:

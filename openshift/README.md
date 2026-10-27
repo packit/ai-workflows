@@ -311,12 +311,12 @@ Two CronJobs run the fetcher with different JQL queries:
 | CronJob | Schedule | QUERY | ConfigMap |
 |---|---|---|---|
 | `jira-issue-fetcher` | `*/15 * * * *` | Main CVE batch — tops the triage queue up towards `QUEUE_DEPTH_THRESHOLD` from the filter in `jira-issue-fetcher-filter-env` | `jira-issue-fetcher-filter-env` |
-| `jira-issue-fetcher-todo` | `*/5 * * * *` | `labels = "ymir_todo"` OR consolidation labels (`ymir_consolidate_base`, `ymir_consolidate_next`) | `jira-issue-fetcher-todo-env` |
+| `jira-issue-fetcher-todo` | `*/5 * * * *` | `labels = "ymir_todo"` OR `labels = "ymir_todo_triage"` OR consolidation labels (`ymir_consolidate_base`, `ymir_consolidate_next`) | `jira-issue-fetcher-todo-env` |
 
 Both share the common knobs (`MAX_ISSUES`, `LOGLEVEL`, `SKIP_MODULAR`) from `jira-issue-fetcher-env`. `SKIP_MODULAR` controls whether modular issues (Downstream Component matching `module:stream/pkg`) are enqueued for triage (`false`) or silently dropped (`true`; code default). Components excluded from scope are part of the Jira filter itself, maintained (with rationale per component) in the separate [`cve-scope`](https://gitlab.cee.redhat.com/jotnar-project/cve-scope) repo — not in a configmap or env var.
 
 The `jira-issue-fetcher-todo` runs every 5 minutes and processes:
-- **User-triggered issues**: Any issue tagged with `ymir_todo` by a maintainer (not filtered by component, processes regardless of scope exclusions)
+- **User-triggered issues**: Any issue tagged with `ymir_todo` (full pipeline) or `ymir_todo_triage` (stop after triage) by a maintainer (not filtered by component, processes regardless of scope exclusions)
 - **Consolidation requests**: Issue pairs tagged with `ymir_consolidate_base` and `ymir_consolidate_next` to trigger MR consolidation (see `configmap-jira-issue-fetcher-todo-env.yml` for the exact JQL)
 
 Both fetchers also process consolidation labels (`jira-issue-fetcher` provides a fallback path, always run regardless of triage-queue depth). Each pod mounts the shared configmap plus its per-cron QUERY configmap. To target a different batch, edit the corresponding configmap and re-apply.

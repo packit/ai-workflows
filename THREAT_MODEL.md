@@ -77,7 +77,7 @@ Security-relevant assumptions this system makes about its environment:
 | entry_point | description | trust_boundary | reachable_assets |
 |---|---|---|---|
 | Jira issue content (title/description/comments) | Ingested by `jira-issue-fetcher` cronjobs and the triage agent via JQL search | untrusted Jira reporter content → LLM agent context / privileged tool arguments | Dist-git write access, GitLab PAT, Kerberos keytabs, source/patch integrity |
-| `ymir_todo` Jira label | Maintainer-facing trigger to enqueue processing of a specific issue | Jira user → triage queue enqueue (gated by Red Hat-employee group check) | Redis/Valkey task queues, Jira API token |
+| `ymir_todo` / `ymir_todo_triage` Jira label | Maintainer-facing trigger to enqueue processing of a specific issue (`ymir_todo_triage` requests a run that stops after triage) | Jira user → triage queue enqueue (gated by Red Hat-employee group check) | Redis/Valkey task queues, Jira API token |
 | Jira webhook bot-mention commands | `POST /api/jira/webhook` accepts Jira Cloud comment webhooks; a bot-mention in the comment body triggers command dispatch (e.g. `consolidate`) | Jira commenter → Redis merge-consolidation queue enqueue (gated by HMAC signature + Red Hat-employee group check on comment author) | Redis/Valkey task queues |
 | GitLab MR comments / CI pipeline logs | Read by agents during iterate/fix loops on open MRs | untrusted GitLab.com commenter / CI log content → LLM agent context | Dist-git write access, GitLab PAT |
 | `GetPatchFromUrlTool` `patch_url` parameter | Tool argument that can originate from Jira issue text | attacker-influenceable input → outbound HTTP fetch (SSRF-shaped) | Internal network reachability within egress allow-list |

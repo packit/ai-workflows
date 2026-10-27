@@ -112,11 +112,17 @@ or `ymir_triaged_deferred_rebuild` label and posts a comment explaining the
 result. These labels are not in-flight states, so the fetcher never treats them
 as stale work.
 
-To run the fix pipeline later, a maintainer adds `ymir_todo`. A user-triggered
+To run the fix pipeline later, a maintainer adds `ymir_todo`. A `ymir_todo`
 run ignores `triage_only` and always proceeds with the full pipeline, exactly
 as it does for a package without the setting. Because the deferred label is
 terminal rather than in-flight, the issue does not block
 Z-stream dependency checks or sibling consolidation.
+
+Triage-only can also be requested per issue, for packages that run the full
+pipeline by default: adding `ymir_todo_triage` (Red Hat Employee only, verified
+per issue like `ymir_todo`) runs triage and defers the fix. If both labels are
+present, `ymir_todo` wins and the run executes the full pipeline; both trigger
+labels are consumed.
 
 Missing or omitted `auto_processing` configuration defaults to `mode: full`.
 Malformed YAML, an unknown mode, or a wrongly shaped section is logged and also

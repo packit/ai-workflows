@@ -85,6 +85,19 @@ flowchart TD
 | `ymir_merged` | MR merged | Never | Final state |
 | `ymir_mr_closed` | MR closed without merge (additive, existing labels preserved) | On retry (all labels cleared) | Dormant — human adds `ymir_todo` to re-trigger |
 
+### Confidence Labels
+
+| Label | Meaning |
+|-------|---------|
+| `ymir_confidence_low` | Applicability evidence is incomplete or conflicting |
+| `ymir_confidence_medium` | Evidence supports the conclusion with an important inference or verification gap |
+| `ymir_confidence_high` | Direct target-source evidence and relevant build or execution paths support the conclusion |
+
+Triage replaces the previous confidence label when a run completes, including
+runs whose comments are suppressed. A completion without an applicability
+assessment removes all three labels. Normal triage startup also clears them
+with other prior `ymir_*` labels. Dry runs do not update them.
+
 ### Error Labels
 
 | Label | Meaning | Blocks Retry? | Action |

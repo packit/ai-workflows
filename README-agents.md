@@ -30,6 +30,31 @@ Three agents process tasks through Redis queues:
 - **Backport Agent**: Applies specific fixes/patches to packages. It looks for patches that are linked, attached and present in the description or comments in the issue. It tries to apply the patch and resolve any conflicts that may arise during the backport process.
 - **Issue Verification Agent**: Manages the post-fix lifecycle of a JIRA issue — from merged MR through errata creation, testing analysis, and status transitions to RELEASE_PENDING. Migrated from the supervisor's `IssueHandler`.
 
+### CVE applicability confidence
+
+The applicability agent reports **Confidence** (`high`, `medium` or `low`) with
+an evidence-based reason. Triage retains this assessment in structured results,
+traces and Jira comments, including when the conclusion becomes `not-affected`
+or a buildroot check postpones a rebuild.
+
+- **High:** direct target-source evidence supports the conclusion and the relevant
+  build features or execution paths have been verified.
+- **Medium:** evidence supports the conclusion, but an important inference or
+  verification gap remains.
+- **Low:** evidence is incomplete or conflicting.
+
+If RPM prep fails, the agent must account for the missing downstream patches in
+its confidence reason. The workflow preserves the model's rating without applying
+a fixed cap. Skipped or failed applicability checks remain unassessed
+(`null`); older results without a rating also remain unrated. Confidence is
+informational: it is not a calibrated probability, CVE severity or permission to
+close an issue, and it does not change resolution or queue routing.
+
+Triage also maintains one of `ymir_confidence_low`, `ymir_confidence_medium` or
+`ymir_confidence_high` on the Jira issue. A completed run replaces previous
+confidence labels, or removes them if applicability remains unassessed. See the
+[label reference](jira_label_workflow_routing.md#confidence-labels) for definitions.
+
 ### Z-stream branch consistency
 
 Before creating a working branch, backport, rebase, rebuild, and MR consolidation

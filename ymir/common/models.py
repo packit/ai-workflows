@@ -509,6 +509,13 @@ class NotAffectedData(BaseModel):
     )
 
 
+class ConfidenceAssessment(BaseModel):
+    """Applicability evidence strength, not severity or exploit probability."""
+
+    level: Literal["high", "medium", "low"]
+    reason: str = Field(min_length=1, pattern=r"\S", description="Evidence and remaining uncertainty")
+
+
 class ApplicabilityResult(BaseModel):
     """Output schema for the CVE applicability check agent."""
 
@@ -518,6 +525,15 @@ class ApplicabilityResult(BaseModel):
         default=None,
     )
     explanation: str = Field(description="Detailed reasoning for the determination")
+    confidence: ConfidenceAssessment | None = Field(
+        default=None, description="Applicability evidence strength"
+    )
+
+
+class AssessedApplicabilityResult(ApplicabilityResult):
+    """New applicability-agent responses must include an evidence-based assessment."""
+
+    confidence: ConfidenceAssessment
 
 
 class ErrorData(BaseModel):
@@ -583,10 +599,18 @@ class TriageOutputSchema(BaseModel):
         | NotAffectedData
         | ErrorData
     ) = Field(description="Associated data")
+    confidence: ConfidenceAssessment | None = Field(
+        default=None, description="Confidence in target-source applicability; None means unassessed"
+    )
 
     def format_for_comment(self, auto_chain: bool = False) -> str:
         """Format the triage result in a human-readable format for Jira comments."""
         resolution = f"*Resolution*: {self.resolution.value}\n"
+        confidence_text = (
+            f"\n\n*Confidence*: {self.confidence.level}\n*Confidence Reason*: {self.confidence.reason}"
+            if self.confidence is not None
+            else ""
+        )
         follow_up_note = (
             ""
             if auto_chain
@@ -617,7 +641,7 @@ class TriageOutputSchema(BaseModel):
                     f"{triage_summary_text}"
                     f"{fix_version_text}"
                     f"{follow_up_note}"
-                    f"{TRIAGE_DISCLAIMER}"
+                    f"{confidence_text}{TRIAGE_DISCLAIMER}"
                 )
 
             case RebaseData():
@@ -639,7 +663,7 @@ class TriageOutputSchema(BaseModel):
                     f"*Version*: {self.data.version}"
                     f"{justification_text}{triage_summary_text}{fix_version_text}"
                     f"{follow_up_note}"
-                    f"{TRIAGE_DISCLAIMER}"
+                    f"{confidence_text}{TRIAGE_DISCLAIMER}"
                 )
 
             case RebuildData():
@@ -681,7 +705,7 @@ class TriageOutputSchema(BaseModel):
                     f"{fix_version_text}"
                     f"{consolidation_text}"
                     f"{follow_up_note}"
-                    f"{TRIAGE_DISCLAIMER}"
+                    f"{confidence_text}{TRIAGE_DISCLAIMER}"
                 )
 
             case ClarificationNeededData():
@@ -689,7 +713,7 @@ class TriageOutputSchema(BaseModel):
                     f"{resolution}"
                     f"*Findings*: {self.data.findings}\n"
                     f"*Additional info needed*: {self.data.additional_info_needed}"
-                    f"{TRIAGE_DISCLAIMER}"
+                    f"{confidence_text}{TRIAGE_DISCLAIMER}"
                 )
 
             case OpenEndedAnalysisData():
@@ -697,7 +721,7 @@ class TriageOutputSchema(BaseModel):
                     f"*Summary*: {self.data.summary}\n"
                     f"*Recommendation*: {self.data.recommendation}"
                     f"{AUTOMATED_RESOLUTION_NOT_SUPPORTED}"
-                    f"{TRIAGE_DISCLAIMER}"
+                    f"{confidence_text}{TRIAGE_DISCLAIMER}"
                 )
 
             case PostponedData():
@@ -719,7 +743,7 @@ class TriageOutputSchema(BaseModel):
                     f"{heading}\n{pending_text}\n"
                     f"{blocker_line}"
                     f"{POSTPONEMENT_NOTE}"
-                    f"{TRIAGE_DISCLAIMER}"
+                    f"{confidence_text}{TRIAGE_DISCLAIMER}"
                 )
 
             case NotAffectedData():
@@ -731,11 +755,11 @@ class TriageOutputSchema(BaseModel):
                 )
                 return (
                     f"*Recommendation: Not a Bug / {category}*\n\n"
-                    f"{self.data.explanation}{vex_guide}{TRIAGE_DISCLAIMER}"
+                    f"{self.data.explanation}{vex_guide}{confidence_text}{TRIAGE_DISCLAIMER}"
                 )
 
             case ErrorData():
-                return f"{resolution}*Details*: {self.data.details}{TRIAGE_DISCLAIMER}"
+                return f"{resolution}*Details*: {self.data.details}{confidence_text}{TRIAGE_DISCLAIMER}"
 
             case _:
                 # Fallback to JSON format

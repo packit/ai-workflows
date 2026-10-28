@@ -98,7 +98,9 @@ def build_applicability_prompt(
             "\nIMPORTANT: RPM prep failed — the source tree is unpatched upstream "
             "source (Source0 extraction only). Downstream patches are NOT applied. "
             "If you find vulnerable code, it may already be patched in the shipped "
-            "version. Factor this into your confidence level.\n"
+            "version. Factor this into your confidence level and explain how "
+            "the missing downstream patches limit your conclusion in the "
+            "confidence reason.\n"
         )
 
     return dedent(f"""\
@@ -190,6 +192,18 @@ def build_applicability_prompt(
         If affected or cannot determine with confidence, classify as
         "Inconclusive". Be conservative: default to "Inconclusive"
         when unsure.
+
+        Include confidence as an object with "level" (high, medium, or low)
+        and "reason" (specific source/build evidence and remaining uncertainty).
+        Rate evidence for THIS target. High requires direct target-source
+        evidence and verification of the build features or execution paths
+        relevant to the conclusion. Medium means the evidence supports the
+        conclusion but an important inference or verification gap remains.
+        Low means the evidence is incomplete or conflicting. Choose the rating
+        from the available evidence and remaining uncertainty; a prep failure
+        does not dictate a fixed rating. Do not claim runtime testing unless
+        you performed it. Confidence is not CVE severity or exploit probability
+        and does not change routing policy.
 
         IMPORTANT: There is a firewall in place that may block some
         outgoing network requests (e.g. curl, wget, git clone to

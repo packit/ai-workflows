@@ -11,7 +11,7 @@ spec:
   concurrencyPolicy: Forbid  # Prevent overlapping runs
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 1
-  suspend: true
+  suspend: false
   jobTemplate:
     metadata:
       labels:

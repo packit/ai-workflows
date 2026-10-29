@@ -809,7 +809,13 @@ async def run_workflow(
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
                 )
-                if not build_output.success:
+                if build_output.is_timeout:
+                    logger.info("Build timed out for %s, proceeding", working_id)
+                elif build_output.is_infra_error:
+                    logger.error("Copr infrastructure error for %s: %s", working_id, build_output.error)
+                    state.build_error = build_output.error or "Copr API infrastructure error"
+                    return "handle_failure"
+                elif not build_output.success:
                     state.build_error = build_output.error
                     state.attempts_remaining -= 1
                     if state.attempts_remaining > 0:

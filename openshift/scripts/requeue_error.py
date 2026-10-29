@@ -7,15 +7,15 @@ carrying `error_id`/`queue`/`task`). Legacy entries pushed before that change,
 or entries recorded for a payload that never parsed into a `Task` in the first
 place, have no `queue`/`task` to requeue and are reported as non-requeueable.
 
-The task's `attempts` counter is reset to 0 and `user_triggered` is forced to
-True before requeuing, on the assumption that whoever runs this has already
-fixed the underlying issue and wants a fresh retry budget. Forcing
-`user_triggered` also matters functionally: triage and reproducer skip
-processing outright when a terminal `ymir_*_errored`/similar label is still
-on the issue and the task isn't user-triggered — exactly the state a
-just-requeued task is in until it gets a chance to run and clear that label
-itself. It also routes the task onto the priority (`_todo`) twin of its
-queue, same as any other maintainer-triggered run.
+The task's `attempts` counter is reset to 0 before requeuing. By default,
+`user_triggered` is set to False to keep acknowledgement and result comments
+for maintainers low. Requeued tasks still go to the priority (`_todo`) twin
+of their queue. Only workflow-specific `ymir_*` labels are removed from the
+Jira issue before enqueueing (e.g. requeueing a backport failure clears
+backport labels only, preserving reproducer results and `ymir_todo` triggers).
+Cleanup runs in the MCP gateway using its Jira credentials; if it fails, the
+entry stays in error_list and no task is enqueued.
+Pass `--user-triggered` to opt into maintainer-triggered comments and labels.
 
 The entry is located and its replacement task computed here, client-side (a
 plain LRANGE + local JSON parsing) rather than inside Redis: scanning and
@@ -34,14 +34,17 @@ passed as `oc exec`/subprocess command-line arguments, which have far lower
 size limits than a Redis value.
 
 Usage:
-    make requeue-error ERROR_ID=42                       # from openshift/ (preferred)
+    make requeue-error ERROR_ID=42                       # priority requeue, fewer comments
+    make requeue-error ERROR_ID=42 USER_TRIGGERED=true   # priority/user-triggered requeue
     python3 scripts/requeue_error.py 42                  # same, run directly
+    python3 scripts/requeue_error.py 42 --user-triggered # priority/user-triggered
     python3 scripts/requeue_error.py 42 --dry-run         # show the plan, don't mutate anything
 """
 
 import argparse
 import contextlib
 import json
+import re
 import secrets
 import subprocess
 import sys
@@ -49,6 +52,132 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from error_list import _try_json, fetch_via_oc, to_elements
+
+# Labels owned by each workflow — only these are cleared on requeue so that
+# unrelated workflows' triggers and terminal labels are preserved.
+_WORKFLOW_LABELS: dict[str, set[str]] = {
+    "triage": {
+        "ymir_triage_in_progress",
+        "ymir_triaged",
+        "ymir_triaged_backport",
+        "ymir_triaged_rebase",
+        "ymir_triaged_rebuild",
+        "ymir_triaged_postponed",
+        "ymir_triaged_not_affected",
+        "ymir_triage_errored",
+        "ymir_needs_attention",
+        "ymir_cli_triage",
+        "ymir_postponed_dependency",
+        "ymir_postponed_y_stream",
+        "ymir_postponed_no_patch",
+        "ymir_postponed_pr_pending",
+        "ymir_abandoned",
+        "ymir_mr_closed",
+        "ymir_manual_branch_needed",
+    },
+    "rebase": {
+        "ymir_rebased",
+        "ymir_rebase_errored",
+        "ymir_rebase_failed",
+        "ymir_rebase_sibling",
+        "ymir_rebase_waiting_for_siblings",
+        "ymir_consolidated",
+        "ymir_consolidate_base",
+        "ymir_consolidate_next",
+        "ymir_merged",
+    },
+    "backport": {
+        "ymir_backported",
+        "ymir_backport_errored",
+        "ymir_backport_failed",
+    },
+    "rebuild": {
+        "ymir_rebuilt",
+        "ymir_rebuild_errored",
+        "ymir_rebuild_failed",
+    },
+    "reproducer": {
+        "ymir_reproducer_in_progress",
+        "ymir_reproducer_created",
+        "ymir_reproducer_failed",
+        "ymir_reproducer_errored",
+        "ymir_reproducer_not_reproducible",
+        "ymir_reproducer_already_exists",
+    },
+}
+
+
+def _workflow_from_queue(queue_name: str) -> str:
+    """Derive the workflow name from a queue name (e.g. 'backport_queue_c9s_todo' -> 'backport')."""
+    name = queue_name.removesuffix("_todo")
+    for prefix in ("triage", "rebase", "backport", "rebuild", "reproducer", "merge_consolidation"):
+        if name.startswith(prefix):
+            return "rebase" if prefix == "merge_consolidation" else prefix
+    return ""
+
+
+_DOWNSTREAM_OF: dict[str, list[str]] = {
+    "triage": ["rebase", "backport", "rebuild", "reproducer"],
+}
+
+
+def _labels_to_clear(queue_name: str) -> set[str]:
+    """Return the set of ymir labels that should be cleared for a given queue's workflow.
+
+    Triage is the pipeline entry point, so requeueing it also clears all
+    downstream workflow labels (rebase, backport, rebuild, reproducer).
+    """
+    workflow = _workflow_from_queue(queue_name)
+    labels = set(_WORKFLOW_LABELS.get(workflow, set()))
+    for downstream in _DOWNSTREAM_OF.get(workflow, []):
+        labels |= _WORKFLOW_LABELS.get(downstream, set())
+    return labels
+
+
+# Run in the gateway so Jira credentials stay in the cluster. The script
+# receives the target labels as a JSON list in sys.argv[2]; only those are
+# removed, preserving unrelated workflows' labels.
+_CLEAR_YMIR_LABELS_PYTHON = """
+import json
+import os
+import sys
+
+import requests
+
+from ymir.common.base_utils import get_jira_auth_headers
+
+target_labels = set(json.loads(sys.argv[2]))
+url = os.environ["JIRA_URL"].rstrip("/") + "/rest/api/3/issue/" + sys.argv[1]
+headers = get_jira_auth_headers()
+response = requests.get(url, params={"fields": "labels"}, headers=headers, timeout=30)
+response.raise_for_status()
+labels = response.json()["fields"]["labels"]
+removals = [{"remove": label} for label in labels if label in target_labels]
+if removals:
+    response = requests.put(url, json={"update": {"labels": removals}}, headers=headers, timeout=30)
+    response.raise_for_status()
+"""
+
+
+def clear_ymir_labels(jira_issue: str, deployment: str, target_labels: set[str]) -> None:
+    """Clear workflow-specific labels before making the task available to an agent."""
+    if not target_labels:
+        return
+    labels_json = json.dumps(sorted(target_labels))
+    cmd = ["oc", "exec", "-i", f"deployment/{deployment}", "--", "python3", "-", jira_issue, labels_json]
+    try:
+        proc = subprocess.run(  # noqa: S603
+            cmd, input=_CLEAR_YMIR_LABELS_PYTHON.encode(), capture_output=True, timeout=90
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        sys.exit(f"error: could not clear Ymir labels for {jira_issue}; nothing requeued.")
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", errors="replace").strip()[:500]
+        detail = f": {stderr}" if stderr else ""
+        sys.exit(
+            f"error: failed to clear Ymir labels for {jira_issue} via {deployment} "
+            f"(exit {proc.returncode}){detail}. Nothing requeued."
+        )
 
 
 def run_valkey_cli(deployment: str, args: list[str], stdin: bytes | None = None) -> str:
@@ -168,6 +297,14 @@ def atomic_requeue(
     return int(out.strip())
 
 
+def prepare_requeue_task(task: dict, source_queue: str, user_triggered: bool) -> tuple[str, str]:
+    """Reset a task and send it to the priority queue, with optional maintainer feedback."""
+    task["attempts"] = 0
+    task["user_triggered"] = user_triggered
+    target_queue = source_queue if source_queue.endswith("_todo") else f"{source_queue}_todo"
+    return target_queue, json.dumps(task)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument(
@@ -178,7 +315,17 @@ def main() -> None:
         "--deployment", default="valkey", help="OpenShift deployment running valkey (default: valkey)"
     )
     ap.add_argument(
+        "--jira-deployment",
+        default="mcp-gateway",
+        help="Deployment with Jira credentials used to clear Ymir labels (default: mcp-gateway)",
+    )
+    ap.add_argument(
         "--dry-run", action="store_true", help="Print the plan without pushing or removing anything"
+    )
+    ap.add_argument(
+        "--user-triggered",
+        action="store_true",
+        help="Set user_triggered=true for maintainer comments and labels (priority queue either way)",
     )
     args = ap.parse_args()
 
@@ -190,28 +337,38 @@ def main() -> None:
 
     target_queue = entry.get("queue")
     task = entry.get("task")
-    jira_issue = (entry.get("error") or {}).get("jira_issue", "unknown")
+    metadata = (task or {}).get("metadata") or {}
+    jira_issue = (
+        metadata.get("jira_issue") or metadata.get("issue") or (entry.get("error") or {}).get("jira_issue")
+    )
+    if isinstance(jira_issue, dict):
+        jira_issue = jira_issue.get("key")
     if not target_queue or not task:
         sys.exit(
             f"error: entry {args.error_id} ({jira_issue}) has no requeueable task "
             "(legacy entry, or a payload that never parsed into a Task) — nothing to requeue."
         )
 
+    if not isinstance(jira_issue, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*-[0-9]+", jira_issue):
+        sys.exit(f"error: entry {args.error_id} has no valid Jira issue key; nothing requeued.")
+
     old_attempts = task.get("attempts", 0)
-    task["attempts"] = 0
-    task["user_triggered"] = True
-    if not target_queue.endswith("_todo"):
-        target_queue = f"{target_queue}_todo"
-    task_json = json.dumps(task)
+    labels_to_remove = _labels_to_clear(target_queue)
+    target_queue, task_json = prepare_requeue_task(task, target_queue, args.user_triggered)
 
     print(
         f"Requeuing error_id={args.error_id} ({jira_issue}) onto '{target_queue}' "
-        f"(attempts {old_attempts} -> 0, user_triggered -> true)"
+        f"(attempts {old_attempts} -> 0, user_triggered -> {str(args.user_triggered).lower()})"
     )
     if args.dry_run:
+        print(
+            f"[dry-run] Would remove {len(labels_to_remove)} workflow-specific ymir labels "
+            f"from {jira_issue} via {args.jira_deployment}."
+        )
         print(f"[dry-run] Would atomically remove from {args.queue} and LPUSH {target_queue}: {task_json}")
         return
 
+    clear_ymir_labels(jira_issue, args.jira_deployment, labels_to_remove)
     result = atomic_requeue(args.deployment, args.queue, target_queue, raw, task_json, args.error_id)
     if result == 0:
         sys.exit(

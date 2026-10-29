@@ -54,8 +54,8 @@ async def _jira_request_with_session(
             **get_kwargs,
         ) as response:
             if response.status == 429:
-                # Jira Server often sends Retry-After: 0, so retain the supervisor
-                # client's exponential backoff instead of trusting that header.
+                # Jira Server often sends Retry-After: 0, so use exponential
+                # backoff instead of trusting that header.
                 raise JiraRateLimitError(f"Jira rate limited {method.upper()} {url}")
             response.raise_for_status()
             if decode_response:
@@ -65,8 +65,8 @@ async def _jira_request_with_session(
     request = getattr(session, method.lower())
     async with request(url, **kwargs) as response:
         if response.status == 429:
-            # Jira Server often sends Retry-After: 0, so retain the supervisor
-            # client's exponential backoff instead of trusting that header.
+            # Jira Server often sends Retry-After: 0, so use exponential
+            # backoff instead of trusting that header.
             raise JiraRateLimitError(f"Jira rate limited {method.upper()} {url}")
         response.raise_for_status()
         if decode_response:
@@ -90,7 +90,7 @@ async def _jira_api_request(
     headers: dict[str, str] | None = None,
     decode_response: bool = False,
 ) -> Any | None:
-    """Retry Jira 429s using the supervisor client's 300-second backoff."""
+    """Retry Jira 429s with exponential backoff for up to 300 seconds."""
     return await _jira_request_with_session(
         method,
         url,
@@ -136,7 +136,7 @@ async def _jira_api_request_in_session(
 
 
 def jira_url() -> str:
-    """Return the configured Jira URL, retaining the supervisor default."""
+    """Return the configured Jira URL, defaulting to the Red Hat Jira Cloud."""
     return os.environ.get("JIRA_URL", "https://redhat.atlassian.net").rstrip("/")
 
 
@@ -155,7 +155,7 @@ async def jira_api_get(
     headers: dict[str, str] | None = None,
     session=None,
 ) -> Any:
-    """GET JSON from Jira, retrying rate limits with the supervisor policy."""
+    """GET JSON from Jira, retrying rate limits with the shared client policy."""
     url = jira_api_url(path, api_version=api_version, base_url=base_url)
     return await _jira_api_request_in_session(
         "get",

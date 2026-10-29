@@ -16,7 +16,7 @@ Five agents process tasks through Redis queues (see [README-agents.md](README-ag
 - **Rebase Agent**: Updates packages to newer upstream versions
 - **Backport Agent**: Applies specific fixes/patches to packages
 - **Rebuild Agent**: Rebuilds packages in the build system
-- **Supervisor Workflows**: Manage testing and release (see [README-supervisor.md](README-supervisor.md))
+- **Quality Engineering Agents**: Handle issue verification, preliminary testing, and errata workflows (see [README-agents.md](README-agents.md))
 
 ## Development Workflows
 

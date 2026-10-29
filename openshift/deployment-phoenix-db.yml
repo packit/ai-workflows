@@ -75,7 +75,8 @@ spec:
       schedulerName: default-scheduler
       securityContext:
         runAsNonRoot: true
-        fsGroup: 99
+        fsGroup: 1005500000
+        hostUsers: false
         seccompProfile:
           type: RuntimeDefault
       terminationGracePeriodSeconds: 30

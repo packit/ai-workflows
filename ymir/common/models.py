@@ -1201,7 +1201,7 @@ class MergeRequestDetails(BaseModel):
 
 
 # ============================================================================
-# Supervisor / Issue Verification Types
+# Issue Verification Types
 # ============================================================================
 
 

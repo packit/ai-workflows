@@ -34,7 +34,6 @@ jobs:
           - target: check-privileged-tools-in-container
           - target: check-jira-issue-fetcher-in-container
           - target: check-ymir-common-in-container
-          - target: check-supervisor-in-container
           - target: check-sweep-in-container
           - target: check-mr-cleanup-in-container
           - target: check-api-in-container
@@ -81,7 +80,7 @@ jobs:
       run: |
         podman build --no-cache -f Containerfile.sweep -t sweep-test:pr .
     # Containerfile.sweep copies only a curated subset of ymir/* (sweep, common,
-    # supervisor, tools) onto PYTHONPATH rather than pip-installing the package.
+    # tools) onto PYTHONPATH rather than pip-installing the package.
     # The slim image's import graph is therefore an unenforced contract: if a
     # package-structure change makes the sweep's imports reach outside that
     # subset (or pull in a dep this Containerfile doesn't install), the image

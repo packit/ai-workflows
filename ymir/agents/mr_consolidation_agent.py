@@ -797,15 +797,6 @@ async def run_workflow(
                 logger.warning("No SRPM generated, skipping build verification")
                 return "stage_changes"
 
-            def _retry_step_for_build(state):
-                """Determine which flow to retry on build failure."""
-                has_rebuild_other = any(t == "rebuild" for t in state.mr_types.values())
-                if has_rebuild_other and len(state.mr_types) > 1:
-                    return "rebuild_append_flow"
-                if release_strategy == "per_commit":
-                    return "per_commit_flow"
-                return "run_consolidation_agent"
-
             try:
                 build_output = await run_build(
                     build_input=BuildInputSchema(
@@ -822,19 +813,44 @@ async def run_workflow(
                     state.build_error = build_output.error
                     state.attempts_remaining -= 1
                     if state.attempts_remaining > 0:
-                        return _retry_step_for_build(state)
+                        return "reset_for_retry"
                     return "handle_failure"
             except Exception as e:
                 logger.error("Build verification error: %s", e)
                 state.build_error = str(e)
                 state.attempts_remaining -= 1
                 if state.attempts_remaining > 0:
-                    return _retry_step_for_build(state)
+                    return "reset_for_retry"
                 return "handle_failure"
 
             if release_strategy == "per_commit":
                 return "push_and_open_mr"
             return "update_release"
+
+        async def reset_for_retry(state):
+            """Reset the working branch to dist-git HEAD before retrying.
+
+            Retries after build failures or transient errors must start from a
+            clean state instead of operating on a branch that already has
+            commits from a previous attempt.
+            """
+            git_env = local_tool_options.get("env")
+            try:
+                await check_subprocess(
+                    ["git", "reset", "--hard", f"origin/{dist_git_branch}"],
+                    cwd=state.local_clone,
+                    env=git_env,
+                )
+            except Exception as e:
+                logger.error("Failed to reset working branch for retry: %s", e)
+                return "handle_failure"
+
+            has_rebuild_other = any(t == "rebuild" for t in state.mr_types.values())
+            if has_rebuild_other and len(state.mr_types) > 1:
+                return "rebuild_append_flow"
+            if release_strategy == "per_commit":
+                return "per_commit_flow"
+            return "run_consolidation_agent"
 
         async def _choose_base_branch(branches: list[str], clone, env=None) -> tuple[str, list[str]]:
             """Pick the branch with the larger total patch diff as the base.
@@ -1663,6 +1679,7 @@ async def run_workflow(
         workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
         workflow.add_step("run_consolidation_agent", run_consolidation_agent)
         workflow.add_step("run_build_agent", run_build_agent)
+        workflow.add_step("reset_for_retry", reset_for_retry)
         workflow.add_step("per_commit_flow", per_commit_flow)
         workflow.add_step("rebuild_append_flow", rebuild_append_flow)
         workflow.add_step("update_release", update_release)

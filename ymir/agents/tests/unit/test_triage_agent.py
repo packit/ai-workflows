@@ -16,6 +16,7 @@ from ymir.agents.triage_agent import (
     _map_version_to_module_branch,
     _postponed_comment_exists,
     _should_update_jira,
+    _terminal_ymir_labels,
     determine_target_branch,
     label_applicability_confidence,
     main,
@@ -58,16 +59,30 @@ async def test_confidence_labels_replace_previous_rating(monkeypatch, level, dry
     if dry_run:
         assert updates == []
         return
-    expected = f"ymir_confidence_{level}" if level else None
+    expected = f"ymir_applicability_confidence_{level}" if level else None
     assert len(updates) == 1
     assert updates[0]["jira_issue"] == "RHEL-1"
     assert updates[0]["labels_to_add"] == ([expected] if expected else [])
     assert set(updates[0]["labels_to_remove"]) == {
-        label
-        for label in ("ymir_confidence_low", "ymir_confidence_medium", "ymir_confidence_high")
-        if label != expected
-    }
+        JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
+    } - ({expected} if expected else set())
     assert updates[0]["critical"] is False
+
+
+def test_confidence_labels_are_not_terminal():
+    """A requeued sibling primary must still run with only a confidence label."""
+    assert _terminal_ymir_labels([JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value]) == []
+    assert _terminal_ymir_labels([JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value]) == []
+
+
+def test_terminal_labels_still_block_duplicate_triage():
+    labels = [
+        JiraLabels.TRIAGED_REBASE.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
+    ]
+    assert _terminal_ymir_labels(labels) == [JiraLabels.TRIAGED_REBASE.value]
 
 
 @pytest.mark.parametrize(
@@ -1055,9 +1070,16 @@ async def test_branch_creation_notice_uses_final_resolution(
         assert not labels
         assert not comments
         return
-    confidence_updates = [call for call in labels if "ymir_confidence_high" in call.get("labels_to_add", [])]
+    confidence_updates = [
+        call
+        for call in labels
+        if JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value in call.get("labels_to_add", [])
+    ]
     assert len(confidence_updates) == 1
-    assert set(confidence_updates[0]["labels_to_remove"]) == {"ymir_confidence_low", "ymir_confidence_medium"}
+    assert set(confidence_updates[0]["labels_to_remove"]) == {
+        JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
+    }
     labels = [call for call in labels if call not in confidence_updates]
     if initial_resolution == Resolution.REBASE and scenario in ("sibling", "waiting"):
         assert not state.hold_for_manual_branch_creation

@@ -179,9 +179,9 @@ class JiraLabels(Enum):
 
     TRIAGED_REBUILD = "ymir_triaged_rebuild"
 
-    CONFIDENCE_LOW = "ymir_confidence_low"
-    CONFIDENCE_MEDIUM = "ymir_confidence_medium"
-    CONFIDENCE_HIGH = "ymir_confidence_high"
+    APPLICABILITY_CONFIDENCE_LOW = "ymir_applicability_confidence_low"
+    APPLICABILITY_CONFIDENCE_MEDIUM = "ymir_applicability_confidence_medium"
+    APPLICABILITY_CONFIDENCE_HIGH = "ymir_applicability_confidence_high"
 
     # Applied when package maintainers must create a missing internal
     # z-stream branch before Ymir can continue processing the issue.

@@ -50,8 +50,9 @@ a fixed cap. Skipped or failed applicability checks remain unassessed
 informational: it is not a calibrated probability, CVE severity or permission to
 close an issue, and it does not change resolution or queue routing.
 
-Triage also maintains one of `ymir_confidence_low`, `ymir_confidence_medium` or
-`ymir_confidence_high` on the Jira issue. A completed run replaces previous
+Triage also maintains one of `ymir_applicability_confidence_low`,
+`ymir_applicability_confidence_medium` or `ymir_applicability_confidence_high`
+on the Jira issue. A completed run replaces previous
 confidence labels, or removes them if applicability remains unassessed. See the
 [label reference](jira_label_workflow_routing.md#confidence-labels) for definitions.
 

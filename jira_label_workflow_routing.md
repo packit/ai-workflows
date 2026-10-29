@@ -89,14 +89,20 @@ flowchart TD
 
 | Label | Meaning |
 |-------|---------|
-| `ymir_confidence_low` | Applicability evidence is incomplete or conflicting |
-| `ymir_confidence_medium` | Evidence supports the conclusion with an important inference or verification gap |
-| `ymir_confidence_high` | Direct target-source evidence and relevant build or execution paths support the conclusion |
+| `ymir_applicability_confidence_low` | Applicability evidence is incomplete or conflicting |
+| `ymir_applicability_confidence_medium` | Evidence supports the conclusion with an important inference or verification gap |
+| `ymir_applicability_confidence_high` | Direct target-source evidence and relevant build or execution paths support the conclusion |
 
 Triage replaces the previous confidence label when a run completes, including
 runs whose comments are suppressed. A completion without an applicability
 assessment removes all three labels. Normal triage startup also clears them
 with other prior `ymir_*` labels. Dry runs do not update them.
+
+These labels record an assessment, not workflow state. The triage duplicate
+guard ignores them, so a rebase primary requeued after its siblings finish still
+runs even though it already carries a confidence label. Abandoned-task recovery
+ignores them too, so a worker killed between the confidence write and the
+terminal label is still retried.
 
 ### Error Labels
 

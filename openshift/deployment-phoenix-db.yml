@@ -76,7 +76,6 @@ spec:
       securityContext:
         runAsNonRoot: true
         fsGroup: 1005500000
-        hostUsers: false
         seccompProfile:
           type: RuntimeDefault
       terminationGracePeriodSeconds: 30

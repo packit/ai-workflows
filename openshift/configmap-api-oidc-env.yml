@@ -5,4 +5,4 @@ metadata:
 data:
   OIDC_PROVIDER_URL: "https://sso.redhat.com/auth/realms/redhat-external"
   OIDC_CORS_ALLOWED_ORIGIN: "https://ymir.redhat.com"
-  OIDC_CORS_ALLOWED_ORIGIN_ALT: "https://trace-server-jotnar-ymir--jotnar-ymir.apps.prod-scale-spoke1-dc-rdu3.itup.redhat.com"
+  OIDC_CORS_ALLOWED_ORIGIN_ALT: "https://trace-server-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com"

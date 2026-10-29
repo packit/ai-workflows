@@ -138,17 +138,25 @@ URLs. Any other pre-push source failure also resets the checkout and starts the
 normal backport; only an environmental cleanup failure permits one fresh-clone
 retry of the same leading source. An already-present fix is a routing error, not
 a successful no-op. After a push, recovery never creates a second fallback
-backport. The queue task stores a publication checkpoint and a retry verifies the
-fork branch still points at the validated commit before it resumes at MR
-creation. Routing-invariant failures are terminal and are not requeued.
+backport. The publication checkpoint is created only after build validation
+succeeds and is cleared if inheritance is abandoned. The queue task stores it,
+and a retry verifies that the fork branch still points at the validated commit
+before it resumes at MR creation. Routing-invariant failures are terminal and
+are not requeued.
 
 
-### Copr build validation
+### Build validation
 
 Backport (including Y-stream inheritance), rebase, MR updates, and MR
 consolidation use a shared `BuildWorkflow`. Its `execute_build` step calls
-`build_package` through the existing MCP gateway; the tool submits and polls
-Copr as before. Shared `run_tool()` validates the response as a `BuildResult`
+`build_package` through the existing MCP gateway. The default backend submits
+and polls Copr; `BUILD_BACKEND=konflux` instead builds the pushed fork commit
+as a scratch Konflux PipelineRun. The discovered spec filename is passed to
+Konflux when it differs from the package name. The generated SRPM determines
+which single architecture Konflux validates, preferring x86_64 when supported. See
+[Konflux backend](docs/konflux-backend.md) for configuration and
+[the threat model](THREAT_MODEL.md) for its external
+dependencies. Shared `run_tool()` validates the response as a `BuildResult`
 using its opt-in `expected_output` schema; other callers' raw results are unchanged.
 Successful validation makes no build-stage LLM calls. Timeouts, tool errors,
 and failures without log artifacts are returned directly to the workflow.
@@ -170,10 +178,9 @@ the name to 100 characters. Changed names include a hash suffix to distinguish
 packages and branches across sanitization or truncation. This fallback is stable
 across retries and is not added to Jira metadata or commit footers.
 
-Standalone rebuild does not have this Copr validation stage. The backport
-incremental repair agent's own edit/build loop is also unchanged. Dry-run mode
-still performs real build validation; it does not turn a build into a success
-without running it.
+Standalone rebuild does not have this Copr validation stage. Dry-run mode still
+performs real build validation; it does not turn a build into a success without
+running it.
 
 Incremental backport repairs keep `fix-attempts.md` and archived build logs in
 `<local_clone>-build-logs`, beside the dist-git and upstream checkouts. This
@@ -182,6 +189,12 @@ staging in either checkout to include those files in generated patches. The
 repair prompt provides the file path for reading previous attempts and
 appending the outcome. The directory is removed with the issue's working
 directory on a fresh run.
+
+A repair response that reports failure is recorded there and retried without
+another build, up to `MAX_INCREMENTAL_FIX_ATTEMPTS` (default:
+`MAX_BUILD_ATTEMPTS`). A successful repair candidate goes through the build
+step for validation. The workflow reports failure when either budget is
+exhausted.
 
 Backport context management is initially disabled. Set
 `BACKPORT_CONTEXT_MANAGEMENT=true` to let the model compact older investigation
@@ -208,11 +221,17 @@ rule, or tool-result contents.
 
 ## Dry run mode
 
-**Without setting `DRY_RUN=true` env var, agents will make real changes:**
-- **Modify JIRA issues** (add comments, update fields, apply labels)
-- **Create GitLab merge requests** and push commits
+`DRY_RUN=true` suppresses Jira writes and merge request creation. Builds still run.
+It does **not** make Git operations read-only: Konflux validation pushes a
+temporary scratch branch to the fork and deletes it when the build finishes.
+The live MR branch is pushed only after a successful build outside dry-run.
+Copr validates its local SRPM without pushing a build candidate. Preparing a
+checkout can also create a GitLab fork or a missing internal Z-stream branch.
 
-**Always** use `DRY_RUN=true` if you are developing locally or just wanna give the agents a try.
+For local testing, use `DRY_RUN=true` to avoid Jira and MR writes, and use mock
+repositories and a disposable `FORK_NAMESPACE` when you need to avoid changes to
+shared Git repositories. Check the target branch before running against real
+internal dist-git.
 
 ## Jira status changes (opt-in)
 
@@ -264,6 +283,13 @@ cp -r templates .secrets
 
 - Follow the comments to fill out the needed credentials.
 
+For local Konflux builds, log in to the gateway OpenShift cluster and run
+`make konflux-token` before setting `BUILD_BACKEND=konflux`. This writes the
+short-lived service-account token to `.secrets/konflux/token`, which the gateway
+reads for each build. Refresh it when a build returns 401; a gateway restart is
+not needed. See [Konflux backend setup](docs/konflux-backend.md) for the login
+command, required access, and remaining configuration.
+
 The `mcp-gateway` requires a `keytab` file.
 
 Steps to generate a personal kerberos keytab file:
@@ -299,7 +325,7 @@ Please do not run `podman-compose up` directly; use the provided Makefile instea
 make start
 
 # With options:
-make start DRY_RUN=true                    # Skip Jira writes and git pushes
+make start DRY_RUN=true                    # Skip Jira writes and MR creation; builds may push Git refs
 make start AUTO_CHAIN=false                # Disable downstream queue routing (triage only)
 make start DRY_RUN=true AUTO_CHAIN=false   # Combine both
 
@@ -320,7 +346,7 @@ for full `trigger-reproducer` options.
 **Environment variables:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DRY_RUN` | `false` | Skip Jira writes, git pushes, and MR creation |
+| `DRY_RUN` | `false` | Skip Jira writes and MR creation; build workflows may create forks or push Git refs |
 | `AUTO_CHAIN` | `true` | Route triaged issues to downstream backport/rebase queues. Set to `false` to disable routing. |
 | `MOCK_JIRA` | `false` | Use mock Jira API instead of real Jira |
 | `JIRA_DRY_RUN` | `false` | Skip all Jira write operations (status, comments, labels, fields) while keeping reads working |

@@ -132,7 +132,7 @@ apply deployment-api.yml
 # BeeAI Agents
 apply imagestream-beeai-agent.yml
 import_image beeai-agent:c9s quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5
-import_image beeai-agent:c10s quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6
+import_image beeai-agent:c10s quay.io/jotnar/beeai@sha256:39a71811d539a87e59a75e1c6704ed0eb11b68aa1e453642de5c2fc96c687ef8
 apply deployment-triage-agent.yml
 apply deployment-backport-agent-c9s.yml
 apply deployment-backport-agent-c10s.yml

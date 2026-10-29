@@ -15,7 +15,7 @@ spec:
     - name: c10s
       from:
         kind: DockerImage
-        name: quay.io/jotnar/beeai@sha256:6b4cd4a3a5ab6e1a50644fcb4ada35c6970a981ce6f0242da36f4751da3268d6
+        name: quay.io/jotnar/beeai@sha256:39a71811d539a87e59a75e1c6704ed0eb11b68aa1e453642de5c2fc96c687ef8
       importPolicy:
         # Keep the migration image reference immutable.
         scheduled: false

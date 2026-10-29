@@ -33,6 +33,7 @@ from requests.adapters import HTTPAdapter, Retry
 
 from ymir.common.base_utils import is_cs_branch
 from ymir.common.config import load_rhel_config
+from ymir.common.constants import YMIR_USER_AGENT
 from ymir.common.models import BuildResult
 from ymir.common.version_utils import (
     construct_internal_branch_name,
@@ -42,7 +43,6 @@ from ymir.common.version_utils import (
 )
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import make_additional_context, tool_error_context
-from ymir.tools.constants import YMIR_USER_AGENT
 from ymir.tools.errors import ToolErrorWithContext
 
 logger = logging.getLogger(__name__)

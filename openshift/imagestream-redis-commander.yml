@@ -7,10 +7,10 @@ spec:
     - name: prod
       from:
         kind: DockerImage
-        name: quay.io/jotnar/redis-commander@sha256:4143a32885b1ae81feea8080a423aab9127cdf4fd8cb13a1b8c2a48002159f97
+        name: quay.io/jotnar/redis-commander:latest
       importPolicy:
-        # Keep the migration image reference immutable.
-        scheduled: false
+        # Periodically query registry to synchronize tag and image metadata.
+        scheduled: true
   lookupPolicy:
     # allows all resources pointing to this image stream to use it in the image field
     local: true

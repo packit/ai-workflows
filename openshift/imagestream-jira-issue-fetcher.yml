@@ -8,10 +8,10 @@ spec:
     - name: prod
       from:
         kind: DockerImage
-        name: quay.io/jotnar/jira-issue-fetcher@sha256:d3efe22596397bd98d2b6b6f9ac764b36f3e6d49d2e965d3d37330dd3d46ce2f
+        name: quay.io/jotnar/jira-issue-fetcher:latest
       importPolicy:
-        # Keep the migration image reference immutable.
-        scheduled: false
+        # Periodically query registry to synchronize tag and image metadata.
+        scheduled: true
   lookupPolicy:
     # allows all resources pointing to this image stream to use it in the image field
     local: true

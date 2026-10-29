@@ -9,6 +9,6 @@ spec:
     - name: prod
       from:
         kind: DockerImage
-        name: quay.io/sclorg/postgresql-16-c9s@sha256:c9990e93bf07321bf5f8cc31ef97951ec181d0f40293c0438422e8e53e2ef06e
+        name: quay.io/sclorg/postgresql-16-c9s
       importPolicy:
-        scheduled: false
+        scheduled: true

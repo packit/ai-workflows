@@ -8,10 +8,10 @@ spec:
     - name: prod
       from:
         kind: DockerImage
-        name: quay.io/jotnar/mr-cleanup@sha256:a1bc74b9e9b7a33f5437d28c014d14d6b4430683d4a18b960f8038a1870f0904
+        name: quay.io/jotnar/mr-cleanup:latest
       importPolicy:
-        # Keep the migration image reference immutable.
-        scheduled: false
+        # Periodically query registry to synchronize tag and image metadata.
+        scheduled: true
   lookupPolicy:
     # allows all resources pointing to this image stream to use it in the image field
     local: true

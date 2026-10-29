@@ -8,8 +8,8 @@ spec:
     - name: prod
       from:
         kind: DockerImage
-        name: quay.io/jotnar/sweep@sha256:fd343d8daaa582cc0f2eaf2254ad5a87404527557d1873917ffac3c3c5b038c2
+        name: quay.io/jotnar/sweep:latest
       importPolicy:
-        scheduled: false
+        scheduled: true
   lookupPolicy:
     local: true

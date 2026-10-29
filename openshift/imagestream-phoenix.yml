@@ -9,7 +9,7 @@ spec:
     - name: prod
       from:
         kind: DockerImage
-        name: quay.io/jotnar/phoenix@sha256:51f52f728be6684d48c7797fcf2eb3f9674e85b2b700d4e8628d27024f6f1653
+        name: quay.io/jotnar/phoenix
       importPolicy:
-        # Keep the migration image reference immutable.
-        scheduled: false
+        # Periodically query registry to synchronize tag and image metadata.
+        scheduled: true

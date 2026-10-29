@@ -8,17 +8,17 @@ spec:
     - name: c9s
       from:
         kind: DockerImage
-        name: quay.io/jotnar/beeai@sha256:c0f7feea8c7d23fd9aeaef42f3d023b52a978ef0308740f3254238d2ea1275e5
+        name: quay.io/jotnar/beeai:c9s
       importPolicy:
-        # Keep the migration image reference immutable.
-        scheduled: false
+        # Periodically query registry to synchronize tag and image metadata.
+        scheduled: true
     - name: c10s
       from:
         kind: DockerImage
-        name: quay.io/jotnar/beeai@sha256:39a71811d539a87e59a75e1c6704ed0eb11b68aa1e453642de5c2fc96c687ef8
+        name: quay.io/jotnar/beeai:c10s
       importPolicy:
-        # Keep the migration image reference immutable.
-        scheduled: false
+        # Periodically query registry to synchronize tag and image metadata.
+        scheduled: true
   lookupPolicy:
     # allows all resources pointing to this image stream to use it in the image field
     local: true

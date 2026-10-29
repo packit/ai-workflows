@@ -163,9 +163,3 @@ apply cronjob-sweep-dependency.yml
 apply cronjob-sweep-y-stream.yml
 apply cronjob-sweep-pr-pending.yml
 apply cronjob-sweep-no-patch.yml
-
-# # Supervisor
-# apply imagestream-supervisor.yml
-# import_image supervisor
-# apply deployment-supervisor-processor.yml
-# apply cronjob-supervisor-collector.yml

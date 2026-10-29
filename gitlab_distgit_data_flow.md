@@ -38,10 +38,6 @@ graph TD
 graph TD
     GITLAB[("GitLab<br/>gitlab.com/redhat")]
 
-    subgraph "Python Services (Direct Git/API)"
-        SUPERVISOR["Supervisor<br/>(gitlab_utils.py)"]
-    end
-
     subgraph "MCP Server Layer"
         MCP_GITLAB["GitLab Tools<br/>(gitlab_tools.py)"]
         MCP_DISTGIT["Dist-Git Tools<br/>(distgit_tools.py)"]
@@ -51,15 +47,12 @@ graph TD
         AGENTS["Rebase Agent<br/>Backport Agent<br/>MR Agent"]
     end
 
-    SUPERVISOR <-->|"Direct API<br/>Search MRs"| GITLAB
-
     AGENTS -->|"Use MCP Tools"| MCP_GITLAB
     AGENTS -->|"Use MCP Tools"| MCP_DISTGIT
 
     MCP_GITLAB <-->|"Git & API Operations<br/>Fork, Clone, Push,<br/>Open MR, Comments"| GITLAB
     MCP_DISTGIT <-->|"Create Z-Stream<br/>Branches"| GITLAB
 
-    style SUPERVISOR fill:#e8f4f8,stroke:#0277bd,stroke-width:3px
     style MCP_GITLAB fill:#fff4e6,stroke:#f57c00,stroke-width:3px
     style MCP_DISTGIT fill:#fff4e6,stroke:#f57c00,stroke-width:3px
     style AGENTS fill:#e8f5e9,stroke:#388e3c,stroke-width:3px
@@ -205,34 +198,6 @@ sequenceDiagram
     end
 ```
 
-## Supervisor GitLab Operations
-
-The Supervisor uses direct GitLab API calls (not MCP) for:
-
-```mermaid
-flowchart LR
-    SUPERVISOR[Supervisor]
-
-    SUPERVISOR -->|"search_gitlab_project_mrs()"| SEARCH["Search MRs by<br/>issue key"]
-
-    SEARCH --> CHECK{MR State?}
-
-    CHECK -->|Opened| MONITOR["Monitor MR<br/>for merge"]
-    CHECK -->|Merged| TRACK["Track merged<br/>build"]
-
-    style SUPERVISOR fill:#e8f4f8
-    style SEARCH fill:#fff9c4
-    style MONITOR fill:#e1f5fe
-    style TRACK fill:#c8e6c9
-```
-
-**Function:** `search_gitlab_project_mrs(project, issue_key, state)`
-
-- **Purpose:** Find merge requests related to a Jira issue
-- **API Call:** `GET /api/v4/projects/{project}/merge_requests?search={issue_key}`
-- **Returns:** Iterator of MergeRequest objects
-- **Use Case:** Supervisor tracks MR state to advance issue workflow
-
 ## Repository Naming Conventions
 
 ### Upstream Repositories
@@ -271,7 +236,7 @@ Fork naming follows `centpkg fork` convention:
 ### GitLab API Token
 
 - **Environment Variable:** `GITLAB_TOKEN`
-- **Used By:** MCP Server, Supervisor
+- **Used By:** MCP Server
 - **Format:** OAuth2 token
 - **Scope:** API access, fork creation, MR management
 

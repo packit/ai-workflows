@@ -9,7 +9,6 @@ graph TD
     JIRA[("Jira Service<br/>issues.redhat.com")]
 
     JIRA -->|"Direct API<br/>Search Issues"| FETCHER
-    JIRA <-->|"Direct API<br/>Monitor & Update"| SUPERVISOR
     JIRA <-->|"API Calls via<br/>MCP Tools"| MCP
 
     FETCHER["Jira Issue Fetcher<br/>(Cron Job)<br/>jira_issue_fetcher.py<br/><br/>Direct API Access"]
@@ -31,12 +30,7 @@ graph TD
 
     MCP["MCP Server<br/>(FastMCP Tools)<br/>jira_tools.py<br/><br/>For AI Agents Only"]
 
-    SUPERVISOR["Supervisor<br/>(Workflow Orchestrator)<br/>jira_utils.py<br/><br/>Direct API Access"]
-
-    SUPERVISOR -->|"Check Queues"| Redis
-
     style FETCHER fill:#e8f4f8,stroke:#0277bd,stroke-width:3px
-    style SUPERVISOR fill:#e8f4f8,stroke:#0277bd,stroke-width:3px
     style MCP fill:#fff4e6,stroke:#f57c00,stroke-width:3px
     style AGENTS fill:#e8f5e9,stroke:#388e3c,stroke-width:3px
     style JIRA fill:#ffebee,stroke:#c62828,stroke-width:3px
@@ -66,9 +60,8 @@ or its `MOCK_JIRA` implementation and `flexmock` dependency.
 
 Traditional Python services that make direct HTTP calls to Jira:
 - **Jira Issue Fetcher** - Two CronJobs querying Jira on a schedule and pushing matches to the Redis triage queue: a main sweep against a saved Jira filter (query maintained in the separate [`cve-scope`](https://gitlab.cee.redhat.com/jotnar-project/cve-scope) repo) and a `ymir_todo`-label sweep. Uses `requests` library for direct API calls.
-- **Supervisor** - Workflow orchestration service that monitors issues/errata, advances them through testing/release process. Makes direct API calls using `requests` library via functions like `jira_api_get()`, `jira_api_post()`, `jira_api_put()`.
 
-*These services do NOT use the MCP Server - they call Jira API directly.*
+*The fetcher does NOT use the MCP Server; it calls Jira directly. QE agents use the MCP tools for Jira operations.*
 
 ### MCP Server
 
@@ -149,24 +142,6 @@ without the field remain valid and use the normal backport path. A shipped clone
 without an NVR still
 satisfies the existing dependency decision but cannot be inherited.
 
-### 3. Supervisor → Jira (READ/WRITE)
-
-```mermaid
-sequenceDiagram
-    participant Supervisor
-    participant Jira as Jira API
-
-    Supervisor->>Jira: POST /rest/api/2/search<br/>(get_current_issues with JQL)
-    Jira-->>Supervisor: Issues with full fields
-
-    Supervisor->>Supervisor: Process workflow logic
-
-    Supervisor->>Jira: PUT /rest/api/2/issue/{key}<br/>(add/remove labels)
-    Supervisor->>Jira: POST /rest/api/2/issue/{key}/comment<br/>(add progress updates)
-    Supervisor->>Jira: POST /rest/api/2/issue/{key}/transitions<br/>(change status)
-    Supervisor->>Jira: POST /rest/api/2/issue/{key}/attachments<br/>(upload files)
-```
-
 ## Complete Workflow
 
 ```mermaid
@@ -185,7 +160,6 @@ flowchart TD
     ERROR[Error List]
 
     PROCESS[Rebase/Backport<br/>Agents]
-    SUPER[Supervisor]
     UPDATE[Update Jira]
 
     START --> FETCH
@@ -205,10 +179,7 @@ flowchart TD
     BACKPORT --> PROCESS
     PROCESS --> UPDATE
 
-    SUPER -.Monitor.-> REBASE
-    SUPER -.Monitor.-> BACKPORT
-    SUPER --> UPDATE
-
+    PROCESS -->|"Use MCP tools"| UPDATE
     UPDATE --> |Labels, Comments,<br/>Status, Fields| START
 ```
 

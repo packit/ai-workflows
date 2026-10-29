@@ -67,3 +67,6 @@ logs/
 
 # Placeholder for tmt results when running the E2E tests locally
 .tmt/
+
+# Qodo working files
+.qodo/

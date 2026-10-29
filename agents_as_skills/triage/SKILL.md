@@ -83,11 +83,12 @@ Save the result as `cve_eligibility_result` with these fields:
    - Set `triage_result` to:
      ```json
      {
-       "resolution": "postponed",
+       "resolution": "postponed_y_stream",
        "data": {
          "summary": "<reason from eligibility result>",
          "pending_issues": ["<pending_zstream_issues>"],
-         "jira_issue": "{{jira_issue}}"
+         "jira_issue": "{{jira_issue}}",
+         "blocker_references": ["<pending_zstream_issues>"]
        }
      }
      ```
@@ -196,6 +197,15 @@ You must decide between one of the following actions. Follow these guidelines to
      b) The maintainer rules for the package (fetched via `get_maintainer_rules`) define criteria under which a rebase is the preferred resolution and those criteria are met for this issue.
    * Do not infer a rebase on your own — it must be justified by one of the two conditions above.
    * Identify the `package_version` the package should be updated or rebased to.
+   * **CRITICAL - Check if already at target version**: Before deciding on rebase, you MUST verify the package is not already at the target version in dist-git. Clone the package repository (if not already cloned) and check the current version in the spec file using:
+     `rpmspec -q --queryformat "%{VERSION}\n" --srpm <package>.spec | head -1`
+     Compare it with the target version using `rpmdev-vercmp <current> <target>`.
+     If the current version is equal to or newer than the target version:
+     - Search for the issue that performed this rebase using `search_jira_issues` with a query like: `project = RHEL AND component = "<package>" AND (summary ~ "rebase" OR summary ~ "update") AND summary ~ "<target_version>" AND status in (Closed, Done, Resolved) AND fixVersion = "<fix_version>"` Include fields `["key", "summary", "status", "customfield_10578"]` (Fixed in Build)
+     - Do NOT treat issues with status "In Progress" as proof that the package is already fixed — an in-progress rebase may not have produced a shipped build yet.
+     - Return resolution `"already-fixed"` instead of `"rebase"` only when a completed (Closed/Done/Resolved) issue with a non-empty Fixed in Build field is found.
+     - In the explanation field, reference the existing issue: "Package is already at version X.Y.Z in the <branch> branch (tracked by ISSUE-KEY with Fixed in Build: package-X.Y.Z-R.elN). Please add this ticket to that build's Errata."
+     - If no completed issue with a Fixed in Build value is found, return resolution `"clarification-needed"` with findings: "Package spec is already at version X.Y.Z in the <branch> branch, but no completed Jira issue with a Fixed in Build value was found." and additional_info_needed: "Please verify if a build exists for version X.Y.Z. If a build exists, provide the issue key and NVR so this ticket can be added to the appropriate Errata. If no build exists, proceed with the rebase."
    * You must provide a clear justification explaining why this version addresses the issue.
    * Set the Jira fields as per section 3.4 below.
 
@@ -502,22 +512,24 @@ After completing the analysis, set `triage_result` according to the resolution:
 ```
 Note: Include `side_tag` only for older z-stream rebuilds when the Jira issue mentions a build side-tag. Do not set it otherwise.
 
-**For postponed (rebuild waiting for dependency):**
+**For postponed (postponed_dependency, postponed_no_patch, postponed_pr_pending, postponed_y_stream):**
 ```json
 {
-  "resolution": "postponed",
+  "resolution": "<postponed_dependency|postponed_no_patch|postponed_pr_pending|postponed_y_stream>",
   "data": {
     "summary": "<reason for postponement>",
-    "pending_issues": ["<RHEL-NNNNN>"],
+    "pending_issues": ["<RHEL-NNNNN or URL>"],
     "jira_issue": "{{jira_issue}}",
-    "package": "<package_name>",
+    "blocker_references": ["<RHEL-NNNNN or URL>"],
+    "package": "<package_name or null>",
     "fix_version": "<rhel-X.Y or null>",
     "cve_id": "<CVE-YYYY-NNNNN or null>",
-    "dependency_issue": "<RHEL-NNNNN>",
-    "dependency_component": "<component_name>"
+    "dependency_issue": "<RHEL-NNNNN or null>",
+    "dependency_component": "<component_name or null>"
   }
 }
 ```
+Note: Use `postponed_dependency` for rebuilds waiting for a dependency to ship, `postponed_no_patch` when no upstream fix is available yet, `postponed_pr_pending` when the fix is in an unmerged PR/MR (include PR/MR URL in blocker_references), and `postponed_y_stream` when waiting for Z-stream clones to ship.
 
 **For clarification-needed:**
 ```json
@@ -559,6 +571,25 @@ Note: Include `side_tag` only for older z-stream rebuilds when the Jira issue me
   }
 }
 ```
+
+**For already-fixed:**
+```json
+{
+  "resolution": "already-fixed",
+  "data": {
+    "explanation": "<detailed explanation with reference to existing issue and build, or generic guidance>",
+    "jira_issue": "{{jira_issue}}",
+    "package": "<package_name>",
+    "package_nvr": "<package-X.Y.Z-R.elN or null>",
+    "package_issue_key": "<RHEL-NNNNN or null>",
+    "dependency_issue_key": "<RHEL-NNNNN or null>",
+    "dependency_nvr": "<dependency-X.Y.Z-R.elN or null>",
+    "cve_id": "<CVE-YYYY-NNNNN or null>",
+    "fix_version": "<rhel-X.Y or rhel-X.Y.z>"
+  }
+}
+```
+Note: Use this when the rebase, backport, or rebuild has already been completed. For rebases, set dependency fields to null. For rebuilds, include dependency_issue_key and dependency_nvr. If no Jira issue or build is found, set package_nvr and package_issue_key to null and include generic guidance in the explanation.
 
 **For error:**
 ```json
@@ -602,8 +633,8 @@ After the triage analysis, route to the next step based on `triage_result.resolu
 
 - If resolution is `"rebase"` → go to **Step 5: Verify Rebase Author**.
 - If resolution is `"backport"` or `"rebuild"` → go to **Step 6: Determine Target Branch**.
-- If resolution is `"postponed"` AND `triage_result.data` has a `package` field AND `cve_eligibility_result.is_cve` is true → go to **Step 6: Determine Target Branch**.
-- If resolution is `"clarification-needed"`, `"open-ended-analysis"`, `"not-affected"`, or `"postponed"` (without CVE/package) → go to **Step 11: Comment in JIRA**.
+- If resolution is `"postponed_dependency"` or `"postponed_no_patch"` or `"postponed_pr_pending"` or `"postponed_y_stream"` AND `triage_result.data` has a `package` field AND `cve_eligibility_result.is_cve` is true → go to **Step 6: Determine Target Branch**.
+- If resolution is `"clarification-needed"`, `"open-ended-analysis"`, `"not-affected"`, `"already-fixed"`, or any postponed resolution (without CVE/package) → go to **Step 11: Comment in JIRA**.
 - If resolution is `"error"` → go to **Step 11: Comment in JIRA**.
 
 ### Step 5: Verify Rebase Author
@@ -650,14 +681,14 @@ Map the `fix_version` from `triage_result.data` to a target dist-git branch:
 5. Save the result as `target_branch`.
 
 **Next step routing:**
-- If `cve_eligibility_result.is_cve` is true AND resolution is `"backport"`, `"rebuild"`, `"rebase"`, or `"postponed"` → go to **Step 7: Check CVE Applicability**.
+- If `cve_eligibility_result.is_cve` is true AND resolution is `"backport"`, `"rebuild"`, `"rebase"`, `"postponed_dependency"`, `"postponed_no_patch"`, `"postponed_pr_pending"`, or `"postponed_y_stream"` → go to **Step 7: Check CVE Applicability**.
 - If resolution is `"rebuild"` (non-CVE) → go to **Step 9: Consolidate Rebuild Siblings**.
 - If resolution is `"rebase"` (non-CVE) → go to **Step 10: Consolidate Rebase Siblings**.
 - Otherwise → go to **Step 11: Comment in JIRA**.
 
 ### Step 7: Check CVE Applicability
 
-**Only run this step if `cve_eligibility_result.is_cve` is true AND resolution is `"backport"`, `"rebuild"`, `"rebase"`, or `"postponed"`.**
+**Only run this step if `cve_eligibility_result.is_cve` is true AND resolution is `"backport"`, `"rebuild"`, `"rebase"`, `"postponed_dependency"`, `"postponed_no_patch"`, `"postponed_pr_pending"`, or `"postponed_y_stream"`.**
 
 This step analyzes whether the CVE actually affects the package by examining the source code.
 
@@ -791,7 +822,7 @@ Find sibling Jira issues that can share a single rebuild MR.
 
 2. Search for sibling issues using `search_jira_issues` with JQL:
    ```
-   project = RHEL AND component = "<package>" AND fixVersion in ("<fix_version>", "<fix_version_variants>") AND key != "{{jira_issue}}" AND labels = "SecurityTracking" AND labels not in ("ymir_triaged_rebuild", "ymir_rebuilt", "ymir_triaged_not_affected", "ymir_triaged_backport", "ymir_triaged_rebase") AND status in ("New", "Planning")
+   project = RHEL AND component = "<package>" AND fixVersion in ("<fix_version>", "<fix_version_variants>") AND key != "{{jira_issue}}" AND labels = "SecurityTracking" AND labels not in ("ymir_triaged_rebuild", "ymir_rebuilt", "ymir_triaged_not_affected", "ymir_triaged_already_fixed", "ymir_triaged_backport", "ymir_triaged_rebase") AND status in ("New", "Planning")
    ```
    Request fields: `["key", "summary"]`, max_results: 50.
 
@@ -846,7 +877,7 @@ Queue sibling Jira issues for triage and decide whether the primary issue should
 
 3. **Search for sibling candidates.** If `triage_result.data.fix_version` is not set, skip to **Step 11**. Otherwise, use `search_jira_issues` with JQL:
    ```
-   project = RHEL AND component = "<package>" AND fixVersion in ("<fix_version>", "<fix_version_variants>") AND key != "{{jira_issue}}" AND labels = "SecurityTracking" AND labels not in ("ymir_triaged_not_affected", "ymir_triaged_backport", "ymir_triaged_rebuild", "ymir_triaged_rebase", "ymir_triaged_postponed") AND status in ("New", "Planning")
+   project = RHEL AND component = "<package>" AND fixVersion in ("<fix_version>", "<fix_version_variants>") AND key != "{{jira_issue}}" AND labels = "SecurityTracking" AND labels not in ("ymir_triaged_not_affected", "ymir_triaged_already_fixed", "ymir_triaged_backport", "ymir_triaged_rebuild", "ymir_triaged_rebase", "ymir_triaged_postponed") AND status in ("New", "Planning")
    ```
    Request fields: `["key", "summary"]`, max_results: 50.
 
@@ -854,7 +885,7 @@ Queue sibling Jira issues for triage and decide whether the primary issue should
 
 4. **For each candidate sibling:**
    a. Call `check_cve_triage_eligibility` with the candidate's issue key. If not eligible (`eligibility` is not `"immediately"`), exclude it.
-   b. Check the candidate's labels for any terminal labels (`ymir_rebase_sibling`, `ymir_triaged_rebase`, `ymir_triaged_backport`, `ymir_triaged_rebuild`, `ymir_triaged_not_affected`, `ymir_triaged_postponed`, `ymir_backported`, `ymir_rebased`, `ymir_rebuilt`). If any are present, exclude it.
+   b. Check the candidate's labels for any terminal labels (`ymir_rebase_sibling`, `ymir_triaged_rebase`, `ymir_triaged_backport`, `ymir_triaged_rebuild`, `ymir_triaged_not_affected`, `ymir_triaged_already_fixed`, `ymir_triaged_postponed`, `ymir_backported`, `ymir_rebased`, `ymir_rebuilt`). If any are present, exclude it.
    c. If `dry_run` is false and the candidate passes all checks:
       - Add the `ymir_rebase_sibling` label to the candidate using `edit_jira_labels`.
       - Post a comment on the candidate: `"Queued for triage as potential sibling of {{jira_issue}}"` using `add_jira_comment`.
@@ -878,7 +909,7 @@ If `dry_run` is true, end the workflow and output the `triage_result`.
 
 Comments are posted when:
 - `user_triggered` is true (always post for user-triggered runs), OR
-- `triage_result.resolution` is one of: `"not-affected"`, `"postponed"`, `"open-ended-analysis"`, `"clarification-needed"` (resolutions that produce no downstream MR, so the comment is the only visible explanation).
+- `triage_result.resolution` is one of: `"not-affected"`, `"already-fixed"`, `"postponed_dependency"`, `"postponed_no_patch"`, `"postponed_pr_pending"`, `"postponed_y_stream"`, `"open-ended-analysis"`, `"clarification-needed"` (resolutions that produce no downstream MR, so the comment is the only visible explanation).
 
 For all other resolutions when `user_triggered` is false (i.e., `"rebase"`, `"backport"`, `"rebuild"`, `"error"`), do NOT post a JIRA comment — end the workflow and output the `triage_result`.
 
@@ -939,9 +970,9 @@ _Note: Automated resolution for this resolution type is not yet supported by Ymi
 <disclaimer>
 ```
 
-**For postponed:**
+**For postponed (postponed_dependency, postponed_no_patch, postponed_pr_pending, postponed_y_stream):**
 ```
-*Resolution*: postponed
+*Resolution*: <postponed_dependency|postponed_no_patch|postponed_pr_pending|postponed_y_stream>
 *Summary*: <summary>
 *Waiting for*:  (or *Waiting for at least one of*: if multiple)
 * <pending_issue_1>
@@ -954,6 +985,16 @@ _Note: Automated resolution for this resolution type is not yet supported by Ymi
 *Recommendation: Not a Bug / <justification_category>*
 
 <explanation>
+<disclaimer>
+```
+
+**For already-fixed:**
+```
+*Resolution*: already-fixed
+
+<explanation>
+
+_The fix is already present. Please add this issue to the existing build's errata._
 <disclaimer>
 ```
 
@@ -982,7 +1023,7 @@ The final output must be a JSON object:
 
 ```json
 {
-  "resolution": "<rebase|backport|rebuild|clarification-needed|open-ended-analysis|postponed|not-affected|error>",
+  "resolution": "<rebase|backport|rebuild|clarification-needed|open-ended-analysis|postponed_dependency|postponed_no_patch|postponed_pr_pending|postponed_y_stream|not-affected|already-fixed|error>",
   "data": { ... }
 }
 ```
@@ -1043,14 +1084,15 @@ Note: When the Jira issue covers multiple CVEs, include ALL CVE IDs in `cve_id`,
 }
 ```
 
-**Postponed example:**
+**Postponed example (postponed_dependency):**
 ```json
 {
-  "resolution": "postponed",
+  "resolution": "postponed_dependency",
   "data": {
     "summary": "Rebuild of some-package waiting for RHEL-67890 (golang) to ship",
     "pending_issues": ["RHEL-67890"],
     "jira_issue": "RHEL-12345",
+    "blocker_references": ["RHEL-67890"],
     "package": "some-package",
     "fix_version": "rhel-9.8.z",
     "cve_id": "CVE-1234-98765",
@@ -1073,6 +1115,24 @@ Note: When the Jira issue covers multiple CVEs, include ALL CVE IDs in `cve_id`,
     "fix_version": "rhel-10.1",
     "triage_summary": "Compared NVD affected versions against the shipped package version.",
     "patch_urls": null
+  }
+}
+```
+
+**Already-fixed example:**
+```json
+{
+  "resolution": "already-fixed",
+  "data": {
+    "explanation": "Package is already at version 2.3.4 in the rhel-9.8 branch (tracked by RHEL-67890 with Fixed in Build: libfoo-2.3.4-1.el9). Please add this ticket to that build's Errata.",
+    "jira_issue": "RHEL-12345",
+    "package": "libfoo",
+    "package_nvr": "libfoo-2.3.4-1.el9",
+    "package_issue_key": "RHEL-67890",
+    "dependency_issue_key": null,
+    "dependency_nvr": null,
+    "cve_id": "CVE-2025-12345",
+    "fix_version": "rhel-9.8"
   }
 }
 ```

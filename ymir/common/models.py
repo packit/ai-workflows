@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 
 from ymir.common.validators import UniqueSortedList
 
@@ -262,6 +262,7 @@ class Resolution(Enum):
     CLARIFICATION_NEEDED = "clarification-needed"
     OPEN_ENDED_ANALYSIS = "open-ended-analysis"
     NOT_AFFECTED = "not-affected"
+    ALREADY_FIXED = "already-fixed"  # Build already contains fix, needs errata processing
     ERROR = "error"
     # Postponement resolutions, broken down by the reason for postponing.
     # The reason is carried by the resolution itself (there is no separate
@@ -509,6 +510,33 @@ class NotAffectedData(BaseModel):
     )
 
 
+class AlreadyFixedData(BaseModel):
+    """Data for already-fixed resolution (build already contains fix, needs errata processing)."""
+
+    explanation: str = Field(
+        description="Detailed explanation of how the build was verified to contain the fix"
+    )
+    jira_issue: str = Field(description="Jira issue identifier")
+    package: str = Field(description="Package name")
+    package_nvr: str | None = Field(
+        default=None, description="Package NVR that already contains the fix (if known)"
+    )
+    package_issue_key: str | None = Field(
+        default=None, description="Jira issue key for the existing build with the fix (if found)"
+    )
+    dependency_issue_key: str | None = Field(
+        default=None, description="Jira issue key for the dependency fix (null for rebases)"
+    )
+    dependency_nvr: str | None = Field(
+        default=None, description="Dependency NVR that was used in the build (null for rebases)"
+    )
+    cve_id: str | None = Field(
+        default=None,
+        description="CVE identifier(s); include ALL CVE IDs when the issue covers multiple CVEs",
+    )
+    fix_version: str | None = Field(default=None, description="Fix version in Jira (e.g., 'rhel-9.8')")
+
+
 class ApplicabilityResult(BaseModel):
     """Output schema for the CVE applicability check agent."""
 
@@ -565,12 +593,28 @@ AUTOMATED_RESOLUTION_NOT_SUPPORTED = (
 POSTPONEMENT_NOTE = "\n\n_This issue will be monitored by Ymir and processed once it is unblocked._"
 
 
+_RESOLUTION_DATA_MAP: dict[Resolution, type[BaseModel]] = {
+    Resolution.REBASE: RebaseData,
+    Resolution.BACKPORT: BackportData,
+    Resolution.REBUILD: RebuildData,
+    Resolution.CLARIFICATION_NEEDED: ClarificationNeededData,
+    Resolution.OPEN_ENDED_ANALYSIS: OpenEndedAnalysisData,
+    Resolution.ALREADY_FIXED: AlreadyFixedData,
+    Resolution.NOT_AFFECTED: NotAffectedData,
+    Resolution.ERROR: ErrorData,
+    Resolution.POSTPONED_DEPENDENCY: PostponedData,
+    Resolution.POSTPONED_Y_STREAM: PostponedData,
+    Resolution.POSTPONED_NO_PATCH: PostponedData,
+    Resolution.POSTPONED_PR_PENDING: PostponedData,
+}
+
+
 class TriageOutputSchema(BaseModel):
     """Output schema for the triage agent."""
 
     resolution: Resolution = Field(
         description="Triage resolution, one of rebase, backport, rebuild, "
-        "clarification-needed, open-ended-analysis, not-affected, error, "
+        "clarification-needed, open-ended-analysis, not-affected, already-fixed, error, "
         "postponed_dependency, postponed_no_patch, postponed_pr_pending"
     )
     data: (
@@ -580,9 +624,25 @@ class TriageOutputSchema(BaseModel):
         | ClarificationNeededData
         | OpenEndedAnalysisData
         | PostponedData
+        | AlreadyFixedData
         | NotAffectedData
         | ErrorData
     ) = Field(description="Associated data")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _select_data_model(cls, values: Any) -> Any:
+        if not isinstance(values, dict):
+            return values
+        resolution_raw = values.get("resolution")
+        data_raw = values.get("data")
+        if resolution_raw is None or data_raw is None or not isinstance(data_raw, dict):
+            return values
+        resolution = Resolution(resolution_raw) if isinstance(resolution_raw, str) else resolution_raw
+        expected_cls = _RESOLUTION_DATA_MAP.get(resolution)
+        if expected_cls is not None:
+            values["data"] = expected_cls.model_validate(data_raw)
+        return values
 
     def format_for_comment(self, auto_chain: bool = False) -> str:
         """Format the triage result in a human-readable format for Jira comments."""
@@ -733,6 +793,30 @@ class TriageOutputSchema(BaseModel):
                     f"*Recommendation: Not a Bug / {category}*\n\n"
                     f"{self.data.explanation}{vex_guide}{TRIAGE_DISCLAIMER}"
                 )
+
+            case AlreadyFixedData():
+                lines = [f"{resolution}*Package*: {self.data.package}\n"]
+                if self.data.package_nvr and self.data.package_issue_key:
+                    lines.append(
+                        f"*Build with Fix*: {self.data.package_nvr} ({self.data.package_issue_key})\n"
+                    )
+                if self.data.dependency_nvr and self.data.dependency_issue_key:
+                    lines.append(
+                        f"*Dependency Fix*: {self.data.dependency_nvr} ({self.data.dependency_issue_key})\n"
+                    )
+                lines.append(f"\n{self.data.explanation}\n\n")
+                if self.data.package_nvr:
+                    lines.append(
+                        f"*Action Required*: Add build {self.data.package_nvr} to the errata for "
+                        f"{self.data.fix_version or 'the appropriate release'}."
+                    )
+                else:
+                    lines.append(
+                        "*Action Required*: Search for the existing build and add this ticket to the "
+                        "appropriate Errata."
+                    )
+                lines.append(f"{AUTOMATED_RESOLUTION_NOT_SUPPORTED}{TRIAGE_DISCLAIMER}")
+                return "".join(lines)
 
             case ErrorData():
                 return f"{resolution}*Details*: {self.data.details}{TRIAGE_DISCLAIMER}"

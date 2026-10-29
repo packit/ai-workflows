@@ -2,6 +2,32 @@
 
 This document describes how the AI Workflows system interacts with Brew (Koji) and Konflux for RHEL package builds.
 
+## Build identity and epoch resolution
+
+Jira's **Fixed in Build** field supplies an NVR without an authoritative epoch.
+Triage may parse it into a provisional `NEVR` to validate its syntax, but the
+parsed epoch is not authoritative. Rebuild dependency checks resolve the build
+against Brew and replace that provisional NEVR before comparing versions.
+An explicit null epoch in Brew metadata means zero; an absent epoch field means
+the metadata is incomplete. Fixed dependency resolution and rebuilt-package
+verification use Brew.
+
+Resolved builds retain their NEVR and Brew metadata for version comparisons,
+architecture discovery, and timestamp fallback without repeating successful
+lookups. Unresolved active builds retain their original NVR and require
+clarification. Installed binary RPMs are resolved through `getRPM()` and their
+source build's `getBuild()` metadata; their versions and epochs are never assumed
+to equal those of the source package. NVR strings are produced again when
+serializing results or calling external APIs that require them.
+
+Verification examines every discovered closed and active Jira build reference.
+Transient Brew lookup, log retrieval, and Jira query failures propagate to the
+existing task retry handler. Final metadata problems and ambiguous results request
+clarification with all issue keys, NVRs, available Brew NEVRs and build IDs, and the
+collected errors. Neither a transient failure nor an inconclusive comparison
+authorizes a new rebuild.
+
+
 ## System Architecture
 
 ```mermaid

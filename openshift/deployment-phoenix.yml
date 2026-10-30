@@ -53,9 +53,21 @@ spec:
           value: postgresql://$(PHOENIX_POSTGRES_USER):$(PHOENIX_POSTGRES_PASSWORD)@phoenix-db/$(PHOENIX_POSTGRES_DB)
         - name: PHOENIX_MIGRATE_INDEX_CONCURRENTLY
           value: "true"
+        - name: PHOENIX_HOST
+          value: "0.0.0.0"
+        # Preserve unauthenticated access on the internal route. Phoenix 21
+        # otherwise enables authentication for non-loopback bind addresses.
+        - name: PHOENIX_ENABLE_AUTH
+          value: "false"
         image: phoenix:prod
         imagePullPolicy: IfNotPresent
         name: phoenix
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 6006
+          periodSeconds: 10
+          timeoutSeconds: 5
         ports:
         - containerPort: 4317
           protocol: TCP

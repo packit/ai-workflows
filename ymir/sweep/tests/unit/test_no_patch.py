@@ -5,6 +5,7 @@ import redis
 from flexmock import flexmock
 
 from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.models import Task
 from ymir.sweep.no_patch import _MAX_ISSUES_DEFAULT, NoPatchSweep
 from ymir.sweep.tests.unit.conftest import make_issue
 
@@ -57,6 +58,28 @@ async def test_run_requeues_eligible_issues(monkeypatch):
     assert summary["still_blocked"] == 0
     assert summary["errors"] == 0
     assert all(q == RedisQueues.TRIAGE_QUEUE.value for q in queued)
+
+
+@pytest.mark.asyncio
+async def test_run_carries_triage_only_marker(monkeypatch):
+    """A per-issue triage-only request must survive the no-patch sweep."""
+    issues = [
+        make_issue(key="RHEL-1", labels=[JiraLabels.TRIAGE_ONLY.value]),
+        make_issue(key="RHEL-2"),
+    ]
+    _set_get_blocked(monkeypatch, issues)
+    _patch_remove_label(monkeypatch)
+    _patch_add_label(monkeypatch)
+
+    payloads = []
+    mock_redis = flexmock()
+    mock_redis.should_receive("lpush").replace_with(lambda queue, payload: payloads.append(payload))
+
+    await NoPatchSweep().run(mock_redis)
+
+    # The sweep preserves issue order: RHEL-1 carries the marker, RHEL-2 does not.
+    assert Task.model_validate_json(payloads[0]).triage_only is True
+    assert Task.model_validate_json(payloads[1]).triage_only is False
 
 
 @pytest.mark.asyncio

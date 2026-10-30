@@ -1,3 +1,6 @@
+import json
+from contextlib import asynccontextmanager
+
 import pytest
 from flexmock import flexmock
 
@@ -7,11 +10,13 @@ from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
     build_rebase_siblings_jql,
     changelog_entry_headers,
+    check_and_queue_primary_if_ready,
     find_triaged_rebase_siblings,
     has_new_latest_changelog_entry,
+    sibling_link_is_stale,
     uses_autochangelog,
 )
-from ymir.common.constants import JiraLabels
+from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import ConsolidatedIssue, RebaseData
 from ymir.common.utils import extract_text_from_adf
 
@@ -595,3 +600,106 @@ async def test_find_triaged_rebase_siblings_requires_exact_primary_key(monkeypat
         available_tools=[],
     )
     assert siblings == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "labels", "expected"),
+    [
+        ("Closed", [], True),
+        ("New", [JiraLabels.REBASED.value], True),
+        ("New", [JiraLabels.TRIAGED_DEFERRED_REBASE.value], True),
+        ("New", [JiraLabels.WAITING_FOR_SIBLINGS.value], False),
+    ],
+)
+async def test_sibling_link_is_stale_follows_primary_state(monkeypatch, status, labels, expected):
+    async def run_tool(name, **kwargs):
+        assert name == "get_jira_details"
+        assert kwargs["issue_key"] == "RHEL-100"
+        return {"fields": {"status": {"name": status}, "labels": labels}}
+
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    assert await sibling_link_is_stale("RHEL-100", []) is expected
+
+
+@pytest.mark.asyncio
+async def test_sibling_link_is_stale_propagates_lookup_errors(monkeypatch):
+    """The caller decides whether an unreadable primary defers or fails the run."""
+
+    async def run_tool(*_args, **_kwargs):
+        raise Exception("MCP Gateway unreachable")
+
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    with pytest.raises(Exception, match="MCP Gateway unreachable"):
+        await sibling_link_is_stale("RHEL-100", [])
+
+
+@pytest.mark.asyncio
+async def test_primary_requeue_preserves_triage_only_intent(monkeypatch):
+    """A waiting primary re-queued by its last sibling must keep its own intent.
+
+    Siblings inherit ``user_triggered`` from the run that queued them, so without
+    reading the primary's labels the re-triage would silently drop a
+    per-issue triage-only request and start the fix.
+    """
+    pushed = []
+
+    async def run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            # An unrelated in-progress issue must neither block nor shadow the
+            # primary's labels (the pending-sibling scan reuses local names).
+            return [
+                {
+                    "key": "RHEL-300",
+                    "fields": {
+                        "labels": [JiraLabels.TRIAGE_IN_PROGRESS.value],
+                        "comment": {"comments": []},
+                    },
+                }
+            ]
+        if kwargs["issue_key"] == "RHEL-200":
+            return {
+                "fields": {
+                    "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]}
+                }
+            }
+        return {
+            "fields": {
+                "labels": [
+                    JiraLabels.WAITING_FOR_SIBLINGS.value,
+                    JiraLabels.TRIAGE_ONLY.value,
+                ],
+                "components": [{"name": "bash"}],
+                "fixVersions": [{"name": "rhel-10.3.z"}],
+            }
+        }
+
+    async def record(*_args, **_kwargs):
+        return None
+
+    class FakeRedis:
+        async def lpush(self, queue, payload):
+            pushed.append((queue, payload))
+
+    @asynccontextmanager
+    async def fake_redis_client(_url):
+        yield FakeRedis()
+
+    async def fake_fix_await(value):
+        return await value
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
+    monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
+    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
+    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+
+    await check_and_queue_primary_if_ready(
+        sibling_issue="RHEL-200", available_tools=[], dry_run=False, user_triggered=True
+    )
+
+    assert len(pushed) == 1
+    queue, payload = pushed[0]
+    assert queue == RedisQueues.TRIAGE_QUEUE.value
+    assert json.loads(payload)["triage_only"] is True

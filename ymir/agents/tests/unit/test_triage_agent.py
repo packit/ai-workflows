@@ -4,6 +4,9 @@ import pytest
 from flexmock import flexmock
 
 from ymir.agents import (
+    rebase_consolidation,
+)
+from ymir.agents import (
     tasks as agent_tasks,
 )
 from ymir.agents import (
@@ -14,10 +17,12 @@ from ymir.agents.triage_agent import (
     TriageState,
     _build_reproducer_input,
     _defers_fix,
+    _is_rebase_sibling,
     _map_version_to_module_branch,
     _postponed_comment_exists,
     _record_auto_processing_policy,
     _resolution_label,
+    _should_defer_terminal_label,
     _should_update_jira,
     _terminal_ymir_labels,
     determine_target_branch,
@@ -1512,3 +1517,117 @@ def test_jira_comment_template_output_unchanged():
     """Rebuilding JIRA_COMMENT_TEMPLATE from the shared marker keeps output identical."""
     rendered = JIRA_COMMENT_TEMPLATE.substitute(AGENT_TYPE="Triage", JIRA_COMMENT="hello")
     assert rendered.startswith("Output from Ymir Triage Agent: \n\nhello\n\n")
+
+
+@pytest.mark.parametrize(
+    ("triage_only", "expected"),
+    [(False, True), (True, False)],
+)
+def test_terminal_label_wait_is_ended_by_triage_only(triage_only, expected):
+    """A triage-only run is an explicit stop, so it must not leave the wait dangling."""
+    assert _should_defer_terminal_label(Resolution.REBASE, triage_only, waiting_for_siblings=True) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("primary_stale", "expected"), [(True, False), (False, True)])
+async def test_is_rebase_sibling_follows_primary_state(monkeypatch, primary_stale, expected):
+    """A permanent sibling marker defers only while its primary is still working."""
+
+    async def fake_run_tool(name, **kwargs):
+        assert name == "get_jira_details"
+        return {
+            "fields": {
+                "labels": [],
+                "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
+            }
+        }
+
+    async def fake_stale(primary_issue, available_tools):
+        assert primary_issue == "RHEL-100"
+        return primary_stale
+
+    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
+
+    state = TriageState(jira_issue="RHEL-200")
+    assert await _is_rebase_sibling(state, [], user_triggered=False) is expected
+
+
+@pytest.mark.asyncio
+async def test_is_rebase_sibling_keeps_deferring_without_a_link(monkeypatch):
+    """Labelled sibling whose marker cannot be read must still defer (fail safe)."""
+
+    async def fake_run_tool(name, **kwargs):
+        return {"fields": {"labels": [JiraLabels.REBASE_SIBLING.value]}}
+
+    async def fake_stale(*_args):
+        raise AssertionError("primary lookup must not be attempted without a link")
+
+    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
+
+    state = TriageState(jira_issue="RHEL-200")
+    assert await _is_rebase_sibling(state, [], user_triggered=False) is True
+
+
+@pytest.mark.asyncio
+async def test_is_rebase_sibling_runs_own_fix_after_primary_deferred(monkeypatch):
+    """Sequence: primary stopped after triage, sibling then explicitly requested.
+
+    The primary's deferred label means it will not pick the sibling up, so the
+    sibling's ``ymir_todo`` must run its own rebase rather than follow the stale
+    permanent comment link.
+    """
+
+    async def fake_run_tool(name, **kwargs):
+        if kwargs["issue_key"] == "RHEL-200":
+            return {
+                "fields": {
+                    "labels": [],
+                    "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
+                }
+            }
+        assert kwargs["issue_key"] == "RHEL-100"
+        return {
+            "fields": {
+                "status": {"name": "In Progress"},
+                "labels": [JiraLabels.TRIAGED_DEFERRED_REBASE.value],
+            }
+        }
+
+    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(rebase_consolidation, "run_tool", fake_run_tool)
+
+    state = TriageState(jira_issue="RHEL-200")
+    assert await _is_rebase_sibling(state, [], user_triggered=True) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("user_triggered", "expects_raise"), [(True, True), (False, False)])
+async def test_is_rebase_sibling_unknown_primary_state(monkeypatch, user_triggered, expects_raise):
+    """An unreadable primary keeps an automatic run deferring but fails an explicit one.
+
+    Deferring an explicit ``ymir_todo`` would write a triage label and silently
+    drop the requested fix, so that run raises into the task retry path instead.
+    """
+
+    async def fake_run_tool(name, **kwargs):
+        return {
+            "fields": {
+                "labels": [],
+                "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
+            }
+        }
+
+    async def failing_stale(*_args):
+        raise RuntimeError("Jira unavailable")
+
+    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(t_agent, "sibling_link_is_stale", failing_stale)
+
+    state = TriageState(jira_issue="RHEL-200")
+    if expects_raise:
+        with pytest.raises(RuntimeError, match="RHEL-200"):
+            await _is_rebase_sibling(state, [], user_triggered=user_triggered)
+    else:
+        assert await _is_rebase_sibling(state, [], user_triggered=user_triggered) is True

@@ -26,6 +26,7 @@ from ymir.agents.rebase_consolidation import (
     check_and_queue_primary_if_ready,
     get_rebase_primary_issue,
     queue_siblings_for_triage,
+    sibling_link_is_stale,
 )
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
 from ymir.agents.tasks import InvalidReproducerConfigError
@@ -232,6 +233,67 @@ def _defers_fix(resolution: Resolution, triage_only: bool) -> bool:
     actually deferred.
     """
     return triage_only and resolution in _DEFERRED_LABEL_BY_RESOLUTION
+
+
+def _should_defer_terminal_label(
+    resolution: Resolution, triage_only: bool, waiting_for_siblings: bool
+) -> bool:
+    """Whether the terminal label must wait for pending rebase siblings.
+
+    A triage-only run is an explicit stop, so it writes the deferred label and
+    ends the sibling wait instead of leaving the issue waiting for a re-triage
+    that would inherit the triage-only intent anyway.
+    """
+    return resolution == Resolution.REBASE and waiting_for_siblings and not triage_only
+
+
+async def _is_rebase_sibling(state, available_tools, user_triggered: bool) -> bool:
+    """Whether this issue is a sibling whose primary still awaits it.
+
+    The sibling marker is a permanent Jira comment (plus a label), so a link to a
+    primary that already finished is stale: an explicit ``ymir_todo`` must run
+    this issue's own fix instead of deferring forever.
+
+    An unreadable link keeps the deferral on automatic runs, but fails an
+    explicit run: silently writing a triage label would consume the requested
+    fix. The error uses the task retry path like any other Jira failure.
+    """
+    try:
+        details = await run_tool(
+            "get_jira_details",
+            issue_key=state.jira_issue,
+            available_tools=available_tools,
+        )
+    except Exception as e:
+        if user_triggered and state.is_rebase_sibling:
+            raise RuntimeError(f"Cannot verify the sibling link of {state.jira_issue}: {e}") from e
+        logger.warning(f"Failed to read sibling marker for {state.jira_issue}: {e}")
+        details = {}
+
+    labels = details.get("fields", {}).get("labels", [])
+    primary_issue = get_rebase_primary_issue(details)
+    if not (
+        state.is_rebase_sibling or JiraLabels.REBASE_SIBLING.value in labels or primary_issue is not None
+    ):
+        return False
+    if primary_issue is None:
+        # Sibling without a readable link: keep deferring.
+        return True
+    try:
+        stale = await sibling_link_is_stale(primary_issue, available_tools)
+    except Exception as e:
+        if user_triggered:
+            raise RuntimeError(
+                f"Cannot verify the sibling link of {state.jira_issue} to {primary_issue}: {e}"
+            ) from e
+        logger.warning(f"Failed to read primary {primary_issue} while checking sibling link: {e}")
+        return True
+    if stale:
+        logger.info(
+            f"Ignoring stale sibling link on {state.jira_issue}: primary {primary_issue} already finished"
+        )
+        return False
+    return True
 
 
 _REPRODUCER_ELIGIBLE_RESOLUTIONS = frozenset(
@@ -1438,39 +1500,16 @@ async def run_workflow(
                 return "comment_in_jira"
             rebase_data = state.triage_result.data
 
-            # Skip consolidation if this issue is already a sibling of another primary
-            # Check both label (set when queued) and comments (may not be labeled yet due to race)
-            current_labels, _ = await tasks.get_jira_issue_metadata(state.jira_issue)
-            if state.is_rebase_sibling or JiraLabels.REBASE_SIBLING.value in current_labels:
-                state.is_rebase_sibling = True
-                logger.info(f"Issue {state.jira_issue} has ymir_rebase_sibling label, skipping consolidation")
-                # Don't search for siblings or set waiting flag
+            # Siblings must not search for their own siblings (prevents circular
+            # dependencies). The marker is permanent, so re-check it every run: once
+            # the primary has finished, this issue must run its own fix.
+            state.is_rebase_sibling = await _is_rebase_sibling(state, gateway_tools, user_triggered)
+            if state.is_rebase_sibling:
+                logger.info(f"Issue {state.jira_issue} is a sibling, skipping consolidation")
                 state.rebase_waiting_for_siblings = False
                 rebase_data.consolidated_issues = []
                 rebase_data.consolidation_summary = None
                 return "comment_in_jira"
-
-            # Also check comments for "Queued for triage as potential sibling" (label may not be set yet)
-            # Siblings should NOT search for their own siblings (prevents circular dependencies)
-            try:
-                details = await run_tool(
-                    "get_jira_details",
-                    issue_key=state.jira_issue,
-                    available_tools=gateway_tools,
-                )
-                comments = details.get("fields", {}).get("comment", {}).get("comments", [])
-                for comment in comments:
-                    # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
-                    comment_text = extract_text_from_adf(comment.get("body", ""))
-                    if "Queued for triage as potential sibling of" in comment_text:
-                        state.is_rebase_sibling = True
-                        logger.info(f"Issue {state.jira_issue} is a sibling, skipping consolidation")
-                        state.rebase_waiting_for_siblings = False
-                        rebase_data.consolidated_issues = []
-                        rebase_data.consolidation_summary = None
-                        return "comment_in_jira"
-            except Exception as e:
-                logger.warning(f"Failed to check comments for {state.jira_issue}: {e}, proceeding")
 
             # Queue siblings for triage
             sibling_count = await queue_siblings_for_triage(
@@ -2067,23 +2106,23 @@ async def main() -> None:
                                 f"{input.issue} is a sibling, will check if primary is ready to queue"
                             )
 
-                        # Only add terminal label if NOT waiting for siblings
-                        # (primary waiting for siblings will be re-triaged when siblings finish,
-                        # and terminal label will be added then)
-                        if not (
-                            output.resolution == Resolution.REBASE
-                            and (
-                                state.rebase_waiting_for_siblings
-                                or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
-                            )
+                        # A full run waiting for siblings is re-triaged when they
+                        # finish, so its terminal label is added then. A triage-only
+                        # run ends the wait here instead of leaving it dangling.
+                        waiting_for_siblings = (
+                            state.rebase_waiting_for_siblings
+                            or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                        )
+                        if _should_defer_terminal_label(
+                            output.resolution, state.triage_only, waiting_for_siblings
                         ):
-                            labels_to_add.append(resolution_label.value)
-                            labels_to_remove.append(JiraLabels.WAITING_FOR_SIBLINGS.value)
-                        else:
                             logger.info(
                                 f"{input.issue} is waiting for siblings, skipping terminal label "
                                 "(will be added on re-triage after siblings finish)"
                             )
+                        else:
+                            labels_to_add.append(resolution_label.value)
+                            labels_to_remove.append(JiraLabels.WAITING_FOR_SIBLINGS.value)
 
                         await tasks.set_jira_labels(
                             jira_issue=input.issue,

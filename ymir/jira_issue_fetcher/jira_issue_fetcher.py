@@ -939,6 +939,20 @@ class JiraIssueFetcher:
                         logger.warning(f"Failed to remove {labels_to_remove} from {issue_key}: {e}")
                 continue
 
+            # MR consolidation doesn't support modular packages yet (the consolidation
+            # build never enables a module stream in the Copr buildroot) — skip rather
+            # than risk a broken consolidated build. Labels are left untouched so a
+            # maintainer can see why nothing happened.
+            downstream_component = fields.get("customfield_10669") or ""
+            if self.MODULAR_COMPONENT_PATTERN.match(downstream_component):
+                logger.warning(
+                    "Issue %s has a consolidation label but is a modular issue (%s) — "
+                    "skipping, MR consolidation for modular packages is not yet supported",
+                    issue_key,
+                    downstream_component,
+                )
+                continue
+
             components = [c.get("name") for c in (fields.get("components") or []) if c.get("name")]
             if not components:
                 logger.warning(

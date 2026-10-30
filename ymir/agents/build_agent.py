@@ -81,13 +81,14 @@ async def run_build(
             result.is_timeout,
         )
         if result.success:
-            state.output = BuildOutputSchema(success=True, error=None)
+            state.output = BuildOutputSchema(success=True, error=None, build_url=result.build_url)
             return Workflow.END
 
         state.output = BuildOutputSchema(
             success=False,
             error=result.error_message or "Copr build failed without an error message",
             is_timeout=result.is_timeout,
+            build_url=result.build_url,
         )
         if result.is_timeout:
             return Workflow.END

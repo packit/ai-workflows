@@ -125,6 +125,10 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
    - Use the `run_package_prep` tool to verify patches apply cleanly
    - Use the `build_srpm` tool to generate a SRPM
    - Call `build_package` with the SRPM path, dist_git_branch, and jira_issue
+{% if module_stream %}
+     Also pass module_stream="{{ module_stream }}" — this is a modular package and the
+     module stream must be enabled in the buildroot for BuildRequires to resolve.
+{% endif %}
    - If build fails: use `download_artifacts` to get logs and identify the new error
 {% if has_extract_log_snippets %}
    - Use `extract_log_snippets` with `log_path` pointing to `builder-live.log`
@@ -253,5 +257,7 @@ SPECIAL CONSIDERATIONS FOR TEST FAILURES:
 
 Report success=true with SRPM path if build passes.
 Report success=false with the extracted error if build fails or you can't find a fix.
+Always include the build_url returned by the build_package tool in your output so
+the caller can link to the correct Copr build in Jira.
 
 Unpacked upstream sources are in {{ unpacked_sources }}.

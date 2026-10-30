@@ -88,6 +88,13 @@ class BuildPackageToolInput(BaseModel):
     srpm_path: AbsolutePath = Field(description="Absolute path to SRPM (*.src.rpm) file to build")
     dist_git_branch: str = Field(description="dist-git branch")
     jira_issue: str = Field(description="Jira issue key (e.g. RHEL-12345)")
+    module_stream: str | None = Field(
+        default=None,
+        description=(
+            "'module:stream' to enable in the chroot buildroot (e.g. 'postgresql:16'). "
+            "Required for modular package builds so BuildRequires resolve from the module."
+        ),
+    )
 
 
 class BuildPackageToolOutput(JSONToolOutput[BuildResult]):
@@ -183,6 +190,21 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
             f"brewroot/repos/{buildroot_branch}"
             f"{'-z-build' if is_zstream else '-build'}/latest/{build_arch}?module_hotfixes=True",
         )
+        # The Brew buildroot repo above is a flattened, non-modular repo (it
+        # carries no modules.yaml) — the default module stream is already
+        # resolved into it at compose time. To enable a *non-default* module
+        # stream via `additional_modules`, we also need a repo that actually
+        # carries module metadata: the real AppStream compose tree for the
+        # same RHEL version, e.g.
+        # https://.../rhel-9/rel-eng/RHEL-9/latest-RHEL-9.9.0/compose/AppStream/x86_64/os/
+        desired_repos = [buildroot_repo_url]
+        if tool_input.module_stream:
+            version_suffix = buildroot_branch.removeprefix("rhel-")
+            appstream_repo_url = urljoin(
+                internal_repos_host,
+                f"rhel-{majorver}/rel-eng/RHEL-{majorver}/latest-RHEL-{version_suffix}/compose/AppStream/{build_arch}/os/",
+            )
+            desired_repos.append(appstream_repo_url)
         try:
             chroot_config = await _copr_api_call(
                 chroot_proxy.get,
@@ -195,12 +217,18 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 kwargs["bootstrap"] = "image"
             if getattr(chroot_config, "bootstrap_image", None) != bootstrap_image:
                 kwargs["bootstrap_image"] = bootstrap_image
-            if chroot_config.additional_repos != [buildroot_repo_url]:
-                kwargs["additional_repos"] = [buildroot_repo_url]
+            if chroot_config.additional_repos != desired_repos:
+                kwargs["additional_repos"] = desired_repos
             # make sure base build packages are present in the chroot
             build_group = "@build"
             if build_group not in chroot_config.additional_packages:
                 kwargs["additional_packages"] = sorted(set(chroot_config.additional_packages) | {build_group})
+            # modular packages need their module stream enabled in the buildroot
+            # so their BuildRequires resolve against the module's content
+            if tool_input.module_stream:
+                desired_modules = [tool_input.module_stream]
+                if getattr(chroot_config, "additional_modules", None) != desired_modules:
+                    kwargs["additional_modules"] = desired_modules
             if kwargs:
                 await _copr_api_call(
                     chroot_proxy.edit,
@@ -231,6 +259,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 buildopts={"chroots": [chroot], "timeout": COPR_BUILD_TIMEOUT},
             )
             logger.info(f"{jira_issue}: build of {srpm_path} in {chroot} started: {build.id:08d}")
+            build_url = f"{COPR_CONFIG['copr_url']}/coprs/{copr_user}/{jira_issue}/build/{build.id}/"
         except Exception as e:
             raise ToolErrorWithContext(
                 "Failed to submit Copr build",
@@ -278,7 +307,11 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 case "succeeded":
                     logger.info(f"Build {build.id:08d} succeeded")
                     return BuildPackageToolOutput(
-                        result=BuildResult(success=True, artifacts_urls=await get_artifacts_urls(build))
+                        result=BuildResult(
+                            success=True,
+                            artifacts_urls=await get_artifacts_urls(build),
+                            build_url=build_url,
+                        )
                     )
                 case _:
                     is_timeout = (
@@ -294,6 +327,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                             is_timeout=is_timeout,
                             error_message=message,
                             artifacts_urls=await get_artifacts_urls(build),
+                            build_url=build_url,
                         )
                     )
 
@@ -311,6 +345,7 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 is_timeout=True,
                 error_message=message,
                 artifacts_urls=await get_artifacts_urls(build) if build else None,
+                build_url=build_url,
             )
         )
 

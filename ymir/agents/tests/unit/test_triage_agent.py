@@ -325,6 +325,21 @@ async def test_auto_processing_marker_ignored_for_user_triggered_run(monkeypatch
     assert state.triage_only is False
 
 
+@pytest.mark.asyncio
+async def test_auto_processing_user_triggered_run_does_not_need_rules_repo(monkeypatch):
+    """An explicit ymir_todo must still run while the rules repo is unavailable."""
+
+    async def _failing_fetch(*_args, **_kwargs):
+        raise agent_tasks.MaintainerRulesFetchError("Failed to fetch maintainer rules (HTTP 500)")
+
+    monkeypatch.setattr(agent_tasks, "fetch_auto_processing_config", _failing_fetch)
+
+    state = TriageState(jira_issue="RHEL-99999")
+    await _record_auto_processing_policy(state, "bash", [], user_triggered=True)
+
+    assert state.triage_only is False
+
+
 def _make_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> bytes:
     task = Task.from_issue(issue, user_triggered=user_triggered)
     return task.model_dump_json().encode()

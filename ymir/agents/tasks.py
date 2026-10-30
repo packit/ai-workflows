@@ -53,6 +53,7 @@ from ymir.common.version_utils import (
     parse_rhel_version,
     parse_zstream_branch_name,
 )
+from ymir.tools.privileged.maintainer_rules import RulesOutcome, classify_rules_output
 from ymir.tools.privileged.utils import ACTIVE_WORKSPACE_MARKER, APPLICABILITY_DIR, MERGE_REQUESTS_DIR
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
 from ymir.tools.unprivileged.wicked_git import RunPackagePrepTool
@@ -403,6 +404,10 @@ class InvalidReleaseBumpingConfigError(Exception):
     """Raised when ymir.yaml exists but the release_bumping section cannot be parsed."""
 
 
+class MaintainerRulesFetchError(Exception):
+    """Raised when the rules repository could not be read, as opposed to missing the file."""
+
+
 class InvalidBranchCreationConfigError(Exception):
     """Raised when ymir.yaml exists but the branch_creation section cannot be parsed."""
 
@@ -420,6 +425,7 @@ async def fetch_branch_creation_config(
     Fetch failures propagate so callers can retry.
 
     Raises:
+        MaintainerRulesFetchError: When the rules repository could not be read.
         InvalidBranchCreationConfigError: When the file exists but the
             ``branch_creation`` section does not conform to the expected schema.
 
@@ -437,7 +443,10 @@ async def fetch_branch_creation_config(
         available_tools=available_tools,
     )
 
-    if not isinstance(raw, str) or raw.startswith("No maintainer rules found"):
+    outcome = classify_rules_output(raw)
+    if outcome is RulesOutcome.FETCH_FAILED:
+        raise MaintainerRulesFetchError(raw)
+    if outcome is RulesOutcome.NOT_FOUND:
         return PackageBranchCreationConfig()
 
     try:
@@ -472,7 +481,9 @@ async def fetch_auto_processing_config(
     ``auto_processing`` key, or is malformed — a broken section must not stop
     triage, so this deliberately fails open.
 
-    Fetch failures propagate so callers can retry.
+    A failed fetch is different: defaulting to full there would run the fix
+    pipeline for a package that opted into ``triage_only`` just because GitLab
+    returned an error, so it propagates to the caller for a retry.
 
     Args:
         package: RPM package name.
@@ -480,6 +491,9 @@ async def fetch_auto_processing_config(
 
     Returns:
         Parsed auto-processing config.
+
+    Raises:
+        MaintainerRulesFetchError: When the rules repository could not be read.
     """
     raw = await run_tool(
         "get_maintainer_rules",
@@ -488,7 +502,10 @@ async def fetch_auto_processing_config(
         available_tools=available_tools,
     )
 
-    if not isinstance(raw, str) or raw.startswith("No maintainer rules found"):
+    outcome = classify_rules_output(raw)
+    if outcome is RulesOutcome.FETCH_FAILED:
+        raise MaintainerRulesFetchError(raw)
+    if outcome is RulesOutcome.NOT_FOUND:
         return PackageAutoProcessingConfig()
 
     try:
@@ -546,7 +563,11 @@ async def fetch_release_bumping_config(
         logger.warning("Failed to fetch ymir.yaml for %s: %s", package, e)
         return PackageReleaseBumpingConfig()
 
-    if "not found" in raw.lower():
+    outcome = classify_rules_output(raw)
+    if outcome is RulesOutcome.FETCH_FAILED:
+        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, raw)
+        return PackageReleaseBumpingConfig()
+    if outcome is RulesOutcome.NOT_FOUND:
         return PackageReleaseBumpingConfig()
 
     try:
@@ -1698,7 +1719,11 @@ async def fetch_consolidation_config(
         logger.warning("Failed to fetch ymir.yaml for %s: %s", package, e)
         return PackageConsolidationConfig()
 
-    if "not found" in raw.lower():
+    outcome = classify_rules_output(raw)
+    if outcome is RulesOutcome.FETCH_FAILED:
+        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, raw)
+        return PackageConsolidationConfig()
+    if outcome is RulesOutcome.NOT_FOUND:
         return PackageConsolidationConfig()
 
     try:
@@ -1787,7 +1812,11 @@ async def fetch_reproducer_config(
         logger.warning("Failed to fetch ymir.yaml for %s: %s", package, e)
         return PackageReproducerConfig()
 
-    if "not found" in raw.lower():
+    outcome = classify_rules_output(raw)
+    if outcome is RulesOutcome.FETCH_FAILED:
+        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, raw)
+        return PackageReproducerConfig()
+    if outcome is RulesOutcome.NOT_FOUND:
         return PackageReproducerConfig()
 
     try:

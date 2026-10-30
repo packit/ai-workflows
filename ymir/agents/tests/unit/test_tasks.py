@@ -1833,6 +1833,20 @@ async def test_fetch_release_bumping_config_returns_default_when_no_release_bump
     assert config.disregard_zstream_nvr_policy is False
 
 
+@pytest.mark.asyncio
+async def test_fetch_release_bumping_config_parses_yaml_mentioning_not_found():
+    """Only the tool's absence marker means "no file", not config text."""
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "note: branch not found -> create it\nrelease_bumping:\n  abandon_autorelease: true\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    config = await fetch_release_bumping_config("bash", [])
+
+    assert config.abandon_autorelease is True
+
+
 # -- fetch_auto_processing_config ---------------------------------------------
 
 
@@ -1858,6 +1872,19 @@ async def test_fetch_auto_processing_config_parses_triage_only():
     config = await fetch_auto_processing_config("bash", [])
 
     assert config.mode is AutoProcessingMode.TRIAGE_ONLY
+
+
+@pytest.mark.asyncio
+async def test_fetch_auto_processing_config_raises_on_fetch_failure():
+    """A GitLab error must not silently fall back to the full pipeline."""
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "Failed to fetch maintainer rules (HTTP 500): internal server error"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    with pytest.raises(agent_tasks.MaintainerRulesFetchError):
+        await fetch_auto_processing_config("bash", [])
 
 
 @pytest.mark.asyncio

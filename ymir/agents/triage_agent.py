@@ -661,18 +661,21 @@ async def _record_auto_processing_policy(
                     JiraLabels.TRIAGE_ONLY.value,
                 )
                 triage_only_requested = True
-    config = await tasks.fetch_auto_processing_config(package, available_tools)
+    config = None
     if triage_only_requested:
         state.triage_only = True
     elif user_triggered:
         state.triage_only = False
     else:
+        # Only automatic runs consult the package config. Explicit triggers are
+        # decided already, so they must not fail because the rules repo is down.
+        config = await tasks.fetch_auto_processing_config(package, available_tools)
         state.triage_only = config.mode is AutoProcessingMode.TRIAGE_ONLY
     logger.info(
         "Auto-processing mode for %s: %s (effective triage_only=%s, user_triggered=%s, "
         "triage_only_requested=%s)",
         package,
-        config.mode.value,
+        config.mode.value if config else "not consulted",
         state.triage_only,
         user_triggered,
         triage_only_requested,

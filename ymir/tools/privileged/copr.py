@@ -23,14 +23,14 @@ from pydantic import BaseModel, Field
 
 from ymir.common import load_rhel_config
 from ymir.common.base_utils import init_kerberos_ticket
+from ymir.common.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
+from ymir.common.http_utils import aiohttp_get_with_retries
 from ymir.common.models import BuildResult
 from ymir.common.validators import AbsolutePath
 from ymir.common.version_utils import construct_internal_branch_name, parse_branch_name, parse_rhel_version
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import make_additional_context, tool_error_context
-from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.errors import ToolErrorWithContext
-from ymir.tools.http import aiohttp_get_with_retries
 
 COPR_CONFIG = {
     "copr_url": "https://copr.devel.redhat.com",

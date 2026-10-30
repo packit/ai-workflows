@@ -9,7 +9,7 @@ from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import ToolError
 from flexmock import flexmock
 
-from ymir.tools import http as http_tools
+from ymir.common import constants, http_utils
 from ymir.tools.privileged.github import (
     MAX_GITHUB_PATCH_PREVIEW_LENGTH,
     GetGithubCompareTool,
@@ -215,8 +215,8 @@ class TestGetGithubPatchTool:
 
     @pytest.mark.asyncio
     async def test_exhausted_503_includes_github_message(self, tool, monkeypatch):
-        monkeypatch.setattr(http_tools, "AIOHTTP_RETRY_BACKOFF_BASE", 0)
-        monkeypatch.setattr(http_tools.random, "uniform", lambda *_args: 0)
+        monkeypatch.setattr(constants, "AIOHTTP_RETRY_BACKOFF_BASE", 0)
+        monkeypatch.setattr(http_utils.random, "uniform", lambda *_args: 0)
         _mock_aiohttp_api_error(503, "Service unavailable")
 
         with pytest.raises(ToolError, match="GitHub reported: Service unavailable"):
@@ -484,8 +484,8 @@ class TestGetGithubCompareTool:
 
     @pytest.mark.asyncio
     async def test_exhausted_503_includes_github_message(self, tool, monkeypatch):
-        monkeypatch.setattr(http_tools, "AIOHTTP_RETRY_BACKOFF_BASE", 0)
-        monkeypatch.setattr(http_tools.random, "uniform", lambda *_args: 0)
+        monkeypatch.setattr(constants, "AIOHTTP_RETRY_BACKOFF_BASE", 0)
+        monkeypatch.setattr(http_utils.random, "uniform", lambda *_args: 0)
         _mock_aiohttp_api_error(503, "Service unavailable")
 
         with pytest.raises(ToolError, match="GitHub reported: Service unavailable"):

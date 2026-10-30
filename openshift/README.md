@@ -40,8 +40,8 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   would create credential leakage risks via prompt injection. Instead, unprivileged
   tools in agents call privileged MCP tools (get_github_pull_request, get_github_compare)
   that run in the isolated MCP gateway process. The gateway has no shell execution,
-  preventing token extraction. The supervisor and sweep processes also have direct
-  token access since they lack shell execution capabilities.
+  preventing token extraction. The sweep process also has direct token access
+  since it lacks shell execution capabilities.
 
   `jira-env`:
   ```
@@ -431,7 +431,6 @@ make logs-rebuild-c9s      # rebuild-agent-c9s
 make logs-rebuild-c10s     # rebuild-agent-c10s
 make logs-reproducer       # reproducer-agent
 make logs-mcp              # mcp-gateway
-make logs-supervisor       # supervisor-processor
 make logs-valkey           # valkey
 make logs-phoenix          # phoenix
 make logs-redis-commander  # redis-commander

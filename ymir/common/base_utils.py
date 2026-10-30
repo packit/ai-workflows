@@ -78,12 +78,6 @@ async def _race_shutdown(
 ) -> tuple[bool, object, asyncio.Task | None]:
     """Race `coro` against `shutdown_event`.
 
-    Returns `(True, result, None)` if `coro` finished first.
-
-    If shutdown fires first: returns `(False, None, None)` when
-    `cancel_on_shutdown=True`, or `(False, None, work_task)` when
-    `cancel_on_shutdown=False` — see below.
-
     `cancel_on_shutdown` controls what happens to `coro` when shutdown
     wins: pure in-process awaitables (`Semaphore.acquire`, `Event.wait`)
     are safe to cancel-and-await immediately. Live I/O (a Redis BRPOP or a
@@ -96,6 +90,17 @@ async def _race_shutdown(
     as `work_task` instead: if it eventually returns a real task (rather
     than timing out with `None`), the caller must still account for it
     (e.g. re-push it) rather than silently letting the result vanish.
+
+    Args:
+        coro: Operation to race against the shutdown signal.
+        shutdown_event: Event that requests the loop to stop.
+        cancel_on_shutdown: Cancel and await ``coro`` when shutdown wins;
+            otherwise return its still-running task to the caller.
+
+    Returns:
+        ``(True, result, None)`` if ``coro`` finishes first. If shutdown
+        wins, ``(False, None, None)`` when cancellation is requested, or
+        ``(False, None, work_task)`` when the caller must resolve it.
     """
     work_task = asyncio.create_task(coro)
     stop_task = asyncio.create_task(shutdown_event.wait())
@@ -166,6 +171,23 @@ async def run_task_loop(
     can still return a real task once it resolves. That result is waited
     for and re-pushed too, so a task isn't silently consumed from Redis
     and dropped just because it arrived a moment after shutdown.
+
+    Args:
+        redis_conn: Redis connection used to pop and recover list tasks.
+        queues: List keys passed to BRPOP when ``poll_fn`` is absent.
+        process_fn: Coroutine function that processes one payload.
+        max_concurrent: Maximum number of tasks being processed at once.
+        poll_timeout: BRPOP timeout in seconds; also bounds the idle wait
+            after an empty custom poll.
+        poll_fn: Optional poller returning ``(queue, payload)``, a payload
+            when ``recovery_fn`` is set, or ``None`` when idle.
+        shutdown_event: Optional event to stop polling and recover work.
+        recovery_fn: Optional coroutine that recovers payloads consumed by
+            a custom poller instead of pushing them back to a Redis list.
+
+    Raises:
+        ValueError: ``max_concurrent`` is less than one, or a custom poller
+            returns only a payload without ``recovery_fn``.
     """
     if max_concurrent < 1:
         raise ValueError("max_concurrent must be at least 1")
@@ -339,6 +361,7 @@ DistGitNamespace = Literal["rhel", "centos-stream"]
 
 
 def is_cs_branch(dist_git_branch: str) -> bool:
+    """Return whether a branch is named ``c<major>s`` (CentOS Stream)."""
     return CS_BRANCH_PATTERN.match(dist_git_branch) is not None
 
 
@@ -389,7 +412,11 @@ class KerberosError(Exception):
 
 
 def parse_klist_principals(output: str) -> list[str]:
-    """Return non-expired principals from the text output of `klist -l`."""
+    """Return principal-looking first fields from ``klist -l`` lines.
+
+    Lines containing the literal ``Expired`` are skipped. Ticket expiry
+    is not otherwise parsed or checked.
+    """
     return [
         parts[0]
         for line in output.splitlines()
@@ -504,7 +531,23 @@ async def run_subprocess(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> tuple[int, str | None, str | None]:
-    """Run a subprocess and return the exit code, stdout, and stderr."""
+    """Run a command and return its exit code and decoded output streams.
+
+    A string command is split with ``shlex`` for direct execution; a list
+    command is joined for shell execution. ``env`` adds to the process
+    environment. Empty output streams are returned as ``None``. The child
+    is killed and awaited if communication is interrupted.
+
+    Args:
+        cmd: Command string or argument list to execute.
+        shell: Run through a shell when true; execute directly otherwise.
+        cwd: Optional working directory for the child process.
+        env: Environment variables to add to or override in the child.
+
+    Returns:
+        The exit code, decoded stdout, and decoded stderr. An empty output
+        stream is represented by ``None``.
+    """
     kwargs = {
         "stdout": asyncio.subprocess.PIPE,
         "stderr": asyncio.subprocess.PIPE,
@@ -541,6 +584,20 @@ async def check_subprocess(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> tuple[str | None, str | None]:
+    """Run a command and return its output, raising on a nonzero exit code.
+
+    Args:
+        cmd: Command string or argument list to execute.
+        shell: Run through a shell when true; execute directly otherwise.
+        cwd: Optional working directory for the child process.
+        env: Environment variables to add to or override in the child.
+
+    Returns:
+        Decoded stdout and stderr, with ``None`` for empty streams.
+
+    Raises:
+        subprocess.CalledProcessError: The command exits with a nonzero code.
+    """
     exit_code, stdout, stderr = await run_subprocess(cmd, shell, cwd, env)
     if exit_code:
         logger.error(

@@ -40,10 +40,19 @@ def _create_async_return(value):
 
 @pytest.fixture(autouse=True)
 def mocked_env():
-    flexmock(os).should_receive("getenv").with_args("JIRA_URL").and_return("http://jira")
-    flexmock(os).should_receive("getenv").with_args("DRY_RUN", "False").and_return("false")
-    flexmock(os).should_receive("getenv").with_args("SKIP_SETTING_JIRA_FIELDS", "False").and_return("false")
-    flexmock(os).should_receive("getenv").with_args("JIRA_DRY_RUN", "False").and_return("false")
+    """Mock Jira settings while preserving unrelated environment reads."""
+    original_getenv = os.getenv
+    jira_env = {
+        "JIRA_URL": "http://jira",
+        "DRY_RUN": "false",
+        "SKIP_SETTING_JIRA_FIELDS": "false",
+        "JIRA_DRY_RUN": "false",
+    }
+
+    def getenv(key, default=None):
+        return jira_env[key] if key in jira_env else original_getenv(key, default)
+
+    flexmock(os).should_receive("getenv").replace_with(getenv)
     flexmock(jira_tools).should_receive("get_jira_auth_headers").and_return(
         {
             "Authorization": "Basic dGVzdEBleGFtcGxlLmNvbToxMjM0NQ==",
@@ -427,7 +436,7 @@ async def test_edit_jira_labels(labels_to_add, labels_to_remove, expected_update
     async def put(url, json, headers):
         assert url.endswith(f"rest/api/3/issue/{issue_key}")
         assert json.get("update", {}).get("labels") == expected_update_payload
-        yield flexmock(raise_for_status=lambda: None)
+        yield flexmock(status=204, raise_for_status=lambda: None)
 
     flexmock(aiohttp.ClientSession).should_receive("put").replace_with(put)
 

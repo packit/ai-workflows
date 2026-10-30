@@ -121,9 +121,6 @@ logs-reproducer:
 logs-mcp:
 	oc logs -f deployment/mcp-gateway
 
-logs-supervisor:
-	oc logs -f deployment/supervisor-processor
-
 logs-valkey:
 	oc logs -f deployment/valkey
 
@@ -221,7 +218,7 @@ unsuspend-sweeps:
 	show-clarification-queue show-reproducer-queue show-error-list requeue-error \
 	logs-triage logs-backport-c9s logs-backport-c10s \
 	logs-rebase-c9s logs-rebase-c10s logs-rebuild-c9s logs-rebuild-c10s \
-	logs-reproducer logs-mcp logs-supervisor logs-valkey logs-phoenix \
+	logs-reproducer logs-mcp logs-valkey logs-phoenix \
 	logs-redis-commander logs-otel-collector process trigger-reproducer \
 	run-sweep-dependency run-sweep-y-stream run-sweep-pr-pending run-sweep-no-patch \
 	suspend-sweeps unsuspend-sweeps

@@ -2,6 +2,29 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from string import Template
 
+import aiohttp
+
+GITHUB_API_URL = "https://api.github.com"
+
+GITLAB_URL = "https://gitlab.com"
+GITLAB_API_URL = f"{GITLAB_URL}/api/v4"
+ALLOWED_GITLAB_HOSTS = frozenset(
+    {
+        "gitlab.com",
+        "gitlab.cee.redhat.com",
+        "gitlab.gnome.org",
+        "gitlab.freedesktop.org",
+    }
+)
+GITLAB_REDHAT_WEB_PREFIX = "/redhat/"
+GITLAB_REDHAT_API_PREFIX = "/api/v4/projects/redhat%2F"
+
+YMIR_USER_AGENT = "redhat-ymir-agent"
+AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
+AIOHTTP_RETRYABLE_STATUS_CODES = frozenset({503})
+AIOHTTP_MAX_RETRIES = 3
+AIOHTTP_RETRY_BACKOFF_BASE = 2
+
 BREWHUB_URL = "https://brewhub.engineering.redhat.com/brewhub"
 CENTOS_STREAM_KOJIHUB_URL = "https://kojihub.stream.centos.org/kojihub"
 

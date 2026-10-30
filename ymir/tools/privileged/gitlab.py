@@ -28,6 +28,9 @@ from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import BaseModel, Field
 
 from ymir.common.base_utils import run_subprocess
+from ymir.common.constants import AIOHTTP_TIMEOUT
+from ymir.common.gitlab_api import gitlab_headers, is_private_gitlab, search_gitlab_project_mrs
+from ymir.common.http_utils import aiohttp_get_with_retries
 from ymir.common.models import (
     CommentReply,
     FailedPipelineJob,
@@ -38,10 +41,8 @@ from ymir.common.models import (
 from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import make_additional_context, tool_error_context
-from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.tools.errors import ToolErrorWithContext
 from ymir.tools.gateway_utils import redact_credentials
-from ymir.tools.http import aiohttp_get_with_retries
 from ymir.tools.privileged.utils import clean_stale_repositories, sanitize_url
 
 logger = logging.getLogger(__name__)
@@ -154,8 +155,6 @@ def _wait_for_fork_ready(fork: GitlabProject) -> None:
 
 
 _GITLAB_COMMIT_RE = re.compile(r"^/(.+?)/-/commit/([0-9a-f]+)\.(?:patch|diff)$", re.IGNORECASE)
-_REDHAT_WEB_PREFIX = "/redhat/"
-_REDHAT_API_PREFIX = "/api/v4/projects/redhat%2F"
 
 
 def _get_mock_git_env() -> dict[str, str] | None:
@@ -193,27 +192,13 @@ def _get_mock_git_env() -> dict[str, str] | None:
     return env
 
 
-def _is_private_gitlab(url: str) -> bool:
-    """Return True if *url* points to a Red Hat GitLab project that needs token auth."""
-    parsed = urlparse(url)
-    hostname = parsed.hostname or ""
-    if hostname == "gitlab.cee.redhat.com":
-        return True
-    if hostname != "gitlab.com":
-        return False
-    if parsed.path.startswith(_REDHAT_WEB_PREFIX) or parsed.path.startswith(_REDHAT_API_PREFIX):
-        return True
-    fork_namespace = os.getenv("FORK_NAMESPACE", "").strip("/")
-    return bool(fork_namespace and parsed.path.startswith(f"/{fork_namespace}/"))
-
-
 def _get_api_diff_url(url: str) -> str:
     """Convert a GitLab commit .patch/.diff web URL to an API diff URL.
 
     Returns the API URL for private Red Hat GitLab repos, or the original URL
     unchanged for public repos and non-GitLab hosts.
     """
-    if not _is_private_gitlab(url):
+    if not is_private_gitlab(url):
         return url
 
     parsed = urlparse(url)
@@ -226,16 +211,6 @@ def _get_api_diff_url(url: str) -> str:
     sha = match.group(2)
     encoded_path = quote(project_path, safe="")
     return f"{parsed.scheme}://{hostname}/api/v4/projects/{encoded_path}/repository/commits/{sha}/diff"
-
-
-def _get_auth_headers(url: str) -> dict[str, str]:
-    """Return headers for requests; always includes User-Agent, adds PRIVATE-TOKEN for private GitLab."""
-    headers: dict[str, str] = {"User-Agent": YMIR_USER_AGENT}
-    if _is_private_gitlab(url):
-        token = os.getenv("GITLAB_TOKEN")
-        if token:
-            headers["PRIVATE-TOKEN"] = token
-    return headers
 
 
 _SENSITIVE_STDERR_RE = re.compile(
@@ -271,8 +246,8 @@ def _remove_existing_clone_path(clone_path: Path) -> None:
 def _get_git_auth_args(repository_url: str) -> list[str]:
     """Return ``git -c`` args that authenticate via HTTP Basic auth.
 
-    Uses the same ``_is_private_gitlab`` guard as ``_get_auth_headers``
-    so the token is never sent to unrelated hosts.  Passing auth via
+    Uses the common ``is_private_gitlab`` guard so the token is never sent
+    to unrelated hosts. Passing auth via
     ``http.extraheader`` keeps the URL clean, which lets ``insteadOf``
     rewrites (mock repos) work without special-casing.
 
@@ -283,7 +258,7 @@ def _get_git_auth_args(repository_url: str) -> list[str]:
         A list of ``-c http.extraheader=…`` args for private Red Hat
         GitLab repos, or an empty list otherwise.
     """
-    if _is_private_gitlab(repository_url) and (token := os.getenv("GITLAB_TOKEN")):
+    if is_private_gitlab(repository_url) and (token := os.getenv("GITLAB_TOKEN")):
         credentials = base64.b64encode(f"oauth2:{token}".encode()).decode()
         return ["-c", f"http.extraheader=Authorization: Basic {credentials}"]
     return []
@@ -1484,7 +1459,7 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
     ) -> StringToolOutput:
         patch_url = tool_input.patch_url
         request_url = _get_api_diff_url(patch_url)
-        headers = _get_auth_headers(request_url)
+        headers = gitlab_headers(request_url)
 
         with tool_error_context(
             f"Failed to fetch patch from {patch_url}",
@@ -1548,7 +1523,7 @@ class FetchGitlabMrNotesTool(Tool[FetchGitlabMrNotesInput, ToolRunOptions, Strin
     ) -> StringToolOutput:
         encoded_project = quote(input.project, safe="")
         url = f"https://gitlab.com/api/v4/projects/{encoded_project}/merge_requests/{input.mr_iid}/notes"
-        headers = _get_auth_headers(url)
+        headers = gitlab_headers(url)
         logger.info("Fetching MR notes from %s", url)
 
         try:
@@ -1649,14 +1624,6 @@ class SearchGitlabProjectMrsTool(
         search = tool_input.search
         state = tool_input.state
 
-        encoded_project = quote(project, safe="")
-        url = f"https://gitlab.com/api/v4/projects/{encoded_project}/merge_requests"
-
-        params: dict[str, str] = {"search": search}
-        if state is not None:
-            params["state"] = state
-
-        headers = _get_auth_headers(f"https://gitlab.com/{project}")
         logger.info("Searching MRs for %s in %s (state=%s)", search, project, state)
 
         with tool_error_context(
@@ -1665,25 +1632,13 @@ class SearchGitlabProjectMrsTool(
             search=search,
             state=state,
         ):
-            async with (
-                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
-                aiohttp_get_with_retries(session, url, headers=headers, params=params) as response,
-            ):
-                response.raise_for_status()
-                data = await response.json()
-
-            results = [
-                {
-                    "project": project,
-                    "iid": mr["iid"],
-                    "url": mr["web_url"],
-                    "title": mr["title"],
-                    "description": mr.get("description", ""),
-                    "state": mr["state"],
-                    "merged_at": mr.get("merged_at"),
-                }
-                for mr in data
-            ]
+            async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+                results = await search_gitlab_project_mrs(
+                    project,
+                    search,
+                    state=state,
+                    session=session,
+                )
 
         logger.info("Found %d MR(s) for %s in %s", len(results), search, project)
         return JSONToolOutput(result=results)
@@ -1760,7 +1715,7 @@ class ListProjectMergeRequestsTool(
         if tool_input.author_username is not None:
             params["author_username"] = tool_input.author_username
 
-        headers = _get_auth_headers(f"https://gitlab.com/{tool_input.project}")
+        headers = gitlab_headers(f"https://gitlab.com/{tool_input.project}")
         logger.info(
             "Listing MRs for project %s (state=%s, target=%s, labels=%s, author=%s)",
             tool_input.project,

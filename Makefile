@@ -13,7 +13,6 @@ BACKPORT_E2E_EXCLUDE_ISSUES ?=
 
 COMPOSE ?= $(shell if podman compose ls >/dev/null 2>&1; then echo "podman compose"; elif command -v podman-compose >/dev/null 2>&1; then echo "podman-compose"; else echo "docker-compose"; fi)
 COMPOSE_AGENTS=$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents
-COMPOSE_SUPERVISOR=$(COMPOSE) -f $(COMPOSE_FILE) --profile=supervisor
 
 # Extract container tool (podman or docker) from COMPOSE
 CONTAINER_TOOL ?= $(shell command -v podman >/dev/null 2>&1 && echo "podman" || echo "docker")
@@ -32,7 +31,7 @@ changelog:
 build:
 	@if [ -f .secrets/build.env ]; then echo "Warning: .secrets/build.env is deprecated, please move its contents to .env"; fi
 	if [ -f .secrets/build.env ] && [ ! -f .env ]; then set -a && . ./.secrets/build.env && set +a; fi && \
-	$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents --profile=supervisor build
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile=agents build
 
 .PHONY: push
 push:
@@ -408,39 +407,6 @@ print(json.dumps({ \
 	echo "Pushed to $$queue"
 
 
-# Testing and Release Supervisor
-
-DEBUG_LOWER := $(shell echo $(DEBUG) | tr '[:upper:]' '[:lower:]')
-ifeq ($(DEBUG_LOWER),true)
-DEBUG_FLAG := --debug
-else
-DEBUG_FLAG :=
-endif
-
-DRY_RUN_LOWER := $(shell echo $(DRY_RUN) | tr '[:upper:]' '[:lower:]')
-ifeq ($(DRY_RUN_LOWER),true)
-DRY_RUN_FLAG := --dry-run
-else
-DRY_RUN_FLAG :=
-endif
-
-IGNORE_NEEDS_ATTENTION_LOWER := $(shell echo $(IGNORE_NEEDS_ATTENTION) | tr '[:upper:]' '[:lower:]')
-ifeq ($(IGNORE_NEEDS_ATTENTION_LOWER),true)
-IGNORE_NEEDS_ATTENTION_FLAG := --ignore-needs-attention
-else
-IGNORE_NEEDS_ATTENTION_FLAG :=
-endif
-
-.PHONY: supervisor-clear-queue
-supervisor-clear-queue:
-	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) clear-queue
-
-.PHONY: supervisor-collect
-supervisor-collect:
-	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) collect --no-repeat
-
 .PHONY: triage-issue
 triage-issue:
 	@if [ -z "$(JIRA_ISSUE)" ]; then \
@@ -464,16 +430,6 @@ process:
 		-e DRY_RUN=$(DRY_RUN) \
 		-e AUTO_CHAIN=true \
 		triage-agent
-
-.PHONY: process-issue
-process-issue:
-	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) process-issue $(JIRA_ISSUE)
-
-.PHONY: process-erratum
-process-erratum:
-	$(COMPOSE_SUPERVISOR) run --rm \
-		supervisor python -m ymir.supervisor.main $(DEBUG_FLAG) $(IGNORE_NEEDS_ATTENTION_FLAG) $(DRY_RUN_FLAG) process-erratum $(ERRATA_ID)
 
 .PHONY: run-issue-verification-agent-standalone
 run-issue-verification-agent-standalone:
@@ -516,7 +472,7 @@ redis-cli:
 build-test-image:
 	$(MAKE) -f Makefile.tests build-test-image
 
-.PHONY: check-in-container check-agents-in-container check-tools-general-in-container check-unprivileged-tools-in-container check-privileged-tools-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container check-supervisor-in-container check-mcp-install-in-container check-cli-in-container check-sweep-in-container check-sweep-integration-in-container check-deployment-scripts-in-container check-mr-cleanup-in-container check-api-in-container
+.PHONY: check-in-container check-agents-in-container check-tools-general-in-container check-unprivileged-tools-in-container check-privileged-tools-in-container check-jira-issue-fetcher-in-container check-ymir-common-in-container check-mcp-install-in-container check-cli-in-container check-sweep-in-container check-sweep-integration-in-container check-deployment-scripts-in-container check-mr-cleanup-in-container check-api-in-container
 check-in-container: build-test-image
 	$(MAKE) -f Makefile.tests check-in-container
 check-agents-in-container: build-test-image
@@ -531,8 +487,6 @@ check-jira-issue-fetcher-in-container: build-test-image
 	$(MAKE) -f Makefile.tests check-jira-issue-fetcher-in-container
 check-ymir-common-in-container: build-test-image
 	$(MAKE) -f Makefile.tests check-ymir-common-in-container
-check-supervisor-in-container: build-test-image
-	$(MAKE) -f Makefile.tests check-supervisor-in-container
 check-deployment-scripts-in-container: build-test-image
 	$(MAKE) -f Makefile.tests check-deployment-scripts-in-container
 check-mr-cleanup-in-container: build-test-image

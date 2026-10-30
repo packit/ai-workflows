@@ -13,10 +13,6 @@ graph TD
         PIPELINE["build_rpm job"]
     end
 
-    subgraph "Python Services (Direct API)"
-        SUPERVISOR["Supervisor<br/>Monitors builds"]
-    end
-
     subgraph "MCP Server Layer"
         MCP_DISTGIT["Dist-Git Tools<br/>(distgit_tools.py)"]
         MCP_GITLAB["GitLab Tools<br/>(gitlab_tools.py)"]
@@ -37,9 +33,6 @@ graph TD
 
     MCP_DISTGIT <-->|"Koji Client<br/>Build metadata<br/>Tag queries"| BREW
 
-    SUPERVISOR -.Monitor MR.-> PIPELINE
-
-    style SUPERVISOR fill:#e8f4f8,stroke:#0277bd,stroke-width:3px
     style MCP_DISTGIT fill:#fff4e6,stroke:#f57c00,stroke-width:3px
     style MCP_GITLAB fill:#fff4e6,stroke:#f57c00,stroke-width:3px
     style AGENTS fill:#e8f5e9,stroke:#388e3c,stroke-width:3px

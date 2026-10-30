@@ -81,7 +81,8 @@ When a sibling finishes triaging:
    - No other issues with `ymir_rebase_sibling` referencing this primary
 5. If all siblings done:
    - Remove `ymir_rebase_waiting_for_siblings` from primary (critical operation, 3 retries)
-   - Re-queue primary to triage queue (not rebase queue)
+   - Re-queue primary to triage queue (not rebase queue), preserving the primary's own
+     `user_triggered` and `triage_only` intent rather than the siblings' inherited flags
    - Primary runs full triage again (LLM + eligibility + version check)
    - Triage removes `ymir_triaged_rebase` when it sees sibling wait state
    - Triage adds `ymir_triaged_rebase` back after re-analysis
@@ -185,6 +186,13 @@ find_consolidated_siblings():
 
 **Sibling triage fails**: Counted as "done" (no `ymir_rebase_sibling` label), primary proceeds
 when others finish, failed sibling not consolidated.
+
+**Stale sibling link**: The sibling marker comment is permanent, so a link is treated as stale
+when its primary is closed or carries a finished label (`ymir_rebased`, `ymir_rebase_errored`,
+`ymir_needs_attention`, `ymir_triaged_not_affected`, or any `ymir_triaged_deferred_*`). The
+sibling then runs its own fix instead of deferring forever. If the primary cannot be read,
+automatic runs keep the link live (fail safe) while an explicit `ymir_todo` run fails into the
+task retry path, so the requested fix is not silently replaced by a triage label.
 
 **No REBASE siblings**: Primary queues when last sibling finishes, rebases alone.
 

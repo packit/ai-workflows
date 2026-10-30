@@ -389,6 +389,7 @@ class JiraIssueFetcher:
             JiraLabels.RETRY_NEEDED.value,
             JiraLabels.TODO.value,
             JiraLabels.TODO_TRIAGE.value,
+            JiraLabels.TRIAGE_ONLY.value,
             JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
             JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
             JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
@@ -737,6 +738,8 @@ class JiraIssueFetcher:
                             continue
                     remove_issues_for_retry.add(issue_key)
                     retry_needed_keys.add(issue_key)
+                    if JiraLabels.TRIAGE_ONLY.value in ymir_labels:
+                        triage_only_keys.add(issue_key)
                     continue
 
                 # If issue has Ymir labels and there is no ymir_retry_needed label, mark as existing
@@ -757,6 +760,8 @@ class JiraIssueFetcher:
                         )
                         remove_issues_for_retry.add(issue_key)
                         retry_needed_keys.add(issue_key)
+                        if JiraLabels.TRIAGE_ONLY.value in ymir_labels:
+                            triage_only_keys.add(issue_key)
 
             effective_max_issues = max_issues_override if max_issues_override is not None else self.max_issues
             pushed_count = 0
@@ -800,6 +805,7 @@ class JiraIssueFetcher:
                     # would be picked up again on the next sweep without the
                     # in-progress marker.
                     labels_to_consume: list[str] = []
+                    labels_to_add = [JiraLabels.TRIAGE_IN_PROGRESS.value]
                     if user_triggered:
                         # When both labels are present, consume both: ymir_todo won
                         # this run, and the leftover trigger would re-fire later.
@@ -808,27 +814,37 @@ class JiraIssueFetcher:
                             for label in (JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value)
                             if label in fields.get("labels", [])
                         ]
+                        # ymir_todo is the explicit request for the full pipeline,
+                        # so clear a persisted triage-only marker along with it.
+                        if not triage_only and JiraLabels.TRIAGE_ONLY.value in fields.get("labels", []):
+                            labels_to_consume.append(JiraLabels.TRIAGE_ONLY.value)
                     elif retry_needed:
                         labels_to_consume = [JiraLabels.RETRY_NEEDED.value]
+
+                    # Persist a per-issue triage-only request so it survives an
+                    # automatic re-entry (postponement sweep, crash retry). The
+                    # add is idempotent when the marker is already present.
+                    if triage_only:
+                        labels_to_add.append(JiraLabels.TRIAGE_ONLY.value)
 
                     if labels_to_consume:
                         if self.dry_run:
                             logger.info(
                                 f"DRY_RUN: would flip {labels_to_consume} → "
-                                f"{JiraLabels.TRIAGE_IN_PROGRESS.value} on {issue_key}; "
+                                f"{', '.join(labels_to_add)} on {issue_key}; "
                                 f"skipping Jira write but proceeding with Redis push"
                             )
                         else:
                             try:
                                 self._edit_jira_labels(
                                     issue_key,
-                                    add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+                                    add=labels_to_add,
                                     remove=labels_to_consume,
                                 )
                             except Exception as e:
                                 logger.error(
                                     f"Failed to flip {labels_to_consume} → "
-                                    f"{JiraLabels.TRIAGE_IN_PROGRESS.value} on {issue_key} "
+                                    f"{', '.join(labels_to_add)} on {issue_key} "
                                     f"after retries; skipping enqueue to avoid duplicate processing: {e}"
                                 )
                                 continue

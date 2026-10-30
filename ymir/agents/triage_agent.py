@@ -199,6 +199,7 @@ def _terminal_ymir_labels(labels: list[str]) -> list[str]:
         JiraLabels.WAITING_FOR_SIBLINGS.value,
         JiraLabels.TODO.value,
         JiraLabels.TODO_TRIAGE.value,
+        JiraLabels.TRIAGE_ONLY.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
@@ -632,10 +633,34 @@ async def _record_auto_processing_policy(
 ) -> None:
     """Record whether this run should stop after triage.
 
-    Precedence: an explicit ymir_todo_triage request forces triage-only mode,
+    Precedence: an explicit ymir_todo_triage request (or the persisted
+    ymir_triage_only marker on an automatic re-entry) forces triage-only mode,
     a ymir_todo request forces the full pipeline, and only otherwise does the
     package config (auto_processing.mode) apply.
+
+    The marker is what keeps a per-issue request effective across a
+    postponement sweep or a crash retry, which only carry the issue key. It is
+    read from Jira here rather than taken from the task so that direct CLI runs
+    and consolidation re-queues honour it too.
     """
+    if not triage_only_requested and not user_triggered:
+        try:
+            current_labels, _ = await tasks.get_jira_issue_metadata(state.jira_issue)
+        except Exception as e:
+            logger.warning(
+                "Could not read labels for %s; %s not applied: %s",
+                state.jira_issue,
+                JiraLabels.TRIAGE_ONLY.value,
+                e,
+            )
+        else:
+            if JiraLabels.TRIAGE_ONLY.value in current_labels:
+                logger.info(
+                    "Issue %s carries %s - keeping this run triage-only",
+                    state.jira_issue,
+                    JiraLabels.TRIAGE_ONLY.value,
+                )
+                triage_only_requested = True
     config = await tasks.fetch_auto_processing_config(package, available_tools)
     if triage_only_requested:
         state.triage_only = True
@@ -1919,12 +1944,18 @@ async def main() -> None:
                 # Keep the waiting marker so sibling completion can release
                 # this primary while it is being re-triaged. Clean other old
                 # ymir_* labels and establish the in-progress anchor.
+                # The triage-only marker is persisted intent: keep it for
+                # triage-only runs and automatic re-entries. An explicit
+                # ymir_todo run (user-triggered, not triage-only) drops it,
+                # both here and in the fetcher's label flip.
+                preserve_triage_only = not user_triggered or triage_only_requested
                 labels_to_remove = [
                     label
                     for label in current_labels
                     if label.startswith("ymir_")
                     and label
                     not in (JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.WAITING_FOR_SIBLINGS.value)
+                    and not (preserve_triage_only and label == JiraLabels.TRIAGE_ONLY.value)
                 ]
                 await tasks.set_jira_labels(
                     jira_issue=input.issue,

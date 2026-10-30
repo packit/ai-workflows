@@ -273,12 +273,56 @@ async def test_auto_processing_precedence(
     async def _fake_fetch(*_args, **_kwargs):
         return PackageAutoProcessingConfig(mode=config_mode)
 
+    async def _fake_metadata(*_args, **_kwargs):
+        return [], "New"
+
     monkeypatch.setattr(agent_tasks, "fetch_auto_processing_config", _fake_fetch)
+    monkeypatch.setattr(agent_tasks, "get_jira_issue_metadata", _fake_metadata)
 
     state = TriageState(jira_issue="RHEL-99999")
     await _record_auto_processing_policy(state, "bash", [], user_triggered, triage_only_requested)
 
     assert state.triage_only is expected
+
+
+@pytest.mark.asyncio
+async def test_auto_processing_marker_forces_triage_only_on_automatic_run(monkeypatch):
+    """The persisted per-issue marker keeps an automatic re-entry triage-only
+    even when the package is configured for full processing."""
+
+    async def _fake_fetch(*_args, **_kwargs):
+        return PackageAutoProcessingConfig(mode=AutoProcessingMode.FULL)
+
+    async def _fake_metadata(*_args, **_kwargs):
+        return [JiraLabels.TRIAGE_ONLY.value], "New"
+
+    monkeypatch.setattr(agent_tasks, "fetch_auto_processing_config", _fake_fetch)
+    monkeypatch.setattr(agent_tasks, "get_jira_issue_metadata", _fake_metadata)
+
+    state = TriageState(jira_issue="RHEL-99999")
+    await _record_auto_processing_policy(state, "bash", [], user_triggered=False)
+
+    assert state.triage_only is True
+
+
+@pytest.mark.asyncio
+async def test_auto_processing_marker_ignored_for_user_triggered_run(monkeypatch):
+    """ymir_todo is the explicit full-pipeline request, so a leftover marker
+    must not keep that run triage-only."""
+
+    async def _fake_fetch(*_args, **_kwargs):
+        return PackageAutoProcessingConfig(mode=AutoProcessingMode.TRIAGE_ONLY)
+
+    async def _fake_metadata(*_args, **_kwargs):
+        return [JiraLabels.TRIAGE_ONLY.value], "New"
+
+    monkeypatch.setattr(agent_tasks, "fetch_auto_processing_config", _fake_fetch)
+    monkeypatch.setattr(agent_tasks, "get_jira_issue_metadata", _fake_metadata)
+
+    state = TriageState(jira_issue="RHEL-99999")
+    await _record_auto_processing_policy(state, "bash", [], user_triggered=True)
+
+    assert state.triage_only is False
 
 
 def _make_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> bytes:
@@ -383,6 +427,55 @@ async def test_process_task_skips_closed_user_triggered_with_cleanup(_mock_env_v
     _, kwargs = calls[0]
     assert kwargs["labels_to_remove"] == [JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value]
     assert kwargs["dry_run"] is True
+
+
+@pytest.mark.asyncio
+async def test_process_task_preserves_triage_only_marker_on_automatic_run(_mock_env_vars_redis):
+    """The marker is persisted intent and must survive an automatic re-entry."""
+
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.TRIAGE_ONLY.value], "New"
+
+    calls = []
+
+    async def _mock_jira_labels(*_args, **kwargs):
+        calls.append(kwargs)
+
+    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(t_agent).should_receive("run_workflow").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_mock_jira_labels)
+    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
+
+    process_task = await _capture_process_task(main)
+    await process_task(_make_payload())
+
+    assert calls[0]["labels_to_add"] == [JiraLabels.TRIAGE_IN_PROGRESS.value]
+    assert JiraLabels.TRIAGE_ONLY.value not in calls[0]["labels_to_remove"]
+
+
+@pytest.mark.asyncio
+async def test_process_task_drops_triage_only_marker_on_ymir_todo_run(_mock_env_vars_redis):
+    """A user-triggered full run clears the persisted triage-only marker."""
+
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [JiraLabels.TODO.value, JiraLabels.TRIAGE_ONLY.value], "New"
+
+    calls = []
+
+    async def _mock_jira_labels(*_args, **kwargs):
+        calls.append(kwargs)
+
+    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(t_agent).should_receive("run_workflow").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_mock_jira_labels)
+    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
+
+    process_task = await _capture_process_task(main)
+    await process_task(_make_payload(user_triggered=True))
+
+    assert JiraLabels.TRIAGE_ONLY.value in calls[0]["labels_to_remove"]
 
 
 @pytest.mark.asyncio

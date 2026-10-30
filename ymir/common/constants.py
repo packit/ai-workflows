@@ -253,6 +253,13 @@ class JiraLabels(Enum):
     # Adding TODO later runs the full pipeline.
     TODO_TRIAGE = "ymir_todo_triage"
 
+    # Persisted intent marker for a per-issue triage-only request. Set when
+    # TODO_TRIAGE is consumed and kept across automatic re-entry (sweep
+    # re-queue, crash retry) so a postponement or a lost task does not silently
+    # start the fix pipeline. The fetcher removes it when it consumes TODO,
+    # which is the explicit request for the full pipeline.
+    TRIAGE_ONLY = "ymir_triage_only"
+
     # When issue has been postponed too many times it must be marked as abandoned
     ABANDONED = "ymir_abandoned"
 

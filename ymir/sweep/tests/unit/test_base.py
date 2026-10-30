@@ -5,6 +5,7 @@ import redis
 from flexmock import flexmock
 
 from ymir.common.constants import JiraLabels
+from ymir.common.models import Task
 from ymir.supervisor.supervisor_types import FullIssue
 from ymir.sweep.base import SweepResult, SweepStrategy
 from ymir.sweep.comment_parser import CommentData
@@ -183,6 +184,48 @@ async def test_on_unblock_passes_comment_to_remove_label(monkeypatch):
     await strategy.on_unblock("RHEL-12345", mock_redis, comment="Resolved.")
 
     assert captured["comment"] == "Resolved."
+
+
+@pytest.mark.asyncio
+async def test_on_unblock_carries_triage_only(monkeypatch):
+    """A per-issue triage-only request must survive the postponement sweep."""
+    captured = {}
+    mock_redis = flexmock()
+    mock_redis.should_receive("lpush").replace_with(
+        lambda queue, payload: captured.update({"payload": payload})
+    )
+
+    _mock_add_label(monkeypatch)
+    _mock_remove_label(monkeypatch)
+
+    strategy = _UnblockedStrategy()
+    await strategy.on_unblock("RHEL-12345", mock_redis, triage_only=True)
+
+    assert Task.model_validate_json(captured["payload"]).triage_only is True
+
+
+@pytest.mark.asyncio
+async def test_run_reads_triage_only_marker_from_issue_labels(monkeypatch):
+    comment = make_ymir_comment(pending_issues=["RHEL-99"], blocker_reference="RHEL-99")
+    issue = make_issue(
+        labels=[JiraLabels.YMIR_POSTPONED_DEPENDENCY.value, JiraLabels.TRIAGE_ONLY.value],
+        comments=[comment],
+    )
+    monkeypatch.setattr("ymir.sweep.base.get_current_issues", lambda jql, full=False: iter([issue]))
+    _mock_add_label(monkeypatch)
+    _mock_remove_label(monkeypatch)
+
+    captured = {}
+    mock_redis = flexmock()
+    mock_redis.should_receive("lpush").replace_with(
+        lambda queue, payload: captured.update({"payload": payload})
+    )
+
+    strategy = _UnblockedStrategy()
+    summary = await strategy.run(mock_redis)
+
+    assert summary["unblocked"] == 1
+    assert Task.model_validate_json(captured["payload"]).triage_only is True
 
 
 # ---------------------------------------------------------------------------

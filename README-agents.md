@@ -124,6 +124,13 @@ per issue like `ymir_todo`) runs triage and defers the fix. If both labels are
 present, `ymir_todo` wins and the run executes the full pipeline; both trigger
 labels are consumed.
 
+The per-issue choice is persisted as the `ymir_triage_only` label so it survives
+automatic re-entry. When the fetcher consumes `ymir_todo_triage` it stamps the
+marker, and the triage agent and the postponement sweeps read it on later runs,
+so a postponed issue that the sweep re-queues (or a task recovered after a crash)
+is triaged again without starting the fix pipeline. The marker is cleared when
+the fetcher consumes `ymir_todo`, the explicit request for full processing.
+
 Missing or omitted `auto_processing` configuration defaults to `mode: full`.
 Malformed YAML, an unknown mode, or a wrongly shaped section is logged and also
 defaults to full so a broken rules file cannot silently disable the fix

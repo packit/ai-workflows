@@ -48,11 +48,13 @@ from ymir.tools.privileged.gitlab import (
     ListProjectMergeRequestsTool,
     OpenMergeRequestTool,
     PushToRemoteRepositoryTool,
+    RemoveMergeRequestLabelsTool,
     ResolveQeReviewersTool,
     ResolveReviewersTool,
     RetryPipelineJobTool,
     SearchGitlabProjectMrsTool,
     SetMergeRequestReviewersTool,
+    UpdateMergeRequestCommentTool,
 )
 from ymir.tools.privileged.jira import (
     AddJiraAttachmentsTool,
@@ -76,6 +78,7 @@ from ymir.tools.privileged.lookaside import (
     UploadSourcesTool,
 )
 from ymir.tools.privileged.maintainer_rules import MaintainerRulesTool
+from ymir.tools.privileged.mr_testing import FormatMrTestingCommentTool, ParseMrTestResultsTool
 from ymir.tools.privileged.shared_rules import SharedRulesTool
 from ymir.tools.privileged.testing_farm import (
     CancelTestingFarmRequestTool,
@@ -123,7 +126,9 @@ async def _async_main():
             CreateZstreamBranchTool(options=tool_options),
             AddBlockingMergeRequestCommentTool(options=tool_options),
             AddMergeRequestCommentTool(options=tool_options),
+            UpdateMergeRequestCommentTool(options=tool_options),
             AddMergeRequestLabelsTool(options=tool_options),
+            RemoveMergeRequestLabelsTool(options=tool_options),
             CloneRepositoryTool(options=tool_options),
             FetchBranchTool(options=tool_options),
             FetchCommitTool(options=tool_options),
@@ -184,6 +189,8 @@ async def _async_main():
             UploadSourcesTool(options=tool_options),
             ZStreamSearchTool(options=tool_options),
             MaintainerRulesTool(options=tool_options),
+            ParseMrTestResultsTool(options=tool_options),
+            FormatMrTestingCommentTool(options=tool_options),
             SharedRulesTool(options=tool_options),
             *log_detective_tools,
         ]

@@ -81,7 +81,7 @@ class NoPatchSweep(SweepStrategy):
         for issue in to_process:
             issue_key = issue.key
             try:
-                task = Task.from_issue(issue_key)
+                task = Task.from_issue(issue_key, triage_only=JiraLabels.TRIAGE_ONLY.value in issue.labels)
                 await fix_await(redis_conn.lpush(RedisQueues.TRIAGE_QUEUE.value, task.to_json()))
                 add_issue_label(issue_key, JiraLabels.TRIAGE_IN_PROGRESS.value)
                 remove_issue_label(issue_key, self.label.value)

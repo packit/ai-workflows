@@ -4,6 +4,9 @@ import pytest
 from flexmock import flexmock
 
 from ymir.agents import (
+    rebase_consolidation,
+)
+from ymir.agents import (
     tasks as agent_tasks,
 )
 from ymir.agents import (
@@ -13,8 +16,13 @@ from ymir.agents.constants import JIRA_COMMENT_TEMPLATE
 from ymir.agents.triage_agent import (
     TriageState,
     _build_reproducer_input,
+    _defers_fix,
+    _is_rebase_sibling,
     _map_version_to_module_branch,
     _postponed_comment_exists,
+    _record_auto_processing_policy,
+    _resolution_label,
+    _should_defer_terminal_label,
     _should_update_jira,
     _terminal_ymir_labels,
     determine_target_branch,
@@ -26,11 +34,13 @@ from ymir.agents.triage_agent import (
 from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels
 from ymir.common.models import (
     AssessedApplicabilityResult,
+    AutoProcessingMode,
     BackportData,
     ConfidenceAssessment,
     ConsolidatedIssue,
     CVEEligibilityResult,
     NotAffectedData,
+    PackageAutoProcessingConfig,
     PostponedData,
     RebaseData,
     RebuildData,
@@ -184,6 +194,157 @@ def test_error_deferred_to_terminal_retry_path():
     assert _should_update_jira(resolution=Resolution.ERROR, user_triggered=True) is False
 
 
+def test_triage_only_run_posts_result_and_resume_instructions():
+    """In triage-only mode no MR will be opened, so the result must be visible."""
+    assert (
+        _should_update_jira(
+            resolution=Resolution.BACKPORT,
+            user_triggered=False,
+            triage_only=True,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "resolution, expected_label",
+    [
+        (Resolution.BACKPORT, JiraLabels.TRIAGED_DEFERRED_BACKPORT),
+        (Resolution.REBASE, JiraLabels.TRIAGED_DEFERRED_REBASE),
+        (Resolution.REBUILD, JiraLabels.TRIAGED_DEFERRED_REBUILD),
+        # Resolutions without a deferred variant keep their normal terminal label.
+        (Resolution.NOT_AFFECTED, JiraLabels.TRIAGED_NOT_AFFECTED),
+    ],
+)
+def test_resolution_label_uses_deferred_variant_in_triage_only_mode(resolution, expected_label):
+    assert _resolution_label(resolution, triage_only=True) is expected_label
+
+
+@pytest.mark.parametrize("resolution", [Resolution.BACKPORT, Resolution.REBASE, Resolution.REBUILD])
+def test_resolution_label_unchanged_outside_triage_only_mode(resolution):
+    assert _resolution_label(resolution, triage_only=False) is t_agent._RESOLUTION_TO_LABEL[resolution]
+
+
+@pytest.mark.parametrize("resolution", [Resolution.BACKPORT, Resolution.REBASE, Resolution.REBUILD])
+def test_defers_fix_for_fix_resolutions(resolution):
+    assert _defers_fix(resolution, triage_only=True) is True
+
+
+@pytest.mark.parametrize(
+    "resolution", [Resolution.NOT_AFFECTED, Resolution.CLARIFICATION_NEEDED, Resolution.OPEN_ENDED_ANALYSIS]
+)
+def test_triage_only_does_not_advertise_ymir_todo_without_a_fix(resolution):
+    """No fix was deferred, so telling the maintainer to add ymir_todo is wrong."""
+    assert _defers_fix(resolution, triage_only=True) is False
+
+
+def test_triage_only_never_holds_for_manual_branch_creation():
+    """Triage-only runs stop after triage, so a missing branch must not hold them."""
+    state = TriageState(
+        jira_issue="RHEL-102",
+        target_branch="rhel-9.6.0.z",
+        target_branch_exists=False,
+        automatic_branch_creation_disabled=True,
+        triage_result=TriageOutputSchema(
+            resolution=Resolution.REBASE,
+            data=RebaseData(package="httpd", version="2.4.62", jira_issue="RHEL-102"),
+        ),
+    )
+
+    assert state.hold_for_manual_branch_creation is True
+    state.triage_only = True
+    assert state.hold_for_manual_branch_creation is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config_mode, user_triggered, triage_only_requested, expected",
+    [
+        # Automatic runs follow the package config.
+        (AutoProcessingMode.TRIAGE_ONLY, False, False, True),
+        (AutoProcessingMode.FULL, False, False, False),
+        # ymir_todo forces the full pipeline, even for triage-only packages.
+        (AutoProcessingMode.TRIAGE_ONLY, True, False, False),
+        # ymir_todo_triage forces triage-only, even for full-mode packages.
+        (AutoProcessingMode.FULL, True, True, True),
+        (AutoProcessingMode.TRIAGE_ONLY, True, True, True),
+    ],
+)
+async def test_auto_processing_precedence(
+    monkeypatch, config_mode, user_triggered, triage_only_requested, expected
+):
+    """An explicit trigger overrides the package config; automatic runs follow it."""
+
+    async def _fake_fetch(*_args, **_kwargs):
+        return PackageAutoProcessingConfig(mode=config_mode)
+
+    async def _fake_metadata(*_args, **_kwargs):
+        return [], "New"
+
+    monkeypatch.setattr(agent_tasks, "fetch_auto_processing_config", _fake_fetch)
+    monkeypatch.setattr(agent_tasks, "get_jira_issue_metadata", _fake_metadata)
+
+    state = TriageState(jira_issue="RHEL-99999")
+    await _record_auto_processing_policy(state, "bash", [], user_triggered, triage_only_requested)
+
+    assert state.triage_only is expected
+
+
+@pytest.mark.asyncio
+async def test_auto_processing_marker_forces_triage_only_on_automatic_run(monkeypatch):
+    """The persisted per-issue marker keeps an automatic re-entry triage-only
+    even when the package is configured for full processing."""
+
+    async def _fake_fetch(*_args, **_kwargs):
+        return PackageAutoProcessingConfig(mode=AutoProcessingMode.FULL)
+
+    async def _fake_metadata(*_args, **_kwargs):
+        return [JiraLabels.TRIAGE_ONLY.value], "New"
+
+    monkeypatch.setattr(agent_tasks, "fetch_auto_processing_config", _fake_fetch)
+    monkeypatch.setattr(agent_tasks, "get_jira_issue_metadata", _fake_metadata)
+
+    state = TriageState(jira_issue="RHEL-99999")
+    await _record_auto_processing_policy(state, "bash", [], user_triggered=False)
+
+    assert state.triage_only is True
+
+
+@pytest.mark.asyncio
+async def test_auto_processing_marker_ignored_for_user_triggered_run(monkeypatch):
+    """ymir_todo is the explicit full-pipeline request, so a leftover marker
+    must not keep that run triage-only."""
+
+    async def _fake_fetch(*_args, **_kwargs):
+        return PackageAutoProcessingConfig(mode=AutoProcessingMode.TRIAGE_ONLY)
+
+    async def _fake_metadata(*_args, **_kwargs):
+        return [JiraLabels.TRIAGE_ONLY.value], "New"
+
+    monkeypatch.setattr(agent_tasks, "fetch_auto_processing_config", _fake_fetch)
+    monkeypatch.setattr(agent_tasks, "get_jira_issue_metadata", _fake_metadata)
+
+    state = TriageState(jira_issue="RHEL-99999")
+    await _record_auto_processing_policy(state, "bash", [], user_triggered=True)
+
+    assert state.triage_only is False
+
+
+@pytest.mark.asyncio
+async def test_auto_processing_user_triggered_run_does_not_need_rules_repo(monkeypatch):
+    """An explicit ymir_todo must still run while the rules repo is unavailable."""
+
+    async def _failing_fetch(*_args, **_kwargs):
+        raise agent_tasks.MaintainerRulesFetchError("Failed to fetch maintainer rules (HTTP 500)")
+
+    monkeypatch.setattr(agent_tasks, "fetch_auto_processing_config", _failing_fetch)
+
+    state = TriageState(jira_issue="RHEL-99999")
+    await _record_auto_processing_policy(state, "bash", [], user_triggered=True)
+
+    assert state.triage_only is False
+
+
 def _make_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> bytes:
     task = Task.from_issue(issue, user_triggered=user_triggered)
     return task.model_dump_json().encode()
@@ -264,7 +425,7 @@ async def test_process_task_skips_closed_issues(status, _mock_env_vars_redis):
 
 @pytest.mark.asyncio
 async def test_process_task_skips_closed_user_triggered_with_cleanup(_mock_env_vars_redis):
-    """User-triggered run on a closed issue removes ymir_todo and posts ack."""
+    """User-triggered run on a closed issue removes both trigger labels and posts ack."""
 
     async def _mock_jira_metadata(*_args, **_kwargs):
         return ["ymir_todo"], "Closed"
@@ -284,8 +445,57 @@ async def test_process_task_skips_closed_user_triggered_with_cleanup(_mock_env_v
     await process_task(_make_payload(user_triggered=True))
 
     _, kwargs = calls[0]
-    assert kwargs["labels_to_remove"] == ["ymir_todo"]
+    assert kwargs["labels_to_remove"] == [JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value]
     assert kwargs["dry_run"] is True
+
+
+@pytest.mark.asyncio
+async def test_process_task_preserves_triage_only_marker_on_automatic_run(_mock_env_vars_redis):
+    """The marker is persisted intent and must survive an automatic re-entry."""
+
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.TRIAGE_ONLY.value], "New"
+
+    calls = []
+
+    async def _mock_jira_labels(*_args, **kwargs):
+        calls.append(kwargs)
+
+    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(t_agent).should_receive("run_workflow").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_mock_jira_labels)
+    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
+
+    process_task = await _capture_process_task(main)
+    await process_task(_make_payload())
+
+    assert calls[0]["labels_to_add"] == [JiraLabels.TRIAGE_IN_PROGRESS.value]
+    assert JiraLabels.TRIAGE_ONLY.value not in calls[0]["labels_to_remove"]
+
+
+@pytest.mark.asyncio
+async def test_process_task_drops_triage_only_marker_on_ymir_todo_run(_mock_env_vars_redis):
+    """A user-triggered full run clears the persisted triage-only marker."""
+
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [JiraLabels.TODO.value, JiraLabels.TRIAGE_ONLY.value], "New"
+
+    calls = []
+
+    async def _mock_jira_labels(*_args, **kwargs):
+        calls.append(kwargs)
+
+    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(t_agent).should_receive("run_workflow").replace_with(_async_noop)
+    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_mock_jira_labels)
+    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
+
+    process_task = await _capture_process_task(main)
+    await process_task(_make_payload(user_triggered=True))
+
+    assert JiraLabels.TRIAGE_ONLY.value in calls[0]["labels_to_remove"]
 
 
 @pytest.mark.asyncio
@@ -1307,3 +1517,117 @@ def test_jira_comment_template_output_unchanged():
     """Rebuilding JIRA_COMMENT_TEMPLATE from the shared marker keeps output identical."""
     rendered = JIRA_COMMENT_TEMPLATE.substitute(AGENT_TYPE="Triage", JIRA_COMMENT="hello")
     assert rendered.startswith("Output from Ymir Triage Agent: \n\nhello\n\n")
+
+
+@pytest.mark.parametrize(
+    ("triage_only", "expected"),
+    [(False, True), (True, False)],
+)
+def test_terminal_label_wait_is_ended_by_triage_only(triage_only, expected):
+    """A triage-only run is an explicit stop, so it must not leave the wait dangling."""
+    assert _should_defer_terminal_label(Resolution.REBASE, triage_only, waiting_for_siblings=True) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("primary_stale", "expected"), [(True, False), (False, True)])
+async def test_is_rebase_sibling_follows_primary_state(monkeypatch, primary_stale, expected):
+    """A permanent sibling marker defers only while its primary is still working."""
+
+    async def fake_run_tool(name, **kwargs):
+        assert name == "get_jira_details"
+        return {
+            "fields": {
+                "labels": [],
+                "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
+            }
+        }
+
+    async def fake_stale(primary_issue, available_tools):
+        assert primary_issue == "RHEL-100"
+        return primary_stale
+
+    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
+
+    state = TriageState(jira_issue="RHEL-200")
+    assert await _is_rebase_sibling(state, [], user_triggered=False) is expected
+
+
+@pytest.mark.asyncio
+async def test_is_rebase_sibling_keeps_deferring_without_a_link(monkeypatch):
+    """Labelled sibling whose marker cannot be read must still defer (fail safe)."""
+
+    async def fake_run_tool(name, **kwargs):
+        return {"fields": {"labels": [JiraLabels.REBASE_SIBLING.value]}}
+
+    async def fake_stale(*_args):
+        raise AssertionError("primary lookup must not be attempted without a link")
+
+    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
+
+    state = TriageState(jira_issue="RHEL-200")
+    assert await _is_rebase_sibling(state, [], user_triggered=False) is True
+
+
+@pytest.mark.asyncio
+async def test_is_rebase_sibling_runs_own_fix_after_primary_deferred(monkeypatch):
+    """Sequence: primary stopped after triage, sibling then explicitly requested.
+
+    The primary's deferred label means it will not pick the sibling up, so the
+    sibling's ``ymir_todo`` must run its own rebase rather than follow the stale
+    permanent comment link.
+    """
+
+    async def fake_run_tool(name, **kwargs):
+        if kwargs["issue_key"] == "RHEL-200":
+            return {
+                "fields": {
+                    "labels": [],
+                    "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
+                }
+            }
+        assert kwargs["issue_key"] == "RHEL-100"
+        return {
+            "fields": {
+                "status": {"name": "In Progress"},
+                "labels": [JiraLabels.TRIAGED_DEFERRED_REBASE.value],
+            }
+        }
+
+    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(rebase_consolidation, "run_tool", fake_run_tool)
+
+    state = TriageState(jira_issue="RHEL-200")
+    assert await _is_rebase_sibling(state, [], user_triggered=True) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("user_triggered", "expects_raise"), [(True, True), (False, False)])
+async def test_is_rebase_sibling_unknown_primary_state(monkeypatch, user_triggered, expects_raise):
+    """An unreadable primary keeps an automatic run deferring but fails an explicit one.
+
+    Deferring an explicit ``ymir_todo`` would write a triage label and silently
+    drop the requested fix, so that run raises into the task retry path instead.
+    """
+
+    async def fake_run_tool(name, **kwargs):
+        return {
+            "fields": {
+                "labels": [],
+                "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
+            }
+        }
+
+    async def failing_stale(*_args):
+        raise RuntimeError("Jira unavailable")
+
+    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(t_agent, "sibling_link_is_stale", failing_stale)
+
+    state = TriageState(jira_issue="RHEL-200")
+    if expects_raise:
+        with pytest.raises(RuntimeError, match="RHEL-200"):
+            await _is_rebase_sibling(state, [], user_triggered=user_triggered)
+    else:
+        assert await _is_rebase_sibling(state, [], user_triggered=user_triggered) is True

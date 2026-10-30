@@ -388,6 +388,8 @@ class JiraIssueFetcher:
         ignorable = {
             JiraLabels.RETRY_NEEDED.value,
             JiraLabels.TODO.value,
+            JiraLabels.TODO_TRIAGE.value,
+            JiraLabels.TRIAGE_ONLY.value,
             JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
             JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
             JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
@@ -614,8 +616,9 @@ class JiraIssueFetcher:
             remove_issues_for_retry = set()
             user_triggered_keys = set()
             retry_needed_keys = set()
-            # Extend existing_keys with issues that have Ymir labels (except ymir_retry_needed
-            # and ymir_todo, which both signal a re-run is wanted).
+            triage_only_keys = set()
+            # Extend existing_keys with issues that have Ymir labels (except ymir_retry_needed,
+            # ymir_todo and ymir_todo_triage, which all signal a re-run is wanted).
             for issue in issues:
                 issue_key = issue.get("key")
                 if not issue_key:
@@ -626,19 +629,33 @@ class JiraIssueFetcher:
                 ymir_labels = [label for label in labels if label.startswith("ymir_")]
                 has_in_progress = any(label.endswith("_in_progress") for label in ymir_labels)
 
-                # ymir_todo is the maintainer-facing trigger. A run already in progress
-                # must not be re-enqueued — let it finish and the maintainer can re-add
-                # the label later if needed.
-                if JiraLabels.TODO.value in ymir_labels and not has_in_progress:
-                    # The JQL no longer restricts ymir_todo by assignee, so we verify
-                    # per-issue that the label was added by a Red Hat Employee. If
-                    # not (or if the author can't be verified), skip the issue — the
-                    # label may have been added by an external collaborator.
+                # ymir_todo is the maintainer-facing trigger; ymir_todo_triage asks
+                # for the same run but stops after triage. A run already in progress
+                # must not be re-enqueued — let it finish and the maintainer can
+                # re-add the label later if needed. When both labels are present the
+                # explicit full-pipeline request wins.
+                trigger_labels_present = [
+                    label
+                    for label in (JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value)
+                    if label in ymir_labels
+                ]
+                if trigger_labels_present and not has_in_progress:
+                    trigger_label = trigger_labels_present[0]
+                    if len(trigger_labels_present) > 1:
+                        logger.warning(
+                            f"Issue {issue_key} has both {JiraLabels.TODO.value} and "
+                            f"{JiraLabels.TODO_TRIAGE.value} - running the full pipeline "
+                            f"and consuming both labels"
+                        )
+                    # The JQL no longer restricts these triggers by assignee, so we
+                    # verify per-issue that the label was added by a Red Hat Employee.
+                    # If not (or if the author can't be verified), skip the issue —
+                    # the label may have been added by an external collaborator.
                     try:
-                        is_rh_employee = self._label_added_by_rh_employee(issue_key)
+                        is_rh_employee = self._label_added_by_rh_employee(issue_key, label=trigger_label)
                     except requests.RequestException as e:
                         logger.warning(
-                            f"Transient error verifying {JiraLabels.TODO.value} author on {issue_key}: {e}; "
+                            f"Transient error verifying {trigger_label} author on {issue_key}: {e}; "
                             f"skipping this issue for this sweep"
                         )
                         existing_keys.add(issue_key)
@@ -646,29 +663,31 @@ class JiraIssueFetcher:
 
                     if not is_rh_employee:
                         logger.warning(
-                            f"Issue {issue_key} has {JiraLabels.TODO.value} but the "
+                            f"Issue {issue_key} has {trigger_label} but the "
                             f"label was not added by a Red Hat Employee - skipping "
                             f"and removing the label"
                         )
                         existing_keys.add(issue_key)
-                        # Remove the bogus label so we don't repeat the verification
+                        # Remove the bogus labels so we don't repeat the verification
                         # (two HTTP calls) on every subsequent sweep.
                         if self.dry_run:
-                            logger.info(f"DRY_RUN: would remove {JiraLabels.TODO.value} from {issue_key}")
+                            logger.info(f"DRY_RUN: would remove {trigger_labels_present} from {issue_key}")
                         else:
                             try:
-                                self._edit_jira_labels(issue_key, add=[], remove=[JiraLabels.TODO.value])
+                                self._edit_jira_labels(issue_key, add=[], remove=trigger_labels_present)
                             except Exception as e:
                                 logger.warning(
-                                    f"Failed to remove {JiraLabels.TODO.value} from {issue_key}: {e}"
+                                    f"Failed to remove {trigger_labels_present} from {issue_key}: {e}"
                                 )
                         continue
                     logger.info(
-                        f"Issue {issue_key} has {JiraLabels.TODO.value} added by an "
+                        f"Issue {issue_key} has {trigger_label} added by an "
                         f"RH employee - marking for user-triggered run"
                     )
                     remove_issues_for_retry.add(issue_key)
                     user_triggered_keys.add(issue_key)
+                    if trigger_labels_present == [JiraLabels.TODO_TRIAGE.value]:
+                        triage_only_keys.add(issue_key)
                     continue
 
                 # Safety net for tasks lost to a hard crash/OOM/SIGKILL (planned
@@ -719,6 +738,8 @@ class JiraIssueFetcher:
                             continue
                     remove_issues_for_retry.add(issue_key)
                     retry_needed_keys.add(issue_key)
+                    if JiraLabels.TRIAGE_ONLY.value in ymir_labels:
+                        triage_only_keys.add(issue_key)
                     continue
 
                 # If issue has Ymir labels and there is no ymir_retry_needed label, mark as existing
@@ -739,6 +760,8 @@ class JiraIssueFetcher:
                         )
                         remove_issues_for_retry.add(issue_key)
                         retry_needed_keys.add(issue_key)
+                        if JiraLabels.TRIAGE_ONLY.value in ymir_labels:
+                            triage_only_keys.add(issue_key)
 
             effective_max_issues = max_issues_override if max_issues_override is not None else self.max_issues
             pushed_count = 0
@@ -771,38 +794,57 @@ class JiraIssueFetcher:
 
                     user_triggered = issue_key in user_triggered_keys
                     retry_needed = issue_key in retry_needed_keys
+                    triage_only = issue_key in triage_only_keys
 
-                    # For ymir_todo and ymir_retry_needed issues, atomically swap
-                    # the trigger label for ymir_triage_in_progress before enqueueing.
-                    # This dedupes against the very next sweep (which will see the
-                    # in-progress marker and skip), and consumes the trigger so a
-                    # stuck run doesn't loop. If this write fails after retries, do
-                    # NOT push to the queue — otherwise the issue would be picked up
-                    # again on the next sweep without the in-progress marker.
-                    label_to_consume = None
+                    # For ymir_todo, ymir_todo_triage and ymir_retry_needed issues,
+                    # atomically swap the trigger label for ymir_triage_in_progress
+                    # before enqueueing. This dedupes against the very next sweep
+                    # (which will see the in-progress marker and skip), and consumes
+                    # the trigger so a stuck run doesn't loop. If this write fails
+                    # after retries, do NOT push to the queue — otherwise the issue
+                    # would be picked up again on the next sweep without the
+                    # in-progress marker.
+                    labels_to_consume: list[str] = []
+                    labels_to_add = [JiraLabels.TRIAGE_IN_PROGRESS.value]
                     if user_triggered:
-                        label_to_consume = JiraLabels.TODO.value
+                        # When both labels are present, consume both: ymir_todo won
+                        # this run, and the leftover trigger would re-fire later.
+                        labels_to_consume = [
+                            label
+                            for label in (JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value)
+                            if label in fields.get("labels", [])
+                        ]
+                        # ymir_todo is the explicit request for the full pipeline,
+                        # so clear a persisted triage-only marker along with it.
+                        if not triage_only and JiraLabels.TRIAGE_ONLY.value in fields.get("labels", []):
+                            labels_to_consume.append(JiraLabels.TRIAGE_ONLY.value)
                     elif retry_needed:
-                        label_to_consume = JiraLabels.RETRY_NEEDED.value
+                        labels_to_consume = [JiraLabels.RETRY_NEEDED.value]
 
-                    if label_to_consume:
+                    # Persist a per-issue triage-only request so it survives an
+                    # automatic re-entry (postponement sweep, crash retry). The
+                    # add is idempotent when the marker is already present.
+                    if triage_only:
+                        labels_to_add.append(JiraLabels.TRIAGE_ONLY.value)
+
+                    if labels_to_consume:
                         if self.dry_run:
                             logger.info(
-                                f"DRY_RUN: would flip {label_to_consume} → "
-                                f"{JiraLabels.TRIAGE_IN_PROGRESS.value} on {issue_key}; "
+                                f"DRY_RUN: would flip {labels_to_consume} → "
+                                f"{', '.join(labels_to_add)} on {issue_key}; "
                                 f"skipping Jira write but proceeding with Redis push"
                             )
                         else:
                             try:
                                 self._edit_jira_labels(
                                     issue_key,
-                                    add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                                    remove=[label_to_consume],
+                                    add=labels_to_add,
+                                    remove=labels_to_consume,
                                 )
                             except Exception as e:
                                 logger.error(
-                                    f"Failed to flip {label_to_consume} → "
-                                    f"{JiraLabels.TRIAGE_IN_PROGRESS.value} on {issue_key} "
+                                    f"Failed to flip {labels_to_consume} → "
+                                    f"{', '.join(labels_to_add)} on {issue_key} "
                                     f"after retries; skipping enqueue to avoid duplicate processing: {e}"
                                 )
                                 continue
@@ -816,7 +858,7 @@ class JiraIssueFetcher:
                         continue
 
                     # Create task using shared Pydantic model
-                    task = Task.from_issue(issue_key, user_triggered=user_triggered)
+                    task = Task.from_issue(issue_key, user_triggered=user_triggered, triage_only=triage_only)
 
                     # ymir_todo-triggered tasks go to the priority queue so the
                     # triage agent pops them before normal-flow tasks.

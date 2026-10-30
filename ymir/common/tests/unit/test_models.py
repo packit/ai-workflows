@@ -59,6 +59,24 @@ def test_backport_formatting_auto_chain():
     assert "*Resolution*: backport" in comment
 
 
+def test_triage_only_formatting_explains_how_to_resume():
+    data = BackportData(
+        package="readline",
+        patch_urls=["https://example.com/patch.patch"],
+        justification="Fixes the bug in bind.c",
+        jira_issue="RHEL-12345",
+        cve_id="CVE-2024-1234",
+        fix_version="rhel-10.0",
+    )
+    result = TriageOutputSchema(resolution=Resolution.BACKPORT, data=data)
+
+    comment = result.format_for_comment(triage_only=True)
+
+    assert "triage-only mode" in comment
+    assert "add `ymir_todo` to run it" in comment
+    assert "planned for Q2 2026" not in comment
+
+
 def test_rebase_formatting():
     data = RebaseData(
         package="httpd",

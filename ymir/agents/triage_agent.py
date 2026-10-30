@@ -26,6 +26,7 @@ from ymir.agents.rebase_consolidation import (
     check_and_queue_primary_if_ready,
     get_rebase_primary_issue,
     queue_siblings_for_triage,
+    sibling_link_is_stale,
 )
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
 from ymir.agents.tasks import InvalidReproducerConfigError
@@ -50,6 +51,7 @@ from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     POSTPONED_RESOLUTIONS,
     AssessedApplicabilityResult,
+    AutoProcessingMode,
     ClarificationNeededData,
     ConfidenceAssessment,
     CVEEligibilityResult,
@@ -105,6 +107,7 @@ def _should_update_jira(
     resolution: Resolution = None,
     user_triggered: bool = False,
     requires_manual_branch_creation: bool = False,
+    triage_only: bool = False,
 ) -> bool:
     """Whether to post a user-facing Jira comment for this run.
 
@@ -122,6 +125,10 @@ def _should_update_jira(
     """
     if resolution == Resolution.ERROR:
         return False
+    if triage_only:
+        # Triage is the deliverable and no MR will be opened, so the result and
+        # the ymir_todo instructions must be visible.
+        return True
     if requires_manual_branch_creation:
         return True
     if user_triggered:
@@ -192,12 +199,101 @@ def _terminal_ymir_labels(labels: list[str]) -> list[str]:
         JiraLabels.REBASE_SIBLING.value,
         JiraLabels.WAITING_FOR_SIBLINGS.value,
         JiraLabels.TODO.value,
+        JiraLabels.TODO_TRIAGE.value,
+        JiraLabels.TRIAGE_ONLY.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
     }
     known = JiraLabels.all_labels()
     return [label for label in labels if label in known and label not in non_terminal]
+
+
+# Terminal labels used instead of _RESOLUTION_TO_LABEL when the package is in
+# triage-only mode. They record the decision without implying a queued task.
+_DEFERRED_LABEL_BY_RESOLUTION: dict[Resolution, JiraLabels] = {
+    Resolution.BACKPORT: JiraLabels.TRIAGED_DEFERRED_BACKPORT,
+    Resolution.REBASE: JiraLabels.TRIAGED_DEFERRED_REBASE,
+    Resolution.REBUILD: JiraLabels.TRIAGED_DEFERRED_REBUILD,
+}
+
+
+def _resolution_label(resolution: Resolution, triage_only: bool) -> JiraLabels | None:
+    """Pick the terminal label, using the deferred variant in triage-only mode."""
+    if triage_only and (deferred := _DEFERRED_LABEL_BY_RESOLUTION.get(resolution)):
+        return deferred
+    return _RESOLUTION_TO_LABEL.get(resolution)
+
+
+def _defers_fix(resolution: Resolution, triage_only: bool) -> bool:
+    """Whether triage-only mode left a fix for a maintainer to request later.
+
+    Resolutions without a fix (not affected, clarification needed, ...) must not
+    advertise ``ymir_todo``, so the comment note is only shown when a fix was
+    actually deferred.
+    """
+    return triage_only and resolution in _DEFERRED_LABEL_BY_RESOLUTION
+
+
+def _should_defer_terminal_label(
+    resolution: Resolution, triage_only: bool, waiting_for_siblings: bool
+) -> bool:
+    """Whether the terminal label must wait for pending rebase siblings.
+
+    A triage-only run is an explicit stop, so it writes the deferred label and
+    ends the sibling wait instead of leaving the issue waiting for a re-triage
+    that would inherit the triage-only intent anyway.
+    """
+    return resolution == Resolution.REBASE and waiting_for_siblings and not triage_only
+
+
+async def _is_rebase_sibling(state, available_tools, user_triggered: bool) -> bool:
+    """Whether this issue is a sibling whose primary still awaits it.
+
+    The sibling marker is a permanent Jira comment (plus a label), so a link to a
+    primary that already finished is stale: an explicit ``ymir_todo`` must run
+    this issue's own fix instead of deferring forever.
+
+    An unreadable link keeps the deferral on automatic runs, but fails an
+    explicit run: silently writing a triage label would consume the requested
+    fix. The error uses the task retry path like any other Jira failure.
+    """
+    try:
+        details = await run_tool(
+            "get_jira_details",
+            issue_key=state.jira_issue,
+            available_tools=available_tools,
+        )
+    except Exception as e:
+        if user_triggered and state.is_rebase_sibling:
+            raise RuntimeError(f"Cannot verify the sibling link of {state.jira_issue}: {e}") from e
+        logger.warning(f"Failed to read sibling marker for {state.jira_issue}: {e}")
+        details = {}
+
+    labels = details.get("fields", {}).get("labels", [])
+    primary_issue = get_rebase_primary_issue(details)
+    if not (
+        state.is_rebase_sibling or JiraLabels.REBASE_SIBLING.value in labels or primary_issue is not None
+    ):
+        return False
+    if primary_issue is None:
+        # Sibling without a readable link: keep deferring.
+        return True
+    try:
+        stale = await sibling_link_is_stale(primary_issue, available_tools)
+    except Exception as e:
+        if user_triggered:
+            raise RuntimeError(
+                f"Cannot verify the sibling link of {state.jira_issue} to {primary_issue}: {e}"
+            ) from e
+        logger.warning(f"Failed to read primary {primary_issue} while checking sibling link: {e}")
+        return True
+    if stale:
+        logger.info(
+            f"Ignoring stale sibling link on {state.jira_issue}: primary {primary_issue} already finished"
+        )
+        return False
+    return True
 
 
 _REPRODUCER_ELIGIBLE_RESOLUTIONS = frozenset(
@@ -547,12 +643,21 @@ class TriageState(BaseModel):
             "None means it has not been determined."
         ),
     )
+    triage_only: bool = Field(
+        default=False,
+        description=(
+            "Whether this run stops after triage. Set by auto_processing.mode: triage_only "
+            "in ymir.yaml, or forced on by the ymir_todo_triage label; a ymir_todo run "
+            "always clears it so the full pipeline runs."
+        ),
+    )
 
     @property
     def hold_for_manual_branch_creation(self) -> bool:
         """Whether this task must wait for a maintainer to create the target branch."""
         return (
             self.automatic_branch_creation_disabled is True
+            and not self.triage_only
             and self.target_branch_exists is False
             and self.triage_result is not None
             and self.triage_result.resolution in (Resolution.REBASE, Resolution.BACKPORT, Resolution.REBUILD)
@@ -579,6 +684,64 @@ async def _record_target_branch_existence(state: TriageState, package: str, avai
     )
     if isinstance(available_branches, list):
         state.target_branch_exists = state.target_branch in available_branches
+
+
+async def _record_auto_processing_policy(
+    state: TriageState,
+    package: str,
+    available_tools,
+    user_triggered: bool,
+    triage_only_requested: bool = False,
+) -> None:
+    """Record whether this run should stop after triage.
+
+    Precedence: an explicit ymir_todo_triage request (or the persisted
+    ymir_triage_only marker on an automatic re-entry) forces triage-only mode,
+    a ymir_todo request forces the full pipeline, and only otherwise does the
+    package config (auto_processing.mode) apply.
+
+    The marker is what keeps a per-issue request effective across a
+    postponement sweep or a crash retry, which only carry the issue key. It is
+    read from Jira here rather than taken from the task so that direct CLI runs
+    and consolidation re-queues honour it too.
+    """
+    if not triage_only_requested and not user_triggered:
+        try:
+            current_labels, _ = await tasks.get_jira_issue_metadata(state.jira_issue)
+        except Exception as e:
+            logger.warning(
+                "Could not read labels for %s; %s not applied: %s",
+                state.jira_issue,
+                JiraLabels.TRIAGE_ONLY.value,
+                e,
+            )
+        else:
+            if JiraLabels.TRIAGE_ONLY.value in current_labels:
+                logger.info(
+                    "Issue %s carries %s - keeping this run triage-only",
+                    state.jira_issue,
+                    JiraLabels.TRIAGE_ONLY.value,
+                )
+                triage_only_requested = True
+    config = None
+    if triage_only_requested:
+        state.triage_only = True
+    elif user_triggered:
+        state.triage_only = False
+    else:
+        # Only automatic runs consult the package config. Explicit triggers are
+        # decided already, so they must not fail because the rules repo is down.
+        config = await tasks.fetch_auto_processing_config(package, available_tools)
+        state.triage_only = config.mode is AutoProcessingMode.TRIAGE_ONLY
+    logger.info(
+        "Auto-processing mode for %s: %s (effective triage_only=%s, user_triggered=%s, "
+        "triage_only_requested=%s)",
+        package,
+        config.mode.value if config else "not consulted",
+        state.triage_only,
+        user_triggered,
+        triage_only_requested,
+    )
 
 
 async def _record_branch_creation_policy(state: TriageState, package: str, available_tools) -> None:
@@ -687,6 +850,7 @@ async def run_workflow(
     auto_chain=False,
     force_cve_triage=False,
     user_triggered=False,
+    triage_only_requested=False,
 ):
     local_tool_options = None
     if mock_env := get_mock_local_tool_env(jira_issue):
@@ -997,6 +1161,9 @@ async def run_workflow(
                 except Exception as e:
                     logger.warning(f"Failed to check branches for {package}: {e}")
                 await _record_branch_creation_policy(state, package, gateway_tools)
+                await _record_auto_processing_policy(
+                    state, package, gateway_tools, user_triggered, triage_only_requested
+                )
 
             if (
                 state.cve_eligibility_result
@@ -1303,6 +1470,12 @@ async def run_workflow(
 
         async def consolidate_rebuild_siblings(state):
             """Find and analyze sibling issues that can share a single rebuild MR."""
+            if state.triage_only:
+                logger.info(
+                    "Triage-only mode for %s — skipping rebuild sibling consolidation",
+                    state.jira_issue,
+                )
+                return "comment_in_jira"
             rebuild_data = state.triage_result.data
             included, summary = await find_rebuild_siblings(
                 jira_issue=state.jira_issue,
@@ -1319,41 +1492,24 @@ async def run_workflow(
 
         async def consolidate_rebase_siblings(state):
             """Queue sibling issues for triage and decide whether to queue primary for rebase."""
+            if state.triage_only:
+                logger.info(
+                    "Triage-only mode for %s — skipping rebase sibling consolidation",
+                    state.jira_issue,
+                )
+                return "comment_in_jira"
             rebase_data = state.triage_result.data
 
-            # Skip consolidation if this issue is already a sibling of another primary
-            # Check both label (set when queued) and comments (may not be labeled yet due to race)
-            current_labels, _ = await tasks.get_jira_issue_metadata(state.jira_issue)
-            if state.is_rebase_sibling or JiraLabels.REBASE_SIBLING.value in current_labels:
-                state.is_rebase_sibling = True
-                logger.info(f"Issue {state.jira_issue} has ymir_rebase_sibling label, skipping consolidation")
-                # Don't search for siblings or set waiting flag
+            # Siblings must not search for their own siblings (prevents circular
+            # dependencies). The marker is permanent, so re-check it every run: once
+            # the primary has finished, this issue must run its own fix.
+            state.is_rebase_sibling = await _is_rebase_sibling(state, gateway_tools, user_triggered)
+            if state.is_rebase_sibling:
+                logger.info(f"Issue {state.jira_issue} is a sibling, skipping consolidation")
                 state.rebase_waiting_for_siblings = False
                 rebase_data.consolidated_issues = []
                 rebase_data.consolidation_summary = None
                 return "comment_in_jira"
-
-            # Also check comments for "Queued for triage as potential sibling" (label may not be set yet)
-            # Siblings should NOT search for their own siblings (prevents circular dependencies)
-            try:
-                details = await run_tool(
-                    "get_jira_details",
-                    issue_key=state.jira_issue,
-                    available_tools=gateway_tools,
-                )
-                comments = details.get("fields", {}).get("comment", {}).get("comments", [])
-                for comment in comments:
-                    # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
-                    comment_text = extract_text_from_adf(comment.get("body", ""))
-                    if "Queued for triage as potential sibling of" in comment_text:
-                        state.is_rebase_sibling = True
-                        logger.info(f"Issue {state.jira_issue} is a sibling, skipping consolidation")
-                        state.rebase_waiting_for_siblings = False
-                        rebase_data.consolidated_issues = []
-                        rebase_data.consolidation_summary = None
-                        return "comment_in_jira"
-            except Exception as e:
-                logger.warning(f"Failed to check comments for {state.jira_issue}: {e}, proceeding")
 
             # Queue siblings for triage
             sibling_count = await queue_siblings_for_triage(
@@ -1388,7 +1544,10 @@ async def run_workflow(
             return "comment_in_jira"
 
         async def comment_in_jira(state):
-            comment_text = state.triage_result.format_for_comment(auto_chain=auto_chain)
+            comment_text = state.triage_result.format_for_comment(
+                auto_chain=auto_chain,
+                triage_only=_defers_fix(state.triage_result.resolution, state.triage_only),
+            )
             if state.applicability_check_skipped:
                 comment_text += (
                     "\n\n_Note: CVE applicability check could not be performed (source preparation failed)._"
@@ -1410,6 +1569,7 @@ async def run_workflow(
                 resolution=state.triage_result.resolution,
                 user_triggered=user_triggered,
                 requires_manual_branch_creation=state.hold_for_manual_branch_creation,
+                triage_only=state.triage_only,
             ):
                 logger.info(
                     f"Skipping Jira comment for {state.jira_issue} "
@@ -1442,7 +1602,7 @@ async def run_workflow(
                         [state.jira_issue, *[issue.issue_key for issue in siblings]],
                     ),
                     agent_type="Triage",
-                    triaged_label=_RESOLUTION_TO_LABEL[state.triage_result.resolution].value,
+                    triaged_label=_resolution_label(state.triage_result.resolution, state.triage_only).value,
                     dry_run=dry_run,
                     user_triggered=user_triggered,
                     primary_comment=comment_text,
@@ -1614,7 +1774,7 @@ async def main() -> None:
                         jira_issue=jira_issue, output=output, dry_run=dry_run, user_triggered=user_triggered
                     )
                 else:
-                    resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
+                    resolution_label = _resolution_label(output.resolution, state.triage_only)
                     if (
                         resolution_label
                         and output.resolution != Resolution.ERROR
@@ -1687,16 +1847,23 @@ async def main() -> None:
 
         async def _process_triage_locked(task, input) -> tuple[str, str] | tuple[str, str, int] | None:
             user_triggered = task.user_triggered
+            triage_only_requested = task.triage_only
+            trigger_note = ""
+            if user_triggered:
+                trigger_note = (
+                    " (user-triggered via ymir_todo_triage)"
+                    if triage_only_requested
+                    else " (user-triggered via ymir_todo)"
+                )
             logger.info(
-                f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}"
-                + (" (user-triggered via ymir_todo)" if user_triggered else "")
+                f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}{trigger_note}"
             )
             if task.attempts == 0:
                 if user_triggered:
                     sentry_sdk.metrics.count(
                         "ymir_todo.processed",
                         1,
-                        attributes={"issue": input.issue},
+                        attributes={"issue": input.issue, "triage_only": triage_only_requested},
                     )
                 else:
                     sentry_sdk.metrics.count("ymir.autoprocessed", 1)
@@ -1727,7 +1894,7 @@ async def main() -> None:
                 if user_triggered:
                     await tasks.set_jira_labels(
                         jira_issue=input.issue,
-                        labels_to_remove=["ymir_todo"],
+                        labels_to_remove=[JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value],
                         dry_run=dry_run,
                         user_triggered=True,
                     )
@@ -1819,12 +1986,18 @@ async def main() -> None:
                 # Keep the waiting marker so sibling completion can release
                 # this primary while it is being re-triaged. Clean other old
                 # ymir_* labels and establish the in-progress anchor.
+                # The triage-only marker is persisted intent: keep it for
+                # triage-only runs and automatic re-entries. An explicit
+                # ymir_todo run (user-triggered, not triage-only) drops it,
+                # both here and in the fetcher's label flip.
+                preserve_triage_only = not user_triggered or triage_only_requested
                 labels_to_remove = [
                     label
                     for label in current_labels
                     if label.startswith("ymir_")
                     and label
                     not in (JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.WAITING_FOR_SIBLINGS.value)
+                    and not (preserve_triage_only and label == JiraLabels.TRIAGE_ONLY.value)
                 ]
                 await tasks.set_jira_labels(
                     jira_issue=input.issue,
@@ -1881,6 +2054,7 @@ async def main() -> None:
                         auto_chain=auto_chain,
                         force_cve_triage=input.force_cve_triage,
                         user_triggered=user_triggered,
+                        triage_only_requested=triage_only_requested,
                     )
                     output = state.triage_result
                     logger.info(
@@ -1912,7 +2086,7 @@ async def main() -> None:
                         jira_issue=input.issue, output=output, dry_run=dry_run, user_triggered=user_triggered
                     )
                 else:
-                    resolution_label = _RESOLUTION_TO_LABEL.get(output.resolution)
+                    resolution_label = _resolution_label(output.resolution, state.triage_only)
                     if (
                         resolution_label
                         and output.resolution != Resolution.ERROR
@@ -1932,23 +2106,23 @@ async def main() -> None:
                                 f"{input.issue} is a sibling, will check if primary is ready to queue"
                             )
 
-                        # Only add terminal label if NOT waiting for siblings
-                        # (primary waiting for siblings will be re-triaged when siblings finish,
-                        # and terminal label will be added then)
-                        if not (
-                            output.resolution == Resolution.REBASE
-                            and (
-                                state.rebase_waiting_for_siblings
-                                or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
-                            )
+                        # A full run waiting for siblings is re-triaged when they
+                        # finish, so its terminal label is added then. A triage-only
+                        # run ends the wait here instead of leaving it dangling.
+                        waiting_for_siblings = (
+                            state.rebase_waiting_for_siblings
+                            or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                        )
+                        if _should_defer_terminal_label(
+                            output.resolution, state.triage_only, waiting_for_siblings
                         ):
-                            labels_to_add.append(resolution_label.value)
-                            labels_to_remove.append(JiraLabels.WAITING_FOR_SIBLINGS.value)
-                        else:
                             logger.info(
                                 f"{input.issue} is waiting for siblings, skipping terminal label "
                                 "(will be added on re-triage after siblings finish)"
                             )
+                        else:
+                            labels_to_add.append(resolution_label.value)
+                            labels_to_remove.append(JiraLabels.WAITING_FOR_SIBLINGS.value)
 
                         await tasks.set_jira_labels(
                             jira_issue=input.issue,
@@ -2079,7 +2253,7 @@ async def main() -> None:
                     Resolution.CLARIFICATION_NEEDED,
                     Resolution.OPEN_ENDED_ANALYSIS,
                 ):
-                    if auto_chain:
+                    if auto_chain and not state.triage_only:
                         if output.resolution == Resolution.OPEN_ENDED_ANALYSIS:
                             queue = RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value
                             downstream_payload = output.data.model_dump_json()
@@ -2137,7 +2311,14 @@ async def main() -> None:
                             await fix_await(redis.lpush(queue, downstream_payload))
                             logger.info(f"Pushed {input.issue} to {queue}")
                     else:
-                        logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
+                        if state.triage_only:
+                            logger.info(
+                                "Triage-only mode for %s — skipping downstream queue "
+                                "(add ymir_todo to run the fix pipeline)",
+                                input.issue,
+                            )
+                        else:
+                            logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
 
                 if output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
                     _modular_component = detect_modular_issue(

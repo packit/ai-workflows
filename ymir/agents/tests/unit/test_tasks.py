@@ -21,6 +21,7 @@ from ymir.agents.tasks import (
     commit_push_and_open_mr,
     ensure_canonical_changelog_title,
     escape_rpm_changelog_text,
+    fetch_auto_processing_config,
     fetch_branch_creation_config,
     fetch_release_bumping_config,
     fork_and_prepare_dist_git,
@@ -32,7 +33,7 @@ from ymir.agents.tasks import (
     resolve_canonical_mr_title,
     resolve_current_canonical_mr_title,
 )
-from ymir.common.models import CachedMRMetadata, Task
+from ymir.common.models import AutoProcessingMode, CachedMRMetadata, Task
 from ymir.tools.privileged.utils import ACTIVE_WORKSPACE_MARKER
 
 
@@ -1830,3 +1831,79 @@ async def test_fetch_release_bumping_config_returns_default_when_no_release_bump
     assert config.abandon_autorelease is False
     assert config.treat_maintenance_rhel_as_zstream is False
     assert config.disregard_zstream_nvr_policy is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_release_bumping_config_parses_yaml_mentioning_not_found():
+    """Only the tool's absence marker means "no file", not config text."""
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "note: branch not found -> create it\nrelease_bumping:\n  abandon_autorelease: true\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    config = await fetch_release_bumping_config("bash", [])
+
+    assert config.abandon_autorelease is True
+
+
+# -- fetch_auto_processing_config ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_auto_processing_config_defaults_to_full_when_not_configured():
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "No maintainer rules found for package 'bash' (file 'ymir.yaml' not found)"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    config = await fetch_auto_processing_config("bash", [])
+
+    assert config.mode is AutoProcessingMode.FULL
+
+
+@pytest.mark.asyncio
+async def test_fetch_auto_processing_config_parses_triage_only():
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "auto_processing:\n  mode: triage_only\n"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    config = await fetch_auto_processing_config("bash", [])
+
+    assert config.mode is AutoProcessingMode.TRIAGE_ONLY
+
+
+@pytest.mark.asyncio
+async def test_fetch_auto_processing_config_raises_on_fetch_failure():
+    """A GitLab error must not silently fall back to the full pipeline."""
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return "Failed to fetch maintainer rules (HTTP 500): internal server error"
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    with pytest.raises(agent_tasks.MaintainerRulesFetchError):
+        await fetch_auto_processing_config("bash", [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "yaml_content",
+    [
+        "auto_processing:\n  mode: [\n",  # invalid YAML syntax
+        "auto_processing:\n  mode: not_a_mode\n",  # unknown mode
+        "auto_processing: not_a_mapping\n",  # wrong shape
+    ],
+)
+async def test_fetch_auto_processing_config_fails_open_on_malformed_config(yaml_content):
+    """A bad ymir.yaml must not disable the fix pipeline: default to full."""
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        return yaml_content
+
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    config = await fetch_auto_processing_config("bash", [])
+
+    assert config.mode is AutoProcessingMode.FULL

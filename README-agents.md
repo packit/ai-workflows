@@ -94,6 +94,48 @@ field unknown and are retried post-applicability. Existing branches can be used
 regardless of this setting; CentOS Stream and modular branches keep their
 existing handling. Dry runs do not write hold labels or comments.
 
+### Triage-only auto-processing
+
+Packages that cannot consume CI capacity for the full fix pipeline can stop
+Ymir after triage. The mode is set per package in the same `ymir.yaml`:
+
+```yaml
+auto_processing:
+  mode: triage_only
+```
+
+Triage still analyzes the CVE, checks applicability, and enqueues the
+reproducer, so the issue is ready for a developer. Instead of queueing the
+rebase/backport/rebuild agent and opening an MR, triage records the decision
+with a terminal `ymir_triaged_deferred_backport`, `ymir_triaged_deferred_rebase`,
+or `ymir_triaged_deferred_rebuild` label and posts a comment explaining the
+result. These labels are not in-flight states, so the fetcher never treats them
+as stale work.
+
+To run the fix pipeline later, a maintainer adds `ymir_todo`. A `ymir_todo`
+run ignores `triage_only` and always proceeds with the full pipeline, exactly
+as it does for a package without the setting. Because the deferred label is
+terminal rather than in-flight, the issue does not block
+Z-stream dependency checks or sibling consolidation.
+
+Triage-only can also be requested per issue, for packages that run the full
+pipeline by default: adding `ymir_todo_triage` (Red Hat Employee only, verified
+per issue like `ymir_todo`) runs triage and defers the fix. If both labels are
+present, `ymir_todo` wins and the run executes the full pipeline; both trigger
+labels are consumed.
+
+The per-issue choice is persisted as the `ymir_triage_only` label so it survives
+automatic re-entry. When the fetcher consumes `ymir_todo_triage` it stamps the
+marker, and the triage agent and the postponement sweeps read it on later runs,
+so a postponed issue that the sweep re-queues (or a task recovered after a crash)
+is triaged again without starting the fix pipeline. The marker is cleared when
+the fetcher consumes `ymir_todo`, the explicit request for full processing.
+
+Missing or omitted `auto_processing` configuration defaults to `mode: full`.
+Malformed YAML, an unknown mode, or a wrongly shaped section is logged and also
+defaults to full so a broken rules file cannot silently disable the fix
+pipeline. Fetch failures propagate and trigger the normal agent-level retry.
+
 ### Y-stream inheritance fast path
 
 For Important and Critical Y-stream CVEs, triage carries the shipped leading

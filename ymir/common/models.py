@@ -115,16 +115,29 @@ class Task(BaseModel):
         "failure labels that are otherwise suppressed. Error comments are "
         "posted regardless of this flag.",
     )
+    triage_only: bool = Field(
+        default=False,
+        description="True when a maintainer requested a triage-only run via the "
+        "ymir_todo_triage label — overrides auto_processing.mode from the package's "
+        "ymir.yaml so the fix pipeline is not queued.",
+    )
 
     def to_json(self) -> str:
         """Convert to JSON string for Redis queue storage."""
         return self.model_dump_json()
 
     @classmethod
-    def from_issue(cls, issue: str, attempts: int = 0, user_triggered: bool = False) -> "Task":
+    def from_issue(
+        cls, issue: str, attempts: int = 0, user_triggered: bool = False, triage_only: bool = False
+    ) -> "Task":
         """Create a task from a JIRA issue key."""
         metadata = TriageInputSchema(issue=issue)
-        return cls(metadata=metadata.model_dump(), attempts=attempts, user_triggered=user_triggered)
+        return cls(
+            metadata=metadata.model_dump(),
+            attempts=attempts,
+            user_triggered=user_triggered,
+            triage_only=triage_only,
+        )
 
 
 # ============================================================================
@@ -603,7 +616,7 @@ class TriageOutputSchema(BaseModel):
         default=None, description="Confidence in target-source applicability; None means unassessed"
     )
 
-    def format_for_comment(self, auto_chain: bool = False) -> str:
+    def format_for_comment(self, auto_chain: bool = False, triage_only: bool = False) -> str:
         """Format the triage result in a human-readable format for Jira comments."""
         resolution = f"*Resolution*: {self.resolution.value}\n"
         confidence_text = (
@@ -611,14 +624,18 @@ class TriageOutputSchema(BaseModel):
             if self.confidence is not None
             else ""
         )
-        follow_up_note = (
-            ""
-            if auto_chain
-            else (
+        if triage_only:
+            follow_up_note = (
+                "\n\n_This run stopped after triage (triage-only mode). "
+                "The fix pipeline was not started; add `ymir_todo` to run it._"
+            )
+        elif auto_chain:
+            follow_up_note = ""
+        else:
+            follow_up_note = (
                 "\n\n_Automated individual follow-up workflow for this "
                 "resolution type is planned for Q2 2026. Stay tuned._"
             )
-        )
 
         match self.data:
             case BackportData():
@@ -1000,6 +1017,30 @@ class PackageBranchCreationConfig(BaseModel):
     automatic: bool = Field(
         default=True,
         description="Whether Ymir may automatically create missing internal z-stream branches",
+    )
+
+
+class AutoProcessingMode(StrEnum):
+    """How far Ymir drives an issue after triage."""
+
+    FULL = "full"
+    TRIAGE_ONLY = "triage_only"
+
+
+class PackageAutoProcessingConfig(BaseModel):
+    """Machine-readable auto-processing config from the per-package rules repo.
+
+    Parsed from the ``auto_processing`` section of
+    ``gitlab.com/redhat/centos-stream/rules/<package>/ymir.yaml``.
+
+    ``triage_only`` stops after triage: the resolution is labeled with a
+    ``ymir_triaged_deferred_*`` label and the fix pipeline is not queued.
+    A maintainer can add ``ymir_todo`` later to run the full pipeline.
+    """
+
+    mode: AutoProcessingMode = Field(
+        default=AutoProcessingMode.FULL,
+        description="'full' runs the downstream fix pipeline; 'triage_only' stops after triage",
     )
 
 

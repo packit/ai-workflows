@@ -1,5 +1,6 @@
 import logging
 import os
+from enum import Enum, auto
 from urllib.parse import quote
 
 import aiohttp
@@ -14,6 +15,30 @@ from ymir.tools.constants import AIOHTTP_TIMEOUT, GITLAB_API_URL, RULES_NAMESPAC
 from ymir.tools.http import aiohttp_get_with_retries
 
 logger = logging.getLogger(__name__)
+
+# The tool reports both "no such file" and fetch failures as ordinary text, so
+# the strings are a contract: callers must classify output before parsing it.
+RULES_NOT_FOUND_PREFIX = "No maintainer rules found"
+RULES_FETCH_FAILED_PREFIX = "Failed to fetch maintainer rules"
+
+
+class RulesOutcome(Enum):
+    """How ``get_maintainer_rules`` reported the requested file."""
+
+    CONTENT = auto()
+    NOT_FOUND = auto()
+    FETCH_FAILED = auto()
+
+
+def classify_rules_output(raw: object) -> RulesOutcome:
+    """Classify ``get_maintainer_rules`` output before treating it as file content."""
+    if not isinstance(raw, str):
+        return RulesOutcome.CONTENT
+    if raw.startswith(RULES_NOT_FOUND_PREFIX):
+        return RulesOutcome.NOT_FOUND
+    if raw.startswith(RULES_FETCH_FAILED_PREFIX):
+        return RulesOutcome.FETCH_FAILED
+    return RulesOutcome.CONTENT
 
 
 class MaintainerRulesInput(BaseModel):
@@ -70,12 +95,12 @@ class MaintainerRulesTool(Tool[MaintainerRulesInput, ToolRunOptions, StringToolO
                         return StringToolOutput(result=await response.text())
                     if response.status == 404:
                         return StringToolOutput(
-                            result=f"No maintainer rules found for package '{tool_input.package}' "
+                            result=f"{RULES_NOT_FOUND_PREFIX} for package '{tool_input.package}' "
                             f"(file '{tool_input.file_path}' not found in rules repository)."
                         )
                     text = await response.text()
                     return StringToolOutput(
-                        result=f"Failed to fetch maintainer rules (HTTP {response.status}): {text}"
+                        result=f"{RULES_FETCH_FAILED_PREFIX} (HTTP {response.status}): {text}"
                     )
             except TimeoutError as e:
                 raise ToolError("Timeout while fetching maintainer rules") from e

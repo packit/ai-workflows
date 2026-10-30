@@ -47,19 +47,20 @@ patch_route_tls_from_secret() {
     fi
 
     echo "Patching route $route with TLS cert/key from secret $secret ..."
-    local cert key
+    local cert key patch
     cert=$(oc get secret "$secret" -o jsonpath='{.data.tls\.crt}' | base64 -d)
     key=$(oc get secret "$secret" -o jsonpath='{.data.tls\.key}' | base64 -d)
 
-    oc patch route "$route" --type merge -p "$(
-        python3 -c "
+    # Construct the payload separately so shell quoting is unambiguous and a
+    # Python failure stops deployment before oc receives an empty patch.
+    patch=$(python3 -c '
 import json, sys
-print(json.dumps({'spec':{'tls':{
-    'certificate': sys.argv[1],
-    'key': sys.argv[2],
+print(json.dumps({"spec":{"tls":{
+    "certificate": sys.argv[1],
+    "key": sys.argv[2],
 }}}))
-" "$cert" "$key"
-    )"
+' "$cert" "$key") || return 1
+    oc patch route "$route" --type merge -p "$patch"
 }
 
 # Egress rules

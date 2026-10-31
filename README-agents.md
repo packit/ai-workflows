@@ -442,8 +442,8 @@ ymir triage RHEL-12345 --dry-run --compose-file /path/to/compose.yaml
 `FORCE_CVE_TRIAGE` environment variables when set.
 
 `GOOGLE_APPLICATION_CREDENTIALS` is only needed for `vertexai:` models. For
-`anthropic:` or `gemini:` models, the API key from `beeai-agent.env` is
-sufficient.
+`anthropic:`, `gemini:` or `openai:` models, the API key from
+`beeai-agent.env` is sufficient.
 
 Issues processed through the CLI are tagged with the `ymir_cli_triage` Jira
 label at the start of the run. The label persists on success as a

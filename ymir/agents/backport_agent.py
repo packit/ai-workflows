@@ -38,7 +38,7 @@ from ymir.agents.constants import (
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
-from ymir.agents.package_update_steps import PackageUpdateState
+from ymir.agents.package_update_steps import PackageUpdateState, build_mr_note
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
@@ -2072,19 +2072,25 @@ async def run_workflow(
                     comment_text = (
                         state.merge_request_url if state.merge_request_url else state.backport_result.status
                     )
-                if state.build_url:
-                    comment_text += f"\nBuild: {state.build_url}"
-                if is_modular_issue:
-                    comment_text += (
-                        "\n\n*Note:* Modular package — Copr build was attempted with "
-                        f"module stream `{module_stream}` enabled in the buildroot. "
-                        "Please verify the MR and build result before shipping."
-                        if module_stream
-                        else "\n\n*Note:* Modular package support is in development. "
-                        "The module:stream could not be determined, so no build was "
-                        "attempted — please verify the MR and trigger a build manually."
-                    )
                 is_error = False
+                if state.merge_request_url and (state.build_url or is_modular_issue):
+                    mr_note = build_mr_note(
+                        build_url=state.build_url,
+                        is_modular_issue=is_modular_issue,
+                        module_stream=module_stream,
+                    )
+                    try:
+                        await tasks.comment_in_mr(
+                            merge_request_url=state.merge_request_url,
+                            comment_text=mr_note,
+                            available_tools=gateway_tools,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to post build info comment on MR %s",
+                            state.merge_request_url,
+                            exc_info=True,
+                        )
             else:
                 comment_text = f"Agent failed to perform a backport: {state.backport_result.error}"
                 is_error = True

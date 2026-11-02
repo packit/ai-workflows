@@ -183,11 +183,20 @@ def _files_to_stage_for_patches(
 
     Uses the current spec's Patch tags (post-LLM renames) and also includes
     ``original_patches`` so renames/deletes of pre-adaptation filenames are
-    staged. Raises if the spec references a patch file that is missing on disk.
+    staged. Only validates existence of patches introduced by the branches
+    being consolidated (``original_patches``), not pre-existing spec entries.
     """
     with Specfile(local_clone / spec_name) as spec:
         patch_files = [p.location for p in get_all_patches(spec) if p.location]
-    missing = [p for p in patch_files if not (local_clone / p).is_file()]
+    # If original_patches is None (merge strategy), validate all patches in
+    # the spec. This may false-positive on URL or conditionally applied
+    # patches that are declared in the spec but not present as local files.
+    # LLM renamed patches fall outside the intersection and skip the check,
+    # but git-add catches such missing files later.
+    patches_to_validate = (
+        set(original_patches) & set(patch_files) if original_patches is not None else set(patch_files)
+    )
+    missing = [p for p in patches_to_validate if not (local_clone / p).is_file()]
     if missing:
         raise RuntimeError(f"Spec references patch file(s) that do not exist: {missing}")
     files = [spec_name, *patch_files]

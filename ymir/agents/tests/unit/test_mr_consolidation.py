@@ -1191,6 +1191,16 @@ class TestFilesToStageForPatches:
         with pytest.raises(RuntimeError, match="do not exist"):
             _files_to_stage_for_patches(repo, "test.spec")
 
+    def test_skips_validation_when_original_patches_empty(self, tmp_path):
+        """Empty list means the branch contributed no patches — don't validate pre-existing ones."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._write_spec_with_patches(repo, ["0018-foo.patch"])
+
+        result = _files_to_stage_for_patches(repo, "test.spec", original_patches=[])
+
+        assert result == ["test.spec", "0018-foo.patch"]
+
     def test_stages_spec_and_current_patches_without_originals(self, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()

@@ -28,6 +28,8 @@ spec:
         env:
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+        - name: OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT
+          value: "256"
         envFrom:
         - configMapRef:
             name: agents-env

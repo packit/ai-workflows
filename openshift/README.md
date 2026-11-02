@@ -266,7 +266,7 @@ Clients obtain tokens externally and present them as
 
 ### Browser usage (trace server UI)
 
-1. Visit the trace server at `https://ymir.redhat.com` (or `https://trace-server-jotnar-ymir--...`)
+1. Visit the trace server at `https://ymir.redhat.com` (or `https://trace-server-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com`)
 2. Click "login" in the header — redirects to Red Hat SSO
 3. After login, navigate to "submit" to submit consolidation jobs
 4. The SPA manages tokens automatically (PKCE flow)
@@ -276,7 +276,7 @@ Clients obtain tokens externally and present them as
 ```bash
 # Using oidc-agent (one-time setup: oidc-gen ymir-api):
 curl -H "Authorization: Bearer $(oidc-token ymir-api)" \
-  https://api-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com/api/consolidation \
+  https://api-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com/api/consolidation \
   -H 'Content-Type: application/json' \
   -d '{"package":"expat","target_branch":"rhel-9.8.0"}'
 ```
@@ -288,19 +288,21 @@ curl -H "Authorization: Bearer $(oidc-token ymir-api)" \
 | `api-oidc-env` | ConfigMap | `OIDC_PROVIDER_URL` + CORS origins for the API JWT validation middleware |
 | `trace-server-oidc-env` | ConfigMap | `OIDC_AUTHORITY`, `OIDC_CLIENT_ID`, `OIDC_API_URL`, `OIDC_SCOPE` for the trace server SPA |
 
-### Red Hat IT requirements checklist
+### OIDC client registration
 
-Before OIDC authentication will work, the following must be obtained from Red Hat IT / SSO admins:
+Manage the Ymir OIDC client through [CIAM Client Enablements self-service](https://gitlab.cee.redhat.com/ciam-s/client-enablements). Its definition is [`clients/jotnar-project/client-api.yaml`](https://gitlab.cee.redhat.com/ciam-s/client-enablements/-/blob/main/clients/jotnar-project/client-api.yaml). Set the grant, PKCE, redirect URIs, and scopes there. After CIAM processes the change, use the client ID from its success notification; a change can create a client with a new ID.
+
+Verify these settings for the registration and deployment:
 
 1. **OIDC Provider URL** — the Keycloak realm URL (e.g. `https://sso.redhat.com/auth/realms/redhat-external`)
 2. **Public OIDC Client registration** with:
    - Client type: **public** (no client secret)
    - PKCE required: **yes** (S256)
-   - Allowed redirect URIs: `https://ymir.redhat.com/*` and `https://trace-server-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com/*`
-   - Allowed web origins: `https://ymir.redhat.com` and `https://trace-server-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com`
+   - Allowed redirect URIs: `https://ymir.redhat.com/*` and `https://trace-server-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com/*`
+   - Allowed web origins: `https://ymir.redhat.com` and `https://trace-server-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com`
    - Standard flow enabled (Authorization Code)
    - Scopes: `id.username` (the `openid` scope is implicit at sso.redhat.com)
-3. **Client ID** assigned by the registration (e.g. `ymir-trace-ui`)
+3. **Client ID** assigned by the registration. Set `OIDC_CLIENT_ID` in `configmap-trace-server-oidc-env.yml` to this ID; apply the ConfigMap and restart the `otel-collector` deployment so the trace server loads it.
 4. **JWKS endpoint URL** — usually `${provider_url}/protocol/openid-connect/certs` (auto-discoverable from `.well-known/openid-configuration`)
 5. **Confirmation** that access tokens are JWTs (not opaque) so they can be validated via JWKS without introspection
 

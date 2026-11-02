@@ -1,13 +1,12 @@
-"""Build info (Copr link, modular notes) is posted as an MR comment, not in Jira.
+"""Build info (Copr link, modular notes) belongs in the MR description, not Jira.
 
 The build step captures `BuildOutputSchema.build_url` into `state.build_url`.
-After the Jira comment is posted, if a merge request URL exists and there is a
-build URL (or the issue is modular), a separate comment is added to the MR via
-`tasks.comment_in_mr` so reviewers see the build context where they review.
+When the MR is opened, that URL (plus any modular notes) is appended to the MR
+description via `build_mr_note`. The Jira comment stays a plain MR link.
 
 `fix_build_error` also propagates `build_url` from the fix agent's
-`BackportOutputSchema` when one is reported, so the MR comment can link to the
-latest build rather than only the original failed one.
+`BackportOutputSchema` when one is reported, so the MR description can link to
+the latest build rather than only the original failed one.
 """
 
 from contextlib import asynccontextmanager
@@ -19,7 +18,32 @@ from beeai_framework.workflows import Workflow
 from flexmock import flexmock
 
 from ymir.agents import backport_agent, tasks
-from ymir.common.models import BackportOutputSchema
+from ymir.agents.package_update_steps import build_mr_note
+from ymir.common.models import BackportOutputSchema, LogOutputSchema
+
+
+def test_build_mr_note_includes_build_url_and_expiry_warning():
+    note = build_mr_note(
+        build_url="https://copr.example/build/1/",
+        is_modular_issue=False,
+        module_stream=None,
+    )
+    assert "https://copr.example/build/1/" in note
+    assert "Copr projects are temporary" in note
+
+
+def test_build_mr_note_includes_modular_stream():
+    note = build_mr_note(
+        build_url="https://copr.example/build/1/",
+        is_modular_issue=True,
+        module_stream="postgresql:16",
+    )
+    assert "postgresql:16" in note
+    assert "https://copr.example/build/1/" in note
+
+
+def test_build_mr_note_empty_when_nothing_to_report():
+    assert build_mr_note(build_url=None, is_modular_issue=False, module_stream=None) == ""
 
 
 async def _run_comment_in_jira(
@@ -27,21 +51,15 @@ async def _run_comment_in_jira(
     *,
     build_url,
     merge_request_url="https://gitlab.com/x/y/-/merge_requests/1",
-    is_modular_issue=False,
-    module_stream=None,
 ):
     """Start the real workflow at comment_in_jira with a successful backport result."""
     captured_jira_comments = []
-    captured_mr_comments = []
 
     async def _fake_comment_in_jira(*, comment_text, **_kwargs):
         captured_jira_comments.append(comment_text)
 
-    async def _fake_comment_in_mr(*, merge_request_url, comment_text, **_kwargs):
-        captured_mr_comments.append(comment_text)
-
     flexmock(tasks).should_receive("comment_in_jira").replace_with(_fake_comment_in_jira).once()
-    flexmock(tasks).should_receive("comment_in_mr").replace_with(_fake_comment_in_mr).at_most().once()
+    flexmock(tasks).should_receive("comment_in_mr").never()
 
     @asynccontextmanager
     async def gateway(*args, **kwargs):
@@ -74,56 +92,102 @@ async def _run_comment_in_jira(
         cve_id=None,
         dry_run=False,
         backport_agent_factory=lambda *_: None,
-        is_modular_issue=is_modular_issue,
-        module_stream=module_stream,
+        is_modular_issue=False,
+        module_stream=None,
     )
 
     assert len(captured_jira_comments) == 1
-    return captured_jira_comments[0], captured_mr_comments
+    return captured_jira_comments[0]
 
 
 @pytest.mark.asyncio
-async def test_build_url_posted_on_mr_not_jira(monkeypatch):
+async def test_jira_comment_is_plain_mr_link_without_build_url(monkeypatch):
     build_url = "https://copr.devel.redhat.com/coprs/jotnar-bot/RHEL-999/build/166632/"
-    jira_text, mr_comments = await _run_comment_in_jira(monkeypatch, build_url=build_url)
+    jira_text = await _run_comment_in_jira(monkeypatch, build_url=build_url)
 
+    assert jira_text == "https://gitlab.com/x/y/-/merge_requests/1"
     assert "Build:" not in jira_text
-    assert jira_text == "https://gitlab.com/x/y/-/merge_requests/1"
-
-    assert len(mr_comments) == 1
-    assert build_url in mr_comments[0]
-    assert "Copr projects are temporary" in mr_comments[0]
+    assert build_url not in jira_text
 
 
 @pytest.mark.asyncio
-async def test_no_mr_comment_when_no_build_url(monkeypatch):
-    """No build URL and not modular → no MR comment at all."""
-    jira_text, mr_comments = await _run_comment_in_jira(monkeypatch, build_url=None)
-
-    assert jira_text == "https://gitlab.com/x/y/-/merge_requests/1"
-    assert len(mr_comments) == 0
-
-
-@pytest.mark.asyncio
-async def test_modular_note_posted_on_mr(monkeypatch):
+async def test_mr_description_includes_build_url(monkeypatch, tmp_path):
+    """commit_push_and_open_mr embeds build_mr_note into the MR description."""
     build_url = "https://copr.devel.redhat.com/coprs/jotnar-bot/RHEL-999/build/166632/"
-    jira_text, mr_comments = await _run_comment_in_jira(
-        monkeypatch,
-        build_url=build_url,
+    local_clone = tmp_path / "pkg"
+    local_clone.mkdir()
+    captured = {}
+
+    async def _fake_commit_push_and_open_mr(**kwargs):
+        captured["mr_description"] = kwargs["mr_description"]
+        return "https://gitlab.com/x/y/-/merge_requests/1", True
+
+    @asynccontextmanager
+    async def gateway(*args, **kwargs):
+        yield []
+
+    flexmock(backport_agent).should_receive("mcp_tools").replace_with(gateway)
+    flexmock(backport_agent).should_receive("create_log_agent").and_return(None)
+    flexmock(backport_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    async def _fake_needs_zstream_target_label(*_a, **_kw):
+        return False
+
+    flexmock(tasks).should_receive("commit_push_and_open_mr").replace_with(
+        _fake_commit_push_and_open_mr
+    ).once()
+    flexmock(tasks).should_receive("needs_zstream_target_label").replace_with(
+        _fake_needs_zstream_target_label
+    )
+    flexmock(tasks).should_receive("comment_in_mr").never()
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+
+    run_workflow = Workflow.run
+
+    def start_at_open_mr(workflow, state, options=None):
+        if workflow.name == "BackportWorkflow":
+            state.backport_result = BackportOutputSchema(
+                success=True, status="done", srpm_path=None, error=None
+            )
+            state.local_clone = local_clone
+            state.fork_url = "https://gitlab.com/fork/pkg.git"
+            state.update_branch = "ymir-RHEL-999"
+            state.build_url = build_url
+            state.backport_log = ["cherry-picked"]
+            state.log_result = LogOutputSchema(title="Fix something", description="Details")
+            state.upstream_patches = ["https://example.com/patch.diff"]
+            workflow.set_start("commit_push_and_open_mr")
+
+            async def skip_rest(_state):
+                return Workflow.END
+
+            workflow.steps["submit_consolidation_job"].handler = skip_rest
+            workflow.steps["comment_in_jira"].handler = skip_rest
+        return run_workflow(workflow, state, options)
+
+    monkeypatch.setattr(Workflow, "run", start_at_open_mr)
+
+    await backport_agent.run_workflow(
+        package="postgresql",
+        dist_git_branch="c10s",
+        upstream_patches=["https://example.com/patch.diff"],
+        jira_issue="RHEL-999",
+        cve_id=None,
+        dry_run=False,
+        backport_agent_factory=lambda *_: None,
         is_modular_issue=True,
         module_stream="postgresql:16",
     )
 
-    assert "Modular" not in jira_text
-    assert len(mr_comments) == 1
-    assert "postgresql:16" in mr_comments[0]
-    assert build_url in mr_comments[0]
+    description = captured["mr_description"]
+    assert build_url in description
+    assert "Copr projects are temporary" in description
+    assert "postgresql:16" in description
 
 
 @pytest.mark.asyncio
 async def test_fix_build_error_propagates_build_url(monkeypatch, tmp_path):
     """When the LLM fix-agent succeeds and reports a build_url in its output,
-    fix_build_error must capture it into state.build_url so the MR comment
+    fix_build_error must capture it into state.build_url so the MR description
     links to the successful retry — not the original failed build."""
     fix_build_url = "https://copr.devel.redhat.com/coprs/jotnar-bot/RHEL-999/build/200000/"
     old_build_url = "https://copr.devel.redhat.com/coprs/jotnar-bot/RHEL-999/build/199999/"

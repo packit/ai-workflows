@@ -663,6 +663,12 @@ async def run_workflow(
                     if state.consolidation_summary
                     else ""
                 )
+                build_section = build_mr_note(
+                    build_url=state.build_url,
+                    is_modular_issue=is_modular_issue,
+                    module_stream=module_stream,
+                )
+                build_section_block = f"{build_section}\n\n" if build_section else ""
                 (
                     state.merge_request_url,
                     state.merge_request_newly_created,
@@ -686,6 +692,7 @@ async def run_workflow(
                         f"{wrap_details('Rebase status', state.rebase_log[-1])}"
                         f"{consolidation_text}"
                         f"\n\n{branch_note}"
+                        f"{build_section_block}"
                         f"{mr_description_footer(state.package, all_issues)}"
                     ),
                     available_tools=gateway_tools,
@@ -712,24 +719,6 @@ async def run_workflow(
                 comment_text = (
                     state.merge_request_url if state.merge_request_url else state.rebase_result.status
                 )
-                if state.merge_request_url and (state.build_url or is_modular_issue):
-                    mr_note = build_mr_note(
-                        build_url=state.build_url,
-                        is_modular_issue=is_modular_issue,
-                        module_stream=module_stream,
-                    )
-                    try:
-                        await tasks.comment_in_mr(
-                            merge_request_url=state.merge_request_url,
-                            comment_text=mr_note,
-                            available_tools=gateway_tools,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Failed to post build info comment on MR %s",
-                            state.merge_request_url,
-                            exc_info=True,
-                        )
                 # Post same success message to all issues in parallel with per-issue error handling
                 await post_comments_to_all_issues(
                     primary_issue=state.jira_issue,

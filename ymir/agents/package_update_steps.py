@@ -29,7 +29,7 @@ class PackageUpdateState(BaseModel):
     fork_url: str | None = Field(default=None)
     build_error: str | None = Field(default=None)
     build_url: str | None = Field(
-        default=None, description="Link to the last submitted Copr build, for the Jira comment"
+        default=None, description="Link to the last submitted Copr build, for the MR description"
     )
     log_result: LogOutputSchema | None = Field(default=None)
     canonical_title: str | None = Field(default=None, description="Resolved title shared by the issue family")
@@ -49,11 +49,11 @@ def build_mr_note(
     is_modular_issue: bool,
     module_stream: str | None,
 ) -> str:
-    """Build information comment to post on the merge request.
+    """Build a section for the merge request description.
 
     Includes the Copr build link (noting that Copr projects are temporary)
     and any modular-package notes so reviewers have the context where they
-    review — on the MR, not in Jira.
+    review — in the MR description, not in Jira.
     """
     parts: list[str] = []
     if build_url:

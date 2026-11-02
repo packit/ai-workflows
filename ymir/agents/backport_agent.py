@@ -1794,6 +1794,14 @@ async def run_workflow(
                     state.fix_version,
                 ):
                     labels.append(ZSTREAM_TARGET_LABEL)
+                inherit_description = state.inherit_mr_description or ""
+                build_section = build_mr_note(
+                    build_url=state.build_url,
+                    is_modular_issue=is_modular_issue,
+                    module_stream=module_stream,
+                )
+                if build_section:
+                    inherit_description = f"{inherit_description.rstrip()}\n\n{build_section}"
                 (
                     state.merge_request_url,
                     state.merge_request_newly_created,
@@ -1802,7 +1810,7 @@ async def run_workflow(
                     dist_git_branch=state.dist_git_branch,
                     update_branch=state.update_branch,
                     mr_title=state.log_result.title,
-                    mr_description=state.inherit_mr_description,
+                    mr_description=inherit_description,
                     available_tools=gateway_tools,
                     labels=labels,
                     package=state.package,
@@ -1835,6 +1843,12 @@ async def run_workflow(
                 f"This commit was backported {I_AM_YMIR}\n\n"
                 "Assisted-by: Ymir\n"
             )
+            build_section = build_mr_note(
+                build_url=state.build_url,
+                is_modular_issue=is_modular_issue,
+                module_stream=module_stream,
+            )
+            build_section_block = f"{build_section}\n\n" if build_section else ""
             mr_description = (
                 f"{state.log_result.description}\n\n"
                 f"Upstream patches:\n{formatted_patches}\n\n"
@@ -1842,6 +1856,7 @@ async def run_workflow(
                 f"{format_jira_links_for_mr(state.jira_issue)}\n"
                 f"{wrap_details('Backporting steps', state.backport_log[-1])}"
                 f"\n\n{branch_note}"
+                f"{build_section_block}"
                 f"{mr_description_footer(state.package, state.jira_issue)}"
             )
             labels = ["ymir_backport"] + (
@@ -1961,6 +1976,9 @@ async def run_workflow(
                     state.merge_request_newly_created = False
                     return "submit_consolidation_job"
                 try:
+                    # The description was composed before this build. Rebuild it
+                    # so the Copr URL from this attempt is in the MR body.
+                    _, mr_description, _ = await _compose_backport_commit_and_mr(state)
                     await tasks.push_changes(
                         state.local_clone, state.fork_url, state.update_branch, gateway_tools
                     )
@@ -2073,24 +2091,6 @@ async def run_workflow(
                         state.merge_request_url if state.merge_request_url else state.backport_result.status
                     )
                 is_error = False
-                if state.merge_request_url and (state.build_url or is_modular_issue):
-                    mr_note = build_mr_note(
-                        build_url=state.build_url,
-                        is_modular_issue=is_modular_issue,
-                        module_stream=module_stream,
-                    )
-                    try:
-                        await tasks.comment_in_mr(
-                            merge_request_url=state.merge_request_url,
-                            comment_text=mr_note,
-                            available_tools=gateway_tools,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Failed to post build info comment on MR %s",
-                            state.merge_request_url,
-                            exc_info=True,
-                        )
             else:
                 comment_text = f"Agent failed to perform a backport: {state.backport_result.error}"
                 is_error = True

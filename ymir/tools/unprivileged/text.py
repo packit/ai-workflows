@@ -1,6 +1,5 @@
 import asyncio
 import re
-from pathlib import Path
 
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
@@ -8,12 +7,12 @@ from beeai_framework.tools import StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
 from ymir.common.utils import get_absolute_path
-from ymir.common.validators import NonEmptyString
+from ymir.common.validators import NonEmptyString, ToolPath
 from ymir.tools.base import CloneableTool as Tool
 
 
 class CreateToolInput(BaseModel):
-    file: Path = Field(description="Path to a file to create")
+    file: ToolPath = Field(description="Path to a file to create")
     content: str = Field(description="Content to write to the new file")
 
 
@@ -46,7 +45,7 @@ class CreateTool(Tool[CreateToolInput, ToolRunOptions, StringToolOutput]):
 
 
 class ViewToolInput(BaseModel):
-    path: Path = Field(description="Path to a file or directory to view")
+    path: ToolPath = Field(description="Path to a file or directory to view")
     offset: int | None = Field(
         description="For text files only: 0-based line number to start viewing from",
         ge=0,
@@ -101,7 +100,7 @@ class ViewTool(Tool[ViewToolInput, ToolRunOptions, StringToolOutput]):
 
 
 class InsertToolInput(BaseModel):
-    file: Path = Field(description="Path to a file to edit")
+    file: ToolPath = Field(description="Path to a file to edit")
     line: int = Field(description="Line number after which to insert the text (0 for beginning of file)")
     new_string: str = Field(description="Text to insert")
 
@@ -135,7 +134,7 @@ class InsertTool(Tool[InsertToolInput, ToolRunOptions, StringToolOutput]):
 
 
 class InsertAfterSubstringToolInput(BaseModel):
-    file: Path = Field(description="Path to a file to edit")
+    file: ToolPath = Field(description="Path to a file to edit")
     insert_after_substring: NonEmptyString = Field(description="Substring to insert the text after")
     new_string: NonEmptyString = Field(description="Text to insert")
 
@@ -183,7 +182,7 @@ class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOption
 
 
 class StrReplaceToolInput(BaseModel):
-    file: Path = Field(description="Path to a file to edit")
+    file: ToolPath = Field(description="Path to a file to edit")
     old_string: str = Field(description="The exact literal text to replace")
     new_string: str = Field(description="New text to insert in place of the old text")
 
@@ -236,7 +235,7 @@ class StrReplaceTool(Tool[StrReplaceToolInput, ToolRunOptions, StringToolOutput]
 
 
 class SearchTextToolInput(BaseModel):
-    file: Path = Field(description="Path to a file to search in")
+    file: ToolPath = Field(description="Path to a file to search in")
     pattern: str = Field(description="Regular expression pattern to search for")
 
 

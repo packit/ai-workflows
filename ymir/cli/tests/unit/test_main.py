@@ -43,38 +43,36 @@ class TestCheckCredentials:
         with pytest.raises(typer.Exit):
             check_credentials()
 
-    def test_anthropic_missing_key(self):
+    @pytest.mark.parametrize(
+        "chat_model",
+        [
+            "anthropic:claude-sonnet-4-20250514",
+            "openai:gpt-6.1-sol",
+            "vertexai:gemini-2.5-pro",
+        ],
+    )
+    def test_provider_missing_credentials(self, chat_model):
         _set_mock_env(
-            env={**_BASE_CREDS, "CHAT_MODEL": "anthropic:claude-sonnet-4-20250514"},
+            env={**_BASE_CREDS, "CHAT_MODEL": chat_model},
             drop=["GEMINI_API_KEY"],
         )
         with pytest.raises(typer.Exit):
             check_credentials()
 
-    def test_anthropic_present(self):
+    @pytest.mark.parametrize(
+        ("chat_model", "cred_var", "cred_val"),
+        [
+            ("anthropic:claude-sonnet-4-20250514", "ANTHROPIC_API_KEY", "ak"),
+            ("openai:gpt-6.1-sol", "OPENAI_API_KEY", "ok"),
+            ("vertexai:gemini-2.5-pro", "GOOGLE_APPLICATION_CREDENTIALS", "/path/to/sa.json"),
+        ],
+    )
+    def test_provider_credentials_present(self, chat_model, cred_var, cred_val):
         _set_mock_env(
             env={
                 **_BASE_CREDS,
-                "CHAT_MODEL": "anthropic:claude-sonnet-4-20250514",
-                "ANTHROPIC_API_KEY": "ak",  # pragma: allowlist secret
-            }
-        )
-        check_credentials()
-
-    def test_vertexai_missing_credentials(self):
-        _set_mock_env(
-            env={**_BASE_CREDS, "CHAT_MODEL": "vertexai:gemini-2.5-pro"},
-            drop=["GEMINI_API_KEY"],
-        )
-        with pytest.raises(typer.Exit):
-            check_credentials()
-
-    def test_vertexai_present(self):
-        _set_mock_env(
-            env={
-                **_BASE_CREDS,
-                "CHAT_MODEL": "vertexai:gemini-2.5-pro",
-                "GOOGLE_APPLICATION_CREDENTIALS": "/path/to/sa.json",
+                "CHAT_MODEL": chat_model,
+                cred_var: cred_val,
             }
         )
         check_credentials()

@@ -1,7 +1,13 @@
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import AfterValidator
+from pydantic import AfterValidator, WithJsonSchema
+
+# pydantic serializes ``Path`` fields with ``format: "path"``, which is not a
+# standard JSON Schema format and is rejected by OpenAI's strict tool schemas
+# ("'path' is not a valid format"). Pin the JSON schema to a plain string;
+# pydantic validation itself is unaffected.
+ToolPath = Annotated[Path, WithJsonSchema({"type": "string"})]
 
 
 def is_absolute_path(value: Path) -> Path:
@@ -10,7 +16,7 @@ def is_absolute_path(value: Path) -> Path:
     return value
 
 
-AbsolutePath = Annotated[Path, AfterValidator(is_absolute_path)]
+AbsolutePath = Annotated[ToolPath, AfterValidator(is_absolute_path)]
 
 
 def is_not_empty_string(value: str) -> str:

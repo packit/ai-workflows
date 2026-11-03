@@ -49,6 +49,17 @@ spec:
         image: redis-commander:prod
         imagePullPolicy: IfNotPresent
         name: redis-commander
+        # Containerfile.redis-commander starts the CLI directly, so it bypasses
+        # the upstream Docker entrypoint that maps TLS environment variables to CLI options.
+        command: ["redis-commander"]
+        args:
+        - --redis-host
+        - "$(REDIS_HOST)"
+        - --redis-port
+        - "$(REDIS_PORT)"
+        - --redis-tls
+        - --redis-tls-ca-cert-file
+        - "$(REDIS_TLS_CA_CERT_FILE)"
         ports:
         - containerPort: 8081
           protocol: TCP

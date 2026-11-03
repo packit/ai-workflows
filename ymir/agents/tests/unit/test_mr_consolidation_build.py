@@ -119,8 +119,10 @@ async def test_build_project_identifier_preserves_jira_metadata(
                 srpm_path=Path("/git-repos/package/package-1-1.src.rpm"),
             )
             workflow.set_start("run_build_agent")
-            retry_step = "per_commit_flow" if release_strategy == "per_commit" else "run_consolidation_agent"
-            workflow.steps[retry_step].handler = lambda _: "run_build_agent"
+            # reset_for_retry does git reset --hard then routes to the
+            # appropriate flow step; skip the reset and go straight back
+            # to the build step for this unit test.
+            workflow.steps["reset_for_retry"].handler = lambda _: "run_build_agent"
             workflow.steps["push_and_open_mr"].handler = stop_after_build
             workflow.steps["update_release"].handler = stop_after_build
         return run_workflow(workflow, state, options)

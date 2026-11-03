@@ -183,11 +183,20 @@ def _files_to_stage_for_patches(
 
     Uses the current spec's Patch tags (post-LLM renames) and also includes
     ``original_patches`` so renames/deletes of pre-adaptation filenames are
-    staged. Raises if the spec references a patch file that is missing on disk.
+    staged. Only validates existence of patches introduced by the branches
+    being consolidated (``original_patches``), not pre-existing spec entries.
     """
     with Specfile(local_clone / spec_name) as spec:
         patch_files = [p.location for p in get_all_patches(spec) if p.location]
-    missing = [p for p in patch_files if not (local_clone / p).is_file()]
+    # If original_patches is None (merge strategy), validate all patches in
+    # the spec. This may false-positive on URL or conditionally applied
+    # patches that are declared in the spec but not present as local files.
+    # LLM renamed patches fall outside the intersection and skip the check,
+    # but git-add catches such missing files later.
+    patches_to_validate = (
+        set(original_patches) & set(patch_files) if original_patches is not None else set(patch_files)
+    )
+    missing = [p for p in patches_to_validate if not (local_clone / p).is_file()]
     if missing:
         raise RuntimeError(f"Spec references patch file(s) that do not exist: {missing}")
     files = [spec_name, *patch_files]
@@ -797,15 +806,6 @@ async def run_workflow(
                 logger.warning("No SRPM generated, skipping build verification")
                 return "stage_changes"
 
-            def _retry_step_for_build(state):
-                """Determine which flow to retry on build failure."""
-                has_rebuild_other = any(t == "rebuild" for t in state.mr_types.values())
-                if has_rebuild_other and len(state.mr_types) > 1:
-                    return "rebuild_append_flow"
-                if release_strategy == "per_commit":
-                    return "per_commit_flow"
-                return "run_consolidation_agent"
-
             try:
                 build_output = await run_build(
                     build_input=BuildInputSchema(
@@ -818,23 +818,54 @@ async def run_workflow(
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
                 )
-                if not build_output.success:
+                if build_output.is_timeout:
+                    logger.info("Build timed out for %s, proceeding", working_id)
+                elif build_output.is_infra_error:
+                    logger.error("Copr infrastructure error for %s: %s", working_id, build_output.error)
+                    state.build_error = build_output.error or "Copr API infrastructure error"
+                    return "handle_failure"
+                elif not build_output.success:
                     state.build_error = build_output.error
                     state.attempts_remaining -= 1
                     if state.attempts_remaining > 0:
-                        return _retry_step_for_build(state)
+                        return "reset_for_retry"
                     return "handle_failure"
             except Exception as e:
                 logger.error("Build verification error: %s", e)
                 state.build_error = str(e)
                 state.attempts_remaining -= 1
                 if state.attempts_remaining > 0:
-                    return _retry_step_for_build(state)
+                    return "reset_for_retry"
                 return "handle_failure"
 
             if release_strategy == "per_commit":
                 return "push_and_open_mr"
             return "update_release"
+
+        async def reset_for_retry(state):
+            """Reset the working branch to dist-git HEAD before retrying.
+
+            Retries after build failures or transient errors must start from a
+            clean state instead of operating on a branch that already has
+            commits from a previous attempt.
+            """
+            git_env = local_tool_options.get("env")
+            try:
+                await check_subprocess(
+                    ["git", "reset", "--hard", f"origin/{dist_git_branch}"],
+                    cwd=state.local_clone,
+                    env=git_env,
+                )
+            except Exception as e:
+                logger.error("Failed to reset working branch for retry: %s", e)
+                return "handle_failure"
+
+            has_rebuild_other = any(t == "rebuild" for t in state.mr_types.values())
+            if has_rebuild_other and len(state.mr_types) > 1:
+                return "rebuild_append_flow"
+            if release_strategy == "per_commit":
+                return "per_commit_flow"
+            return "run_consolidation_agent"
 
         async def _choose_base_branch(branches: list[str], clone, env=None) -> tuple[str, list[str]]:
             """Pick the branch with the larger total patch diff as the base.
@@ -1663,6 +1694,7 @@ async def run_workflow(
         workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
         workflow.add_step("run_consolidation_agent", run_consolidation_agent)
         workflow.add_step("run_build_agent", run_build_agent)
+        workflow.add_step("reset_for_retry", reset_for_retry)
         workflow.add_step("per_commit_flow", per_commit_flow)
         workflow.add_step("rebuild_append_flow", rebuild_append_flow)
         workflow.add_step("update_release", update_release)

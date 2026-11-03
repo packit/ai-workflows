@@ -52,7 +52,7 @@ When primary issue triages as REBASE:
    - Check for terminal labels (skip if already processed)
    - Queue for triage in Redis
    - Add `ymir_rebase_sibling` label
-   - Post comment: "Queued for triage as potential sibling of {primary}" (with smartlink)
+   - Post comment: "Queued for triage as potential sibling of {primary}. If triage confirms this issue needs a rebase to the same version, it will be rebased together with {primary} after all siblings have been triaged. The shared MR will be linked to {primary}." (with smartlink)
 3. If any siblings queued:
    - Add `ymir_rebase_waiting_for_siblings` label to primary
    - Post comment listing all queued siblings (clickable issue links)

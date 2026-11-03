@@ -355,7 +355,13 @@ async def queue_siblings_for_triage(
                     await tasks.comment_in_jira(
                         jira_issue=candidate_key,
                         agent_type="Triage",
-                        comment_text=f"Queued for triage as potential sibling of {primary_issue}",
+                        comment_text=(
+                            f"Queued for triage as potential sibling of {primary_issue}. "
+                            "If triage confirms this issue needs a rebase to the same version, "
+                            f"it will be rebased together with {primary_issue} after all "
+                            "siblings have been triaged. "
+                            f"The shared MR will be linked to {primary_issue}."
+                        ),
                         available_tools=available_tools,
                         is_error=False,
                         user_triggered=user_triggered,

@@ -26,6 +26,8 @@ spec:
         env:
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+        - name: OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT
+          value: "256"
         envFrom:
         - configMapRef:
             name: agents-env
@@ -57,11 +59,16 @@ spec:
         - mountPath: /etc/secrets/jotnar-vertex-prod.json
           name: vertex-key
           subPath: jotnar-vertex-prod.json
+        - mountPath: /etc/pki/service-ca
+          name: service-ca
+          readOnly: true
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
       securityContext:
         runAsNonRoot: true
+        supplementalGroups:
+        - 99
         seccompProfile:
           type: RuntimeDefault
       # Longer grace: TF reservation cleanup may run on shutdown.
@@ -76,3 +83,6 @@ spec:
       - name: vertex-key
         secret:
           secretName: vertex-key #pragma: allowlist secret
+      - name: service-ca
+        configMap:
+          name: service-ca-bundle

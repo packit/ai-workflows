@@ -319,12 +319,15 @@ def _fields(full: bool):
         "summary",
         "status",
         "fixVersions",
-        custom_fields["AssignedTeam"],
-        custom_fields["Errata Link"],
-        custom_fields["Fixed in Build"],
-        custom_fields["Test Coverage"],
-        custom_fields["Preliminary Testing"],
     ]
+    # Jira instances may not expose every custom field, so request only the
+    # fields returned by the field metadata endpoint.
+    base_fields.extend(
+        field_id
+        for name in ("AssignedTeam", "Errata Link", "Fixed in Build", "Test Coverage", "Preliminary Testing")
+        if (field_id := custom_fields.get(name)) is not None
+    )
+
     if full:
         return [*base_fields, "comment", "description"]
     return base_fields

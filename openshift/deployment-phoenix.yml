@@ -50,12 +50,24 @@ spec:
               name: phoenix-db-env
               key: POSTGRESQL_DATABASE
         - name: PHOENIX_SQL_DATABASE_URL
-          value: postgresql://$(PHOENIX_POSTGRES_USER):$(PHOENIX_POSTGRES_PASSWORD)@phoenix-db/$(PHOENIX_POSTGRES_DB)
+          value: postgresql://$(PHOENIX_POSTGRES_USER):$(PHOENIX_POSTGRES_PASSWORD)@phoenix-db.jotnar-ymir--jotnar-ymir.svc/$(PHOENIX_POSTGRES_DB)?sslmode=verify-full&sslrootcert=/etc/pki/service-ca/service-ca.crt
         - name: PHOENIX_MIGRATE_INDEX_CONCURRENTLY
           value: "true"
+        - name: PHOENIX_HOST
+          value: "0.0.0.0"
+        # Preserve unauthenticated access on the internal route. Phoenix 21
+        # otherwise enables authentication for non-loopback bind addresses.
+        - name: PHOENIX_ENABLE_AUTH
+          value: "false"
         image: phoenix:prod
         imagePullPolicy: IfNotPresent
         name: phoenix
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 6006
+          periodSeconds: 10
+          timeoutSeconds: 5
         ports:
         - containerPort: 4317
           protocol: TCP
@@ -66,20 +78,25 @@ spec:
         resources:
           limits:
             cpu: "500m"
-            memory: 768Mi
+            memory: 2Gi
           requests:
-            cpu: "25m"
-            memory: 256Mi
+            cpu: "50m"
+            memory: 1Gi
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
         volumeMounts:
         - mountPath: /mnt/data
           name: phoenix-data
+        - mountPath: /etc/pki/service-ca
+          name: service-ca
+          readOnly: true
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
       securityContext:
         runAsNonRoot: true
+        supplementalGroups:
+        - 99
         seccompProfile:
           type: RuntimeDefault
       terminationGracePeriodSeconds: 30
@@ -87,3 +104,6 @@ spec:
       - name: phoenix-data
         persistentVolumeClaim:
           claimName: phoenix-data
+      - name: service-ca
+        configMap:
+          name: service-ca-bundle

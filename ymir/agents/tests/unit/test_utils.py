@@ -6,44 +6,72 @@ from ymir.agents import utils
 
 
 @pytest.mark.parametrize(
-    (
-        "chat_model",
-        "litellm_provider_id",
-        "beeai_default_cache_setting",
-        "ymir_expected_cache_setting",
-    ),
+    ("chat_model", "expected_caching_kwarg"),
     [
-        ("vertexai:claude-opus-4-6", "vertexai", False, True),
-        ("vertexai:claude-sonnet-4-6", "vertexai", False, True),
-        ("vertexai:gemini-2.5-pro", "vertexai", False, False),
-        ("anthropic:claude-opus-4-6", "anthropic", True, True),
+        # Vertex Anthropic: we must explicitly request caching at construction,
+        # because BeeAI 0.1.84+ defaults allow_prompt_caching=False for Vertex.
+        ("vertexai:claude-opus-4-6", True),
+        ("vertexai:claude-sonnet-4-6", True),
+        # Vertex Gemini: not requested (caching is also forced off below).
+        ("vertexai:gemini-2.5-pro", None),
+        # Direct Anthropic: not requested — BeeAI enables caching here by default.
+        ("anthropic:claude-opus-4-6", None),
     ],
 )
-def test_get_chat_model_only_enables_prompt_caching_for_vertex_anthropic(
+def test_get_chat_model_requests_caching_only_for_vertex_anthropic(
     monkeypatch: pytest.MonkeyPatch,
     chat_model: str,
-    litellm_provider_id: str,
-    beeai_default_cache_setting: bool,
-    ymir_expected_cache_setting: bool,
+    expected_caching_kwarg: bool | None,
 ) -> None:
-    """Preserve caching for Vertex Anthropic after BeeAI 0.1.84 disables it
-    by default for every VertexAIChatModel.
-
-    The mock model simulates the BeeAI default without Vertex credentials.
-    """
+    """get_chat_model must pass allow_prompt_caching=True to ChatModel.from_name
+    for Vertex Anthropic models and leave every other provider at its BeeAI
+    default (no explicit override)."""
     captured: dict = {}
-    mock_model = SimpleNamespace(
-        _litellm_provider_id=litellm_provider_id,
-        allow_prompt_caching=beeai_default_cache_setting,
-    )
 
     def from_name(*args, **kwargs):
         captured.update(kwargs)
-        return mock_model
+        return SimpleNamespace(allow_prompt_caching=None, tool_choice_support=None)
 
     monkeypatch.setenv("CHAT_MODEL", chat_model)
     monkeypatch.setattr(utils.ChatModel, "from_name", from_name)
 
-    assert utils.get_chat_model() is mock_model
-    assert "allow_prompt_caching" not in captured
-    assert mock_model.allow_prompt_caching is ymir_expected_cache_setting
+    utils.get_chat_model()
+
+    assert captured.get("allow_prompt_caching") is expected_caching_kwarg
+
+
+def test_vertex_anthropic_request_retains_cache_injection_points(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end guard against the Oct-2026 caching regression: a real Vertex
+    Claude model built by get_chat_model must forward cache_control_injection_points
+    through request transformation, and drop them only when caching is disabled.
+
+    This exercises the real VertexAIChatModel adapter — whose 0.1.84+ default of
+    allow_prompt_caching=False silently strips the points — so it catches the bug
+    regardless of how the provider id is spelled or where the flag is read.
+    """
+    from beeai_framework.backend.message import UserMessage
+    from beeai_framework.backend.types import ChatModelInput
+
+    # VertexAIChatModel construction requires project/location; credentials may
+    # be empty (no network call is made during construction or transformation).
+    monkeypatch.setenv("CHAT_MODEL", "vertexai:claude-opus-4-6")
+    monkeypatch.setenv("GOOGLE_VERTEX_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_VERTEX_LOCATION", "us-east5")
+    monkeypatch.setenv("GOOGLE_VERTEX_CREDENTIALS", "")
+
+    model = utils.get_chat_model()
+    assert model.allow_prompt_caching is True
+
+    points = [{"location": "message", "index": 0}]
+    model._settings["cache_control_injection_points"] = points
+
+    def transform() -> dict:
+        return model._transform_input(ChatModelInput(messages=[UserMessage("hi")]))
+
+    assert transform().get("cache_control_injection_points") == points
+
+    # Confirm the flag is what controls it: with caching off BeeAI strips them.
+    model.allow_prompt_caching = False
+    assert "cache_control_injection_points" not in transform()

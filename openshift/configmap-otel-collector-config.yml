@@ -15,8 +15,10 @@ data:
       otlphttp/phoenix:
         endpoint: http://phoenix:6006
       otlphttp/trace-server:
-        endpoint: http://localhost:8080
+        endpoint: https://localhost:8080
         encoding: json
+        tls:
+          insecure_skip_verify: true
     extensions:
       health_check:
         endpoint: 0.0.0.0:13133

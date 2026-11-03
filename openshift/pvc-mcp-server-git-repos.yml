@@ -13,5 +13,5 @@ spec:
   resources:
     requests:
       storage: 150Gi
-  storageClassName: netapp-nfs
+  storageClassName: rh-restricted-nfs
   volumeMode: Filesystem

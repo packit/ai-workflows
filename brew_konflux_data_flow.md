@@ -2,16 +2,26 @@
 
 This document describes how the AI Workflows system interacts with Brew (Koji) and Konflux for RHEL package builds.
 
+Konflux has two distinct paths here: agent scratch-build validation through the
+privileged MCP gateway when `BUILD_BACKEND=konflux`, and GitLab CI draft/release
+builds after a human enables them on an MR. Copr is the default agent validation
+backend.
+
 ## System Architecture
 
 ```mermaid
 graph TD
     BREW[("Brew/Koji<br/>brewhub.engineering.redhat.com")]
     KONFLUX[("Konflux<br/>Build System")]
+    ARCHIVE[("KubeArchive<br/>Archived results and logs")]
+    RPM_PIPELINE[("RPM pipeline<br/>GitLab repository")]
 
     subgraph "GitLab CI Pipeline"
         PIPELINE["build_rpm job"]
     end
+
+    MR["GitLab MR"]
+    HUMAN["Maintainer"]
 
     subgraph "Python Services (Direct API)"
         SUPERVISOR["Supervisor<br/>Monitors builds"]
@@ -20,16 +30,24 @@ graph TD
     subgraph "MCP Server Layer"
         MCP_DISTGIT["Dist-Git Tools<br/>(distgit_tools.py)"]
         MCP_GITLAB["GitLab Tools<br/>(gitlab_tools.py)"]
+        MCP_BUILD["Build validation<br/>(konflux.py)"]
     end
 
     subgraph "AI Agents"
         AGENTS["Rebase/Backport<br/>Agents"]
     end
 
-    AGENTS -->|"Add MR label"| MCP_GITLAB
-    MCP_GITLAB -->|"Add label:<br/>feature::draft-builds::enabled"| PIPELINE
+    AGENTS -->|"Validate pushed commit"| MCP_BUILD
+    MCP_BUILD -->|"Create scratch PipelineRun;<br/>poll status and logs"| KONFLUX
+    MCP_BUILD -->|"Resolve main to SHA"| RPM_PIPELINE
+    KONFLUX -->|"Fetch pinned pipeline"| RPM_PIPELINE
+    MCP_BUILD -->|"Read archived results on 404"| ARCHIVE
+    AGENTS -->|"Create MR"| MCP_GITLAB
+    MCP_GITLAB --> MR
+    HUMAN -->|"Enable draft builds"| MR
+    MR -->|"Trigger CI"| PIPELINE
 
-    PIPELINE -->|"Trigger build"| KONFLUX
+    PIPELINE -->|"Human-enabled draft build"| KONFLUX
     KONFLUX -->|"Build complete"| PIPELINE
 
     PIPELINE -.Also triggers.-> BREW
@@ -66,7 +84,7 @@ sequenceDiagram
 
     Note over MR: Later, when ready for build...
 
-    MCP->>MR: Add label: feature::draft-builds::enabled
+    Note over MR: Human adds feature::draft-builds::enabled
     Note over MR: Label triggers CI pipeline
 
     MR->>CI: Pipeline triggered
@@ -225,9 +243,21 @@ principal = await init_kerberos_ticket()
 
 ### Konflux
 
-**Authentication:** Handled by GitLab CI service account
+**Agent build validation (`BUILD_BACKEND=konflux`):** The agent pushes a
+candidate commit to a temporary branch on its fork. `build_package` in the
+privileged MCP gateway creates a short-lived GitLab clone Secret and a scratch
+Tekton PipelineRun in `ymir-tenant` on `kflux-rhel-p01`. The gateway uses the
+`konflux-bot-0` bearer token, polls build status, and reads task/pod logs on failure. If a live result
+has been garbage-collected, it reads the optional KubeArchive API with the
+same token. The gateway resolves the RPM pipeline repository's `main` branch
+to a SHA for each run; Konflux executes that pinned pipeline definition. A
+successful status lets the agent proceed, while failed logs can be analyzed
+for a diagnosis. The agent deletes the temporary branch when validation ends.
+See [Konflux backend](docs/konflux-backend.md) for deployment
+configuration and [the threat model](THREAT_MODEL.md) for trust boundaries.
 
-**No direct API access** from agents - all interaction via GitLab CI pipeline
+**MR draft/release builds:** GitLab CI authenticates separately and triggers
+this path only after the human-applied `feature::draft-builds::enabled` label.
 
 ---
 

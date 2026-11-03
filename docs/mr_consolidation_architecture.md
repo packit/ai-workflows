@@ -180,6 +180,9 @@ characters are replaced and generated names are limited to 100 characters, with
 a hash suffix when changed to distinguish packages and branches. The fallback
 stays stable across retries and does not populate Jira metadata or commit footers.
 
+With Konflux, the workflow pushes a candidate commit to a temporary fork branch
+and builds its revision. It deletes that branch when the build finishes.
+
 On failure, the workflow retries the selected consolidation flow with the build
 error, up to `max_build_attempts` times (default 3). Consolidation requires a
 successful build; timeouts do not permit publication.
@@ -199,7 +202,10 @@ Squashes all commits into a single commit with the generated log message, pushes
 the fork, and opens a new consolidated MR against the target branch. The consolidated
 MR is labeled `ymir_backport` so it can be discovered by subsequent consolidation runs.
 
-In dry-run mode, this step skips the push and MR creation.
+In dry-run mode, this final publication step skips the push and MR creation.
+With the Konflux backend, `run_build_agent` pushes a temporary scratch branch
+to the fork, including in dry-run mode, and deletes it after the build. The
+live consolidated MR branch is pushed only by the final publication step.
 
 ### Step 8: `mark_original_mrs`
 
@@ -355,7 +361,7 @@ agent discovers eligible pairs regardless of which agent triggered the job.
 | No infinite requeue loop | Requeue only when `non_stale_count - 2 >= 1`; each consolidation reduces count by 1 |
 | Build verification before MR creation | Build agent with retry loop, same pattern as backport agent |
 | No re-consolidation of consumed MRs | Original MRs are labeled `ymir_consolidated` and filtered out of future searches |
-| No accidental real writes in tests | `DRY_RUN=true` skips push, MR creation, MR labeling, and Jira comments |
+| Dry-run publication limits | `DRY_RUN=true` skips the live branch push, final MR creation, MR labeling, and Jira comments; Konflux build validation still pushes and deletes a temporary candidate ref |
 | Label pair atomicity | Fetcher removes both consolidation labels and posts comments only after successful job submission |
 | Jira traceability | `update_jira_issues` posts consolidated MR URL to every involved Jira issue |
 

@@ -49,8 +49,9 @@ from ymir.common.logging_setup import configure_logging, current_jira_issue, get
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     POSTPONED_RESOLUTIONS,
-    ApplicabilityResult,
+    AssessedApplicabilityResult,
     ClarificationNeededData,
+    ConfidenceAssessment,
     CVEEligibilityResult,
     ErrorData,
     ErrorListEntry,
@@ -171,6 +172,33 @@ _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {
     Resolution.POSTPONED_PR_PENDING: JiraLabels.YMIR_POSTPONED_PR_PENDING,
     Resolution.POSTPONED_Y_STREAM: JiraLabels.YMIR_POSTPONED_Y_STREAM,
 }
+
+_CONFIDENCE_TO_LABEL: dict[str, JiraLabels] = {
+    "low": JiraLabels.APPLICABILITY_CONFIDENCE_LOW,
+    "medium": JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM,
+    "high": JiraLabels.APPLICABILITY_CONFIDENCE_HIGH,
+}
+
+
+def _terminal_ymir_labels(labels: list[str]) -> list[str]:
+    """Return Ymir labels that mark this issue as already triaged.
+
+    Trigger, coordination and assessment labels do not indicate completion: a
+    rebase primary requeued after its siblings finish must still run, and a
+    confidence assessment must not look like a terminal outcome.
+    """
+    non_terminal = {
+        JiraLabels.TRIAGE_IN_PROGRESS.value,
+        JiraLabels.REBASE_SIBLING.value,
+        JiraLabels.WAITING_FOR_SIBLINGS.value,
+        JiraLabels.TODO.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
+    }
+    known = JiraLabels.all_labels()
+    return [label for label in labels if label in known and label not in non_terminal]
+
 
 _REPRODUCER_ELIGIBLE_RESOLUTIONS = frozenset(
     {
@@ -1160,10 +1188,11 @@ async def run_workflow(
 
                 response = await applicability_agent.run(
                     prompt,
-                    expected_output=ApplicabilityResult,
+                    expected_output=AssessedApplicabilityResult,
                     **get_agent_execution_config(),
                 )
-                applicability = ApplicabilityResult.model_validate_json(response.last_message.text)
+                applicability = AssessedApplicabilityResult.model_validate_json(response.last_message.text)
+                state.triage_result.confidence = applicability.confidence
 
                 if not applicability.is_affected:
                     logger.info(
@@ -1184,6 +1213,7 @@ async def run_workflow(
                     prior = state.triage_result.data
                     state.triage_result = OutputSchema(
                         resolution=Resolution.NOT_AFFECTED,
+                        confidence=applicability.confidence,
                         data=NotAffectedData(
                             justification_category=applicability.justification_category,
                             explanation=explanation,
@@ -1253,6 +1283,7 @@ async def run_workflow(
             )
             state.triage_result = OutputSchema(
                 resolution=Resolution.POSTPONED_DEPENDENCY,
+                confidence=state.triage_result.confidence,
                 data=PostponedData(
                     summary=(
                         f"Rebuild of {data.package} waiting for {dep_component} "
@@ -1369,6 +1400,12 @@ async def run_workflow(
             logger.info(f"Result to be put in Jira comment: {comment_text}")
             if dry_run:
                 return Workflow.END
+            await label_applicability_confidence(
+                state.jira_issue,
+                state.triage_result.confidence,
+                dry_run=dry_run,
+                user_triggered=user_triggered,
+            )
             if not _should_update_jira(
                 resolution=state.triage_result.resolution,
                 user_triggered=user_triggered,
@@ -1445,6 +1482,26 @@ async def run_workflow(
             if response is not None:
                 response.state.applicability_local_clone = None
                 response.state.applicability_unpacked_sources = None
+
+
+async def label_applicability_confidence(
+    jira_issue: str,
+    confidence: ConfidenceAssessment | None,
+    dry_run: bool,
+    user_triggered: bool,
+) -> None:
+    """Replace the current confidence label without affecting triage routing."""
+    if dry_run:
+        return
+    selected = _CONFIDENCE_TO_LABEL[confidence.level].value if confidence else None
+    await tasks.set_jira_labels(
+        jira_issue=jira_issue,
+        labels_to_add=[selected] if selected else [],
+        labels_to_remove=[label.value for label in _CONFIDENCE_TO_LABEL.values() if label.value != selected],
+        dry_run=dry_run,
+        user_triggered=user_triggered,
+        critical=False,
+    )
 
 
 async def label_postponed_issues(jira_issue: str, output: OutputSchema, dry_run: bool, user_triggered: bool):
@@ -1652,17 +1709,7 @@ async def main() -> None:
             # delivered.
 
             current_labels, current_status = await tasks.get_jira_issue_metadata(input.issue)
-            all_labels = JiraLabels.all_labels()
-            # Non-terminal labels that don't indicate triage completion
-            non_terminal_labels = {
-                JiraLabels.TRIAGE_IN_PROGRESS.value,
-                JiraLabels.REBASE_SIBLING.value,
-                JiraLabels.WAITING_FOR_SIBLINGS.value,
-                JiraLabels.TODO.value,
-            }
-            terminal_ymir_labels = [
-                label for label in current_labels if label in all_labels and label not in non_terminal_labels
-            ]
+            terminal_ymir_labels = _terminal_ymir_labels(current_labels)
             if (
                 terminal_ymir_labels
                 and JiraLabels.RETRY_NEEDED.value not in current_labels

@@ -16,15 +16,18 @@ from ymir.agents.triage_agent import (
     _map_version_to_module_branch,
     _postponed_comment_exists,
     _should_update_jira,
+    _terminal_ymir_labels,
     determine_target_branch,
+    label_applicability_confidence,
     main,
     render_prompt,
     run_workflow,
 )
 from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels
 from ymir.common.models import (
-    ApplicabilityResult,
+    AssessedApplicabilityResult,
     BackportData,
+    ConfidenceAssessment,
     ConsolidatedIssue,
     CVEEligibilityResult,
     NotAffectedData,
@@ -39,6 +42,47 @@ from ymir.common.models import (
 )
 from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD
 from ymir.common.version_utils import extract_downstream_package, is_modular, parse_module_stream
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", [None, "low", "medium", "high"])
+@pytest.mark.parametrize("dry_run", [False, True])
+async def test_confidence_labels_replace_previous_rating(monkeypatch, level, dry_run):
+    updates = []
+
+    async def record_labels(**kwargs):
+        updates.append(kwargs)
+
+    monkeypatch.setattr(agent_tasks, "set_jira_labels", record_labels)
+    assessment = ConfidenceAssessment(level=level, reason="Source evidence") if level else None
+    await label_applicability_confidence("RHEL-1", assessment, dry_run=dry_run, user_triggered=False)
+    if dry_run:
+        assert updates == []
+        return
+    expected = f"ymir_applicability_confidence_{level}" if level else None
+    assert len(updates) == 1
+    assert updates[0]["jira_issue"] == "RHEL-1"
+    assert updates[0]["labels_to_add"] == ([expected] if expected else [])
+    assert set(updates[0]["labels_to_remove"]) == {
+        JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
+    } - ({expected} if expected else set())
+    assert updates[0]["critical"] is False
+
+
+def test_confidence_labels_are_not_terminal():
+    """A requeued sibling primary must still run with only a confidence label."""
+    assert _terminal_ymir_labels([JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value]) == []
+    assert _terminal_ymir_labels([JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value]) == []
+
+
+def test_terminal_labels_still_block_duplicate_triage():
+    labels = [
+        JiraLabels.TRIAGED_REBASE.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
+    ]
+    assert _terminal_ymir_labels(labels) == [JiraLabels.TRIAGED_REBASE.value]
 
 
 @pytest.mark.parametrize(
@@ -891,6 +935,8 @@ def test_build_reproducer_input_skips_postponed():
         (Resolution.REBUILD, True, False, Resolution.POSTPONED_DEPENDENCY, False),
     ],
 )
+@pytest.mark.parametrize("prep_ok", [False, True])
+@pytest.mark.parametrize("dry_run", [False, True])
 async def test_branch_creation_notice_uses_final_resolution(
     scenario,
     initial_resolution,
@@ -901,6 +947,8 @@ async def test_branch_creation_notice_uses_final_resolution(
     _mock_env_vars,
     monkeypatch,
     tmp_path,
+    prep_ok,
+    dry_run,
 ):
     """Applicability and buildroot decisions can supersede the manual branch hold."""
     monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
@@ -920,7 +968,18 @@ async def test_branch_creation_notice_uses_final_resolution(
     eligibility = CVEEligibilityResult(
         is_cve=True, eligibility=TriageEligibility.IMMEDIATELY, reason="Eligible"
     )
-    applicability = ApplicabilityResult(is_affected=is_affected, explanation="Source analysis result")
+    applicability = AssessedApplicabilityResult(
+        is_affected=is_affected,
+        explanation="Source analysis result",
+        confidence=ConfidenceAssessment(
+            level="high",
+            reason=(
+                "Inspected target source and build paths"
+                if prep_ok
+                else "Inspected Source0; downstream patches were not applied and remain a limitation"
+            ),
+        ),
+    )
 
     @asynccontextmanager
     async def _mock_mcp_tools(*_args, **_kwargs):
@@ -973,7 +1032,7 @@ async def test_branch_creation_notice_uses_final_resolution(
     monkeypatch.setattr(t_agent, "determine_target_branch", _async_return(("rhel-10.3", None)))
     monkeypatch.setattr(t_agent, "is_older_zstream", _async_return(False))
     monkeypatch.setattr(
-        agent_tasks, "clone_and_prep_sources", _async_return((tmp_path, tmp_path, True, None))
+        agent_tasks, "clone_and_prep_sources", _async_return((tmp_path, tmp_path, prep_ok, None))
     )
     monkeypatch.setattr(t_agent, "create_applicability_agent", lambda *_: applicability_agent)
     monkeypatch.setattr(t_agent, "check_build_in_buildroot", _async_return(in_buildroot))
@@ -999,13 +1058,29 @@ async def test_branch_creation_notice_uses_final_resolution(
 
     state = await run_workflow(
         "RHEL-99999",
-        dry_run=False,
+        dry_run=dry_run,
         triage_agent_factory=lambda *_: triage_agent,
         auto_chain=scenario != "direct",
     )
 
     assert state.automatic_branch_creation_disabled is True
     assert state.triage_result.resolution == expected_resolution
+    assert state.triage_result.confidence == applicability.confidence
+    if dry_run:
+        assert not labels
+        assert not comments
+        return
+    confidence_updates = [
+        call
+        for call in labels
+        if JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value in call.get("labels_to_add", [])
+    ]
+    assert len(confidence_updates) == 1
+    assert set(confidence_updates[0]["labels_to_remove"]) == {
+        JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
+    }
+    labels = [call for call in labels if call not in confidence_updates]
     if initial_resolution == Resolution.REBASE and scenario in ("sibling", "waiting"):
         assert not state.hold_for_manual_branch_creation
         assert not labels

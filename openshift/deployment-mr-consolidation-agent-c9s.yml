@@ -27,6 +27,8 @@ spec:
           value: "c9s"
         - name: REQUESTS_CA_BUNDLE
           value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+        - name: OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT
+          value: "256"
         envFrom:
         - configMapRef:
             name: agents-env
@@ -47,7 +49,7 @@ spec:
             cpu: 600m
             memory: 4Gi
           requests:
-            cpu: 25m
+            cpu: 60m
             memory: 2Gi
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
@@ -60,11 +62,16 @@ spec:
         - mountPath: /etc/secrets/jotnar-vertex-prod.json
           name: vertex-key
           subPath: jotnar-vertex-prod.json
+        - mountPath: /etc/pki/service-ca
+          name: service-ca
+          readOnly: true
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
       securityContext:
         runAsNonRoot: true
+        supplementalGroups:
+        - 99
         seccompProfile:
           type: RuntimeDefault
       terminationGracePeriodSeconds: 45
@@ -78,3 +85,6 @@ spec:
       - name: vertex-key
         secret:
           secretName: vertex-key #pragma: allowlist secret
+      - name: service-ca
+        configMap:
+          name: service-ca-bundle

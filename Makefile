@@ -44,6 +44,12 @@ push:
 .PHONY: build-and-push
 build-and-push: build push
 
+.PHONY: konflux-token
+# Refresh the local Konflux backend token from your current `oc` login.
+# Run this before local konflux builds, and again whenever a build 401s.
+konflux-token:
+	scripts/refresh-konflux-token.sh
+
 .PHONY: run-beeai-bash
 run-beeai-bash:
 	$(COMPOSE_AGENTS) run --rm triage-agent /bin/bash
@@ -91,6 +97,25 @@ run-backport-agent-e2e-tests:
 	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
+		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
+		-e BACKPORT_E2E_EXCLUDE_ISSUES="$(BACKPORT_E2E_EXCLUDE_ISSUES)" \
+		backport-agent-e2e-tests
+
+.PHONY: run-backport-agent-konflux-e2e-tests
+run-backport-agent-konflux-e2e-tests:
+	# Konflux build backend variant of the backport e2e. Unlike Copr (which
+	# builds from a local SRPM), Konflux builds from a real pushed fork ref:
+	# even under DRY_RUN the workflow creates the fork under FORK_NAMESPACE,
+	# pushes a temporary build branch, and submits a real Konflux build. It
+	# deletes the temporary branch after validation and skips MR/Jira writes.
+	# The dist-git SOURCE stays mocked (local bare clones via insteadOf).
+	# Requires FORK_NAMESPACE + GITLAB_TOKEN + KONFLUX_* in the environment /
+	# .secrets/mcp-gateway.env and a reachable Konflux cluster.
+	MOCK_JIRA=true DRY_RUN=true BUILD_BACKEND=konflux FORK_NAMESPACE="$(FORK_NAMESPACE)" \
+		$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+		-e MOCK_JIRA="true" \
+		-e DRY_RUN="true" \
+		-e BUILD_BACKEND="konflux" \
 		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
 		-e BACKPORT_E2E_EXCLUDE_ISSUES="$(BACKPORT_E2E_EXCLUDE_ISSUES)" \
 		backport-agent-e2e-tests
@@ -240,6 +265,25 @@ run-mr-consolidation-agent-e2e-tests:
 	ALLOW_RHEL_CONFIG_OVERRIDE=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
+		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
+		mr-consolidation-agent-e2e-tests
+
+
+.PHONY: run-mr-consolidation-agent-konflux-e2e-tests
+run-mr-consolidation-agent-konflux-e2e-tests:
+	# Konflux build backend variant of the MR-consolidation e2e. Unlike Copr
+	# (which builds from a local SRPM), Konflux builds from a real pushed fork
+	# ref: even under DRY_RUN the workflow creates the fork under FORK_NAMESPACE,
+	# commits the consolidated work, pushes it, and submits a real Konflux build;
+	# only the MR/Jira writes stay suppressed. The dist-git SOURCE stays mocked
+	# (local bare clones via insteadOf). Requires FORK_NAMESPACE + GITLAB_TOKEN +
+	# KONFLUX_* in the environment / .secrets/mcp-gateway.env and a reachable
+	# Konflux cluster.
+	MOCK_JIRA=true DRY_RUN=true BUILD_BACKEND=konflux FORK_NAMESPACE="$(FORK_NAMESPACE)" \
+		$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+		-e MOCK_JIRA="true" \
+		-e DRY_RUN="true" \
+		-e BUILD_BACKEND="konflux" \
 		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
 		mr-consolidation-agent-e2e-tests
 

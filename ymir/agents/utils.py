@@ -58,6 +58,12 @@ def get_chat_model() -> ChatModel:
         settings["drop_params"] = True
         settings["additional_drop_params"] = ["temperature"]
 
+    # BeeAI 0.1.84+ defaults prompt caching off for Vertex models; re-enable it
+    # for Vertex Anthropic (set at construction so the adapter keeps the value).
+    model_kwargs: dict[str, Any] = {}
+    if chat_model.lower().startswith("vertexai") and "claude" in chat_model.lower():
+        model_kwargs["allow_prompt_caching"] = True
+
     model = ChatModel.from_name(
         chat_model,
         # this the preferred way to set parameters, don't do options=...
@@ -73,16 +79,8 @@ def get_chat_model() -> ChatModel:
         # for transient 429 / rate-limit errors from the provider.
         settings=settings,
         allow_parallel_tool_calls=bool(reasoning_effort),
+        **model_kwargs,
     )
-    if getattr(model, "_litellm_provider_id", None) == "vertexai":
-        # BeeAI uses "vertexai" as the litellm provider ID, but litellm only
-        # recognizes "vertex_ai" for adaptive thinking detection (Claude 4.6+).
-        # Without this, litellm sends thinking.type=enabled which opus-4-8 rejects.
-        model._litellm_provider_id = "vertex_ai"
-        if "claude" in chat_model.lower():
-            # Preserve caching for Anthropic models accessed through Vertex AI.
-            # BeeAI 0.1.84 disables it by default for all Vertex models.
-            model.allow_prompt_caching = True
     if "gemini" in chat_model:
         # disable `required` for Gemini models
         model.tool_choice_support = {"single", "none", "auto"}

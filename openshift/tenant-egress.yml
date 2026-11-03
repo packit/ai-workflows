@@ -53,7 +53,7 @@ spec:
         dnsName: api.testing-farm.io
     - type: Allow
       to:
-        dnsName: artifacts.testing-farm.io
+        dnsName: artifacts.dev.testing-farm.io
     - type: Allow
       to:
         dnsName: artifacts.osci.redhat.com

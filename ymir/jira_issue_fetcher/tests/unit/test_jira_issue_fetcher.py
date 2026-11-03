@@ -1351,6 +1351,37 @@ def test_find_stale_in_flight_label_ignores_retry_needed_and_todo(fetcher):
     assert result == JiraLabels.TRIAGE_IN_PROGRESS.value
 
 
+def test_find_stale_in_flight_label_ignores_confidence_label(fetcher):
+    """An applicability-confidence label is metadata, not a blocking outcome.
+
+    Confidence is written before the terminal label, so a worker killed in that
+    window leaves it beside ymir_triage_in_progress.
+    """
+    issue = {"fields": {"updated": _STALE_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(
+        issue,
+        [
+            JiraLabels.TRIAGE_IN_PROGRESS.value,
+            JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
+        ],
+    )
+    assert result == JiraLabels.TRIAGE_IN_PROGRESS.value
+
+
+def test_find_stale_in_flight_label_ignores_confidence_during_backport(fetcher):
+    """Confidence coexists with the backport handoff label for as long as the
+    downstream task waits in Redis; recovery must still see the stage as stale."""
+    issue = {"fields": {"updated": _STALE_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(
+        issue,
+        [
+            JiraLabels.TRIAGED_BACKPORT.value,
+            JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
+        ],
+    )
+    assert result == JiraLabels.TRIAGED_BACKPORT.value
+
+
 def test_find_stale_in_flight_label_downstream_stage(fetcher):
     issue = {"fields": {"updated": _STALE_UPDATED}}
     result = fetcher._find_stale_in_flight_label(issue, [JiraLabels.TRIAGED_REBUILD.value])

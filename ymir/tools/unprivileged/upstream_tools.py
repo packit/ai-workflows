@@ -512,12 +512,7 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
             if not (tool_input.repo_path / ".git").exists():
                 raise ToolError(f"Not a git repository: {tool_input.repo_path}")
 
-            # Fetch all tags to ensure we have the latest
-            cmd = ["git", "fetch", "--tags"]
-            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
-            if exit_code != 0:
-                # Non-fatal, continue anyway (might work with existing tags)
-                pass
+            # Tags are already present from the initial clone (clone_upstream_repository)
 
             if tool_input.commit:
                 cmd = ["git", "rev-parse", "--verify", f"{tool_input.commit}^{{commit}}"]
@@ -540,11 +535,17 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
             if pkg_base == pkg_name:
                 pkg_base = None
 
+            # List all tags once and match in-memory (avoids N subprocess calls)
+            cmd = ["git", "tag", "-l"]
+            exit_code, stdout, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
+            if exit_code != 0:
+                raise ToolError(f"Failed to list tags: {stderr}")
+            all_tags: list[str] = stdout.strip().split("\n") if stdout.strip() else []
+            all_tags_set: set[str] = set(all_tags)
+
             if tool_input.tag:
-                cmd = ["git", "rev-parse", "--verify", f"refs/tags/{tool_input.tag}"]
-                exit_code, _, stderr = await run_subprocess(cmd, cwd=tool_input.repo_path)
-                if exit_code != 0:
-                    raise ToolError(f"Tag '{tool_input.tag}' not found in repository: {stderr}")
+                if tool_input.tag not in all_tags_set:
+                    raise ToolError(f"Tag '{tool_input.tag}' not found in repository")
                 found_tag = tool_input.tag
             else:
                 ver = tool_input.version
@@ -591,20 +592,11 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
                 tag_patterns = list(dict.fromkeys(tag_patterns))
                 found_tag = None
                 for tag in tag_patterns:
-                    cmd = ["git", "rev-parse", "--verify", f"refs/tags/{tag}"]
-                    exit_code, _, _ = await run_subprocess(cmd, cwd=tool_input.repo_path)
-                    if exit_code == 0:
+                    if tag in all_tags_set:
                         found_tag = tag
                         break
 
                 if not found_tag:
-                    cmd = ["git", "tag", "-l"]
-                    exit_code, stdout, stderr = await run_subprocess(
-                        cmd,
-                        cwd=tool_input.repo_path,
-                    )
-                    all_tags = stdout.strip().split("\n") if stdout.strip() else []
-
                     relevant = [t for t in all_tags if ver_under in t or ver in t or ver_upper in t]
                     relevant_set = set(relevant)
                     other = [t for t in all_tags if t not in relevant_set]

@@ -45,6 +45,9 @@ spec:
               limits:
                 cpu: "200m"
                 memory: "128Mi"
+              requests:
+                cpu: "20m"
+                memory: "64Mi"
             securityContext:
               allowPrivilegeEscalation: false
               runAsNonRoot: true
@@ -53,6 +56,10 @@ spec:
               capabilities:
                 drop:
                 - ALL
+            volumeMounts:
+            - mountPath: /etc/pki/service-ca
+              name: service-ca
+              readOnly: true
           securityContext:
             runAsNonRoot: true
             seccompProfile:
@@ -60,3 +67,7 @@ spec:
           dnsPolicy: ClusterFirst
           schedulerName: default-scheduler
           terminationGracePeriodSeconds: 30
+          volumes:
+          - name: service-ca
+            configMap:
+              name: service-ca-bundle

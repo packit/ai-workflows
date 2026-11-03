@@ -1,16 +1,19 @@
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
+  annotations:
+    haproxy.router.openshift.io/hsts_header: max-age=31536000;includeSubDomains;preload
   labels:
     paas.redhat.com/appcode: JTNR-001
+    shard: internal
   name: trace-server
 spec:
-  host: trace-server-jotnar-ymir--jotnar-ymir.apps.gpc.ocp-hub.prod.psi.redhat.com
+  host: trace-server-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com
   port:
     targetPort: 8080-tcp
   tls:
     insecureEdgeTerminationPolicy: Redirect
-    termination: edge
+    termination: reencrypt
   to:
     kind: Service
     name: otel-collector

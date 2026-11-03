@@ -1,10 +1,14 @@
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
+  annotations:
+    haproxy.router.openshift.io/hsts_header: max-age=31536000;includeSubDomains;preload
   labels:
     paas.redhat.com/appcode: JTNR-001
+    shard: internal
   name: redis-commander
 spec:
+  host: redis-commander-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com
   port:
     targetPort: 8081-tcp
   tls:

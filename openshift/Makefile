@@ -13,19 +13,19 @@ REMOTE ?= upstream
 # agents' BRPOP), oldest-first to match pop order.
 define show_queue
 @echo "=== $(1)_todo (ymir_todo, priority — popped first) ==="
-@oc exec deployment/valkey -- valkey-cli --raw LRANGE $(1)_todo 0 -1 | jq -r '(.metadata.jira_issue // .metadata.issue // empty) | if type=="object" then (.key // empty) else . end' | $(TAC)
-@echo "length: $$(oc exec deployment/valkey -- valkey-cli --raw LLEN $(1)_todo)"
+@oc exec deployment/valkey -- valkey-cli --tls --cert /tls/tls.crt --key /tls/tls.key --cacert /etc/pki/service-ca/service-ca.crt --raw LRANGE $(1)_todo 0 -1 | jq -r '(.metadata.jira_issue // .metadata.issue // empty) | if type=="object" then (.key // empty) else . end' | $(TAC)
+@echo "length: $$(oc exec deployment/valkey -- valkey-cli --tls --cert /tls/tls.crt --key /tls/tls.key --cacert /etc/pki/service-ca/service-ca.crt --raw LLEN $(1)_todo)"
 @echo
 @echo "=== $(1) (normal) ==="
-@oc exec deployment/valkey -- valkey-cli --raw LRANGE $(1) 0 -1 | jq -r '(.metadata.jira_issue // .metadata.issue // empty) | if type=="object" then (.key // empty) else . end' | $(TAC)
-@echo "length: $$(oc exec deployment/valkey -- valkey-cli --raw LLEN $(1))"
+@oc exec deployment/valkey -- valkey-cli --tls --cert /tls/tls.crt --key /tls/tls.key --cacert /etc/pki/service-ca/service-ca.crt --raw LRANGE $(1) 0 -1 | jq -r '(.metadata.jira_issue // .metadata.issue // empty) | if type=="object" then (.key // empty) else . end' | $(TAC)
+@echo "length: $$(oc exec deployment/valkey -- valkey-cli --tls --cert /tls/tls.crt --key /tls/tls.key --cacert /etc/pki/service-ca/service-ca.crt --raw LLEN $(1))"
 endef
 
 # Dump a single input queue (one with no priority twin), oldest-first.
 define show_single_queue
 @echo "=== $(1) ==="
-@oc exec deployment/valkey -- valkey-cli --raw LRANGE $(1) 0 -1 | jq -r '(.metadata.jira_issue // .metadata.issue // empty) | if type=="object" then (.key // empty) else . end' | $(TAC)
-@echo "length: $$(oc exec deployment/valkey -- valkey-cli --raw LLEN $(1))"
+@oc exec deployment/valkey -- valkey-cli --tls --cert /tls/tls.crt --key /tls/tls.key --cacert /etc/pki/service-ca/service-ca.crt --raw LRANGE $(1) 0 -1 | jq -r '(.metadata.jira_issue // .metadata.issue // empty) | if type=="object" then (.key // empty) else . end' | $(TAC)
+@echo "length: $$(oc exec deployment/valkey -- valkey-cli --tls --cert /tls/tls.crt --key /tls/tls.key --cacert /etc/pki/service-ca/service-ca.crt --raw LLEN $(1))"
 endef
 
 deploy:
@@ -82,7 +82,7 @@ show-reproducer-queue:
 	$(call show_queue,reproducer_queue)
 
 show-error-list:
-	@oc exec deployment/valkey -- valkey-cli --no-raw LRANGE error_list 0 -1 | python3 scripts/error_list.py --file -
+	@oc exec deployment/valkey -- valkey-cli --tls --cert /tls/tls.crt --key /tls/tls.key --cacert /etc/pki/service-ca/service-ca.crt --no-raw LRANGE error_list 0 -1 | python3 scripts/error_list.py --file -
 
 # Requeue a specific error_list entry (by the [id=...] shown in show-error-list)
 # back onto its original trigger queue, with attempts reset to 0.
@@ -142,7 +142,7 @@ process:
 		exit 1; \
 	fi
 	@echo "Pushing $(ISSUE) to triage_queue..."
-	@oc exec deployment/valkey -- valkey-cli LPUSH triage_queue \
+	@oc exec deployment/valkey -- valkey-cli --tls --cert /tls/tls.crt --key /tls/tls.key --cacert /etc/pki/service-ca/service-ca.crt LPUSH triage_queue \
 		'{"metadata":{"issue":"$(ISSUE)"},"attempts":0,"user_triggered":false}'
 	@echo "✓ Task queued successfully. View queue with: make show-triage-queue"
 
@@ -181,7 +181,7 @@ print(json.dumps({ \
 }))' \
 	) && \
 	queue=$$(if [ "$(or $(USER_TRIGGERED),false)" = "true" ]; then echo reproducer_queue_todo; else echo reproducer_queue; fi) && \
-	oc exec deployment/valkey -- valkey-cli LPUSH $$queue "$$payload" && \
+	oc exec deployment/valkey -- valkey-cli --tls --cert /tls/tls.crt --key /tls/tls.key --cacert /etc/pki/service-ca/service-ca.crt LPUSH $$queue "$$payload" && \
 	echo "✓ Pushed to $$queue. View with: make show-reproducer-queue"
 
 run-sweep-dependency:

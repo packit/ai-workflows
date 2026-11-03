@@ -24,6 +24,7 @@ from ymir.common.models import (
     NotAffectedData,
     PostponedData,
     RebaseData,
+    RebuildData,
     Resolution,
     TriageOutputSchema,
 )
@@ -87,6 +88,21 @@ test_cases = [
                 fix_version="rhel-10.3.z",
                 cve_id="CVE-2026-97031",
                 dependency_issue="RHEL-285391",
+                dependency_component="golang",
+            ),
+        ),
+    ),
+    # The golang dependency has shipped (Fixed in Build set), so git-lfs needs a rebuild.
+    TriageAgentTestCase(
+        input="RHEL-287570",
+        expected_output=TriageOutputSchema(
+            resolution=Resolution.REBUILD,
+            data=RebuildData(
+                package="git-lfs",
+                jira_issue="RHEL-287570",
+                cve_id="CVE-2026-111943",
+                fix_version="rhel-8.10.z",
+                dependency_issue="RHEL-287268",
                 dependency_component="golang",
             ),
         ),
@@ -439,6 +455,17 @@ def test_triage_agent(test_case: TriageAgentTestCase, observability_fixture):
         assert real_output.data.package == expected_output.data.package
         assert real_output.data.fix_version == expected_output.data.fix_version
         assert real_output.data.version == expected_output.data.version
+    elif expected_output.resolution == Resolution.REBUILD:
+        assert isinstance(real_output.data, RebuildData)
+        # A missing target branch or dependency would skip the buildroot verification.
+        assert test_case.finished_state.target_branch
+        assert not test_case.finished_state.applicability_check_skipped
+        assert not test_case.finished_state.applicability_used_fallback
+        assert real_output.data.package == expected_output.data.package
+        assert real_output.data.fix_version == expected_output.data.fix_version
+        assert real_output.data.cve_id == expected_output.data.cve_id
+        assert real_output.data.dependency_issue == expected_output.data.dependency_issue
+        assert real_output.data.dependency_component == expected_output.data.dependency_component
     elif expected_output.resolution == Resolution.NOT_AFFECTED:
         assert isinstance(real_output.data, NotAffectedData)
         assert real_output.data.explanation

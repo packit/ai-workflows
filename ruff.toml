@@ -38,3 +38,5 @@ ignore = [
 # LLM prompt strings contain JQL (SQL-like syntax) but are not SQL queries
 "ymir/agents/rebuild_consolidation.py" = ["S608"]
 "agents_as_skills/install-skills.py" = ["S603", "S607"]
+# The gate shells out to the known `git` binary for the rules-repo clone.
+"ymir/mr_review/gate.py" = ["S603", "S607"]

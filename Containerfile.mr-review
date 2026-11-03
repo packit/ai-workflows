@@ -1,0 +1,27 @@
+FROM fedora:44
+
+RUN dnf -y install \
+      python3 \
+      python3-backoff \
+      python3-pyyaml \
+      python3-requests \
+      git \
+    && dnf clean all
+
+RUN useradd -m mrreview
+
+WORKDIR /home/mrreview
+
+COPY ymir/mr_review/ /home/mrreview/ymir/mr_review/
+
+RUN chgrp -R root /home/mrreview && chmod -R g+rwX /home/mrreview
+
+# CI jobs run from their own working directory, so make the package
+# importable from anywhere.
+ENV PYTHONPATH=/home/mrreview
+
+USER mrreview
+
+# Two entry points, both invoked explicitly by the osci-pipelines
+# wiring: the opt-in gate (python3 -m ymir.mr_review.gate) and the
+# token-holding note poster (python3 -m ymir.mr_review.post).

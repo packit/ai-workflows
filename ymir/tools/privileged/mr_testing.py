@@ -885,7 +885,7 @@ def _format_markdown_table(headers: list[str], rows: list[list[str]]) -> str:
     header_line = "| " + " | ".join(headers) + " |"
     separator = "| " + " | ".join(["---"] * len(headers)) + " |"
     row_lines = ["| " + " | ".join(row) + " |" for row in rows]
-    return "\n".join([header_line, separator] + row_lines)
+    return "\n".join([header_line, separator, *row_lines])
 
 
 def _format_jira_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -940,7 +940,7 @@ def _build_results_table_markdown(
     plans: list[str],
     target: str = "gitlab",
 ) -> str:
-    headers = ["Architecture", "Overall"] + plans + ["Artifacts"]
+    headers = ["Architecture", "Overall", *plans, "Artifacts"]
     rows = []
 
     for arch in architectures:
@@ -1051,12 +1051,12 @@ def _format_testing_farm_results_markdown(
         "testing_farm_results_markdown" if include_results_table else "testing_farm_results_markdown_folded"
     )
     template = _TEMPLATES[template_key]
-    format_args = dict(
-        summary=summary,
-        plan_section=plan_section,
-        test_coverage_section=test_coverage_section,
-        request_section=request_section,
-    )
+    format_args = {
+        "summary": summary,
+        "plan_section": plan_section,
+        "test_coverage_section": test_coverage_section,
+        "request_section": request_section,
+    }
     if include_results_table:
         format_args["results_table"] = results_table
         format_args["unfixed_section"] = unfixed_section

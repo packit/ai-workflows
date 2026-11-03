@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -353,10 +354,8 @@ async def run_mr_testing_analyst(
 
                 test_coverage_raw = fields.get(TEST_COVERAGE_CUSTOM_FIELD)
                 test_coverage: list[str] = []
-                try:
+                with contextlib.suppress(TypeError, AttributeError):
                     test_coverage = [v.get("value") for v in test_coverage_raw if v.get("value")]
-                except (TypeError, AttributeError):
-                    pass
 
                 linked_issues.append(
                     JiraIssueContext(
@@ -389,7 +388,10 @@ async def run_mr_testing_analyst(
             )
 
             prompt = render_prompt(input_data)
-            prompt += f"\n\nMR_COMMENTS (JSON, pass as-is to parse_mr_test_results): {json.dumps(state.mr_comments)}"
+            prompt += (
+                "\n\nMR_COMMENTS (JSON, pass as-is to parse_mr_test_results): "
+                f"{json.dumps(state.mr_comments)}"
+            )
 
             response = await agent.run(
                 prompt,

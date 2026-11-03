@@ -33,6 +33,7 @@ from ymir.common.models import (
     FailedPipelineJob,
     MergeRequestComment,
     MergeRequestDetails,
+    MergeRequestDiscussion,
     OpenMergeRequestResult,
 )
 from ymir.common.validators import AbsolutePath
@@ -361,6 +362,7 @@ async def _fetch_authorized_comments_from_merge_request_url(
                         line_number=line_number,
                         line_type=line_type,
                         discussion_id=getattr(discussion, "id", ""),
+                        note_id=first_note.get("id"),
                         replies=replies,
                     )
                 )
@@ -1386,6 +1388,177 @@ class GetFailedPipelineJobsFromMergeRequestTool(
         return JSONToolOutput(result=failed_jobs)
 
 
+class GetMergeRequestDiscussionsToolInput(BaseModel):
+    merge_request_url: str = Field(description="URL of the merge request")
+
+
+class GetMergeRequestDiscussionsTool(
+    Tool[GetMergeRequestDiscussionsToolInput, ToolRunOptions, JSONToolOutput[list[MergeRequestDiscussion]]]
+):
+    """Lists a merge request's discussion threads, including each one's
+    resolvable/resolved state. Unlike get_authorized_comments_from_merge_request
+    or fetch_gitlab_mr_notes (which flatten discussions into plain notes and
+    drop that state), this is how to find whether a bot-opened results
+    thread -- e.g. OSCI bot's own pipeline results comment, which is itself a
+    resolvable discussion -- is still open."""
+
+    name = "get_merge_request_discussions"
+    timeout = 120
+    description = """
+    Gets all discussion threads on a merge request, including each thread's
+    resolvable/resolved state (lost by get_authorized_comments_from_merge_request
+    and fetch_gitlab_mr_notes). Use this to find an OSCI bot results thread and
+    check whether it's still unresolved before deciding whether to resolve it.
+    """
+    input_schema = GetMergeRequestDiscussionsToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: GetMergeRequestDiscussionsToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[list[MergeRequestDiscussion]]:
+        merge_request_url = tool_input.merge_request_url
+        with tool_error_context(
+            "Failed to get discussions from merge request",
+            merge_request_url=merge_request_url,
+        ):
+            mr = await _get_merge_request_from_url(merge_request_url)
+
+            def get_discussions() -> list[MergeRequestDiscussion]:
+                discussions = mr._raw_pr.discussions.list(get_all=True)
+                result = []
+                for discussion in discussions:
+                    notes = discussion.attributes.get("notes") or []
+                    first_note = notes[0] if notes else {}
+                    result.append(
+                        MergeRequestDiscussion(
+                            discussion_id=str(getattr(discussion, "id", "")),
+                            resolvable=first_note.get("resolvable"),
+                            resolved=first_note.get("resolved"),
+                            author=(first_note.get("author") or {}).get("username"),
+                            created_at=first_note.get("created_at"),
+                            body=first_note.get("body"),
+                        )
+                    )
+                return result
+
+            discussions = await asyncio.to_thread(get_discussions)
+
+        return JSONToolOutput(result=discussions)
+
+
+class ResolveMergeRequestDiscussionToolInput(BaseModel):
+    merge_request_url: str = Field(description="URL of the merge request")
+    discussion_id: str = Field(description="Discussion ID, from get_merge_request_discussions")
+
+
+class ResolveMergeRequestDiscussionTool(
+    Tool[ResolveMergeRequestDiscussionToolInput, ToolRunOptions, StringToolOutput]
+):
+    """Resolves a discussion thread on a merge request (the 'Resolve thread'
+    button) -- e.g. an OSCI bot results thread left unresolved by a failing
+    gating pipeline run, once judged safe to resolve. Only meaningful on a
+    resolvable discussion."""
+
+    name = "resolve_merge_request_discussion"
+    timeout = 60
+    description = """
+    Resolves a discussion thread on a merge request (the 'Resolve thread'
+    button). Use get_merge_request_discussions first to find the discussion_id
+    and confirm it's resolvable and currently unresolved.
+    """
+    input_schema = ResolveMergeRequestDiscussionToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: ResolveMergeRequestDiscussionToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        merge_request_url = tool_input.merge_request_url
+        with tool_error_context(
+            "Failed to resolve merge request discussion",
+            merge_request_url=merge_request_url,
+            discussion_id=tool_input.discussion_id,
+        ):
+            mr = await _get_merge_request_from_url(merge_request_url)
+
+            def resolve_discussion() -> None:
+                discussion = mr._raw_pr.discussions.get(tool_input.discussion_id)
+                discussion.resolved = True
+                discussion.save()
+
+            await asyncio.to_thread(resolve_discussion)
+
+        logger.info(f"Resolved discussion {tool_input.discussion_id} on MR {merge_request_url}")
+        return StringToolOutput(result=f"Resolved discussion {tool_input.discussion_id}")
+
+
+class GetPipelineJobTraceToolInput(BaseModel):
+    merge_request_url: str = Field(description="Any MR URL for the job's project (only the project is used)")
+    job_id: str = Field(description="Pipeline job ID")
+
+
+class GetPipelineJobTraceTool(Tool[GetPipelineJobTraceToolInput, ToolRunOptions, StringToolOutput]):
+    """Fetches a pipeline job's raw CI trace log. Needed in gating mode to
+    find the Testing Farm request a gating test job (osci.tier0,
+    osci.installability, etc.) ran -- that URL is only printed in the job's
+    own log, not exposed in the job's GitLab metadata or OSCI bot's comment."""
+
+    name = "get_pipeline_job_trace"
+    timeout = 120
+    description = """
+    Fetches a pipeline job's raw CI trace log (the full console output). Use
+    this to find the Testing Farm request URL a gating test job ran -- it's
+    only printed in the job's own trace, in varying wording/scheme depending
+    on the pipeline variant, e.g. "Testing Farm Result: https://artifacts.osci.redhat.com/testing-farm/<id>"
+    or "TEST_RESULT_URL=http://artifacts.osci.redhat.com/testing-farm/<id>".
+    """
+    input_schema = GetPipelineJobTraceToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: GetPipelineJobTraceToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> StringToolOutput:
+        merge_request_url = tool_input.merge_request_url
+        with tool_error_context(
+            "Failed to fetch pipeline job trace",
+            merge_request_url=merge_request_url,
+            job_id=tool_input.job_id,
+        ):
+            mr = await _get_merge_request_from_url(merge_request_url)
+
+            def get_trace() -> str:
+                job = mr.target_project.gitlab_repo.jobs.get(tool_input.job_id)
+                trace_bytes = job.trace()
+                return trace_bytes.decode("utf-8", errors="replace")
+
+            trace = await asyncio.to_thread(get_trace)
+
+        return StringToolOutput(result=trace)
+
+
 def _get_authorized_member_ids(project: GitlabProject) -> set[int]:
     """
     Fetch all project members and return a set of IDs for members
@@ -1678,6 +1851,7 @@ class FetchGitlabMrNotesTool(Tool[FetchGitlabMrNotesInput, ToolRunOptions, Strin
 
             result = [
                 {
+                    "id": note.get("id"),
                     "author": note.get("author", {}).get("name", "Unknown"),
                     "body": note["body"],
                     "created_at": note.get("created_at"),

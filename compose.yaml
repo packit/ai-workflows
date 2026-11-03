@@ -270,11 +270,11 @@ services:
     command: ["python", "-m", "ymir.agents.preliminary_testing_agent"]
     profiles: ["agents"]
 
-  mr-testing-analyzer-agent:
+  mr-testing-analyst-agent:
     <<: *beeai-agent-c10s
     environment:
       <<: *beeai-env
-    command: ["python", "-m", "ymir.agents.mr_testing_analyzer_agent"]
+    command: ["python", "-m", "ymir.agents.mr_testing_analyst_agent"]
     profiles: ["agents"]
 
   issue-verification-agent:

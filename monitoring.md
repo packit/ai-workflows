@@ -15,7 +15,7 @@ Weekly rotating role ([definition](https://github.com/packit/agile/issues/972)) 
 ## What Gets Logged and Reviewed
 
 ### Observability Platform
-- **Tool**: Phoenix  link TBD to new cluster
+- **Tool**: [Phoenix](https://phoenix-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com/projects/UHJvamVjdDox/spans)
 - **Retention**: 2 weeks
 - **Filter by**: Jira issue key in metadata or input.value
 
@@ -99,6 +99,6 @@ The team reviews agent results during weekly sessions, identifies failing use ca
 
 ### Links
 - [Skald Role](https://github.com/packit/agile/issues/972)
-- [Phoenix Traces](https://phoenix-jotnar-ymir--jotnar-ymir.apps.cyborg.fio9.p1.openshiftapps.com/projects/UHJvamVjdDox/spans)
+- [Phoenix Traces](https://phoenix-jotnar-ymir--jotnar-ymir.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com/projects/UHJvamVjdDox/spans)
 - [Review Dashboard](https://issues.redhat.com/secure/Dashboard.jspa?selectPageId=12389898)
 - [Slack](https://redhat.enterprise.slack.com/archives/C095699FLMR)

@@ -17,7 +17,7 @@ graph TD
     end
 
     subgraph "Google Cloud Platform"
-        VERTEX["Vertex AI<br/>(Gemini Models)"]
+        VERTEX["Vertex AI<br/>(Claude Models)"]
         GCP_AUTH["Service Account<br/>jotnar-vertex-prod.json"]
     end
 
@@ -76,7 +76,7 @@ sequenceDiagram
 
 ### Models in Use
 
-**Primary Model:** Gemini (Google Vertex AI)
+**Primary Model:** Claude Opus 4.6 (Google Vertex AI)
 
 **Use Cases:**
 - Spec file analysis and modification
@@ -98,7 +98,7 @@ flowchart LR
     MR_AGENT["MR Agent"]
     TESTING["Testing Analyst"]
 
-    CHAT["Chat Service<br/>(Gemini)"]
+    CHAT["Chat Service<br/>(Claude Opus 4.6)"]
 
     TRIAGE -->|"Analyze Jira issue<br/>Determine workflow"| CHAT
     BACKPORT -->|"Review patches<br/>Apply to spec"| CHAT
@@ -122,21 +122,20 @@ flowchart LR
 **Chat Service Configuration:**
 ```bash
 # Model selection
-CHAT_MODEL=gemini-1.5-pro
+CHAT_MODEL=vertexai:claude-opus-4-6
 
 # API credentials
 GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/jotnar-vertex-prod.json
 
 # Model parameters
 MAX_RETRIES=3
-TEMPERATURE=0.7
+TEMPERATURE=0.6
 ```
 
 **Agent Configuration:**
 ```bash
 # BeeAI framework settings
-BEEAI_MAX_ITERATIONS=10
-BEEAI_TIMEOUT=300
+BEEAI_MAX_ITERATIONS=255
 ```
 
 ### OpenShift Configuration

@@ -89,8 +89,8 @@ make check-unprivileged-tools-in-container
 - **quay.io naming**: Images must push to `quay.io/jotnar/` namespace; verify Containerfile registry config
 
 ### OpenShift Deployment
-- **RollingUpdate deadlock**: With `replicas=1`, RollingUpdate causes quota deadlock. **Must use `Recreate` strategy**
-- **Memory quota exhaustion**: Total: 14Gi requests / 16Gi limits. Check `openshift/base/` resource definitions
+- **Deployment strategy**: Strategies are selected per manifest. Check the relevant files under `openshift/` before changing rollout behavior; stateful or quota-sensitive workloads may require `Recreate`, while several agent deployments use `RollingUpdate`.
+- **Memory quota exhaustion**: Check the resource requests and limits in the current `openshift/deployment-*.yml` and `openshift/cronjob-*.yml` manifests.
 - **Image pull failures**: Verify images exist in `quay.io/jotnar/` before deployment
 
 For detailed deployment info: see [openshift/README.md](openshift/README.md)
@@ -102,7 +102,7 @@ For detailed deployment info: see [openshift/README.md](openshift/README.md)
 | Add agent logic | `ymir/agents/*/main.py` or new agent file |
 | Modify git operations | `ymir/tools/privileged/distgit.py` |
 | Change Jira integration | `ymir/tools/jira/` + update [jira_data_flow.md](jira_data_flow.md) |
-| Update OpenShift | `openshift/overlays/{dev,staging,prod}/` |
+| Update OpenShift | `openshift/*.yml`, `openshift/deploy-oc.sh`, or `openshift/Makefile` |
 | Add skill | `agents_as_skills/{skill_name}/SKILL.md` |
 | Change queue routing | [jira_label_workflow_routing.md](jira_label_workflow_routing.md) |
 | Reproducer design | [docs/reproducer_architecture.md](docs/reproducer_architecture.md) |

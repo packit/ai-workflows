@@ -10,7 +10,7 @@ Python would bypass catatonit. Agents retain their persistent worker model.
 ## Deployment Location
 
 Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
-- **Console:** https://console-openshift-console.apps.gpc.ocp-hub.prod.psi.redhat.com/k8s/cluster/projects/jotnar-ymir--jotnar-ymir
+- **Console:** https://console-openshift-console.apps.prod-scale-spoke1-dc-rdu3.itup.redhat.com/k8s/cluster/projects/jotnar-ymir--jotnar-ymir
 - **Project:** jotnar-ymir--jotnar-ymir
 
 ## Steps to deploy:
@@ -40,8 +40,8 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   would create credential leakage risks via prompt injection. Instead, unprivileged
   tools in agents call privileged MCP tools (get_github_pull_request, get_github_compare)
   that run in the isolated MCP gateway process. The gateway has no shell execution,
-  preventing token extraction. The supervisor and sweep processes also have direct
-  token access since they lack shell execution capabilities.
+  preventing token extraction. Sweep processes also have direct token access
+  since they lack shell execution capabilities.
 
   `jira-env`:
   ```
@@ -100,8 +100,8 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
 
   | Storage class | Used by | PVC |
   |---|---|---|
-  | `netapp-nfs` | Phoenix runtime data, git-repos, valkey | `phoenix-data`, `git-repos`, `valkey-data` |
-  | `netapp-iscsi` | Phoenix PostgreSQL database | `phoenix-db-data` |
+  | `rh-restricted-nfs` | Phoenix runtime data, trace server data, MCP git repositories, valkey | `phoenix-data`, `trace-server-data`, `mcp-server-git-repos`, `valkey-data` |
+  | `rh-restricted-iscsi` | Phoenix PostgreSQL database | `phoenix-db-data` |
 
   The default storage class shown by `oc get storageclass` may be blocked by an
   admission webhook that isn't visible in its description. Test both with
@@ -115,7 +115,7 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   metadata:
     name: test-nfs-pvc
   spec:
-    storageClassName: netapp-nfs
+    storageClassName: rh-restricted-nfs
     accessModes: [ReadWriteOnce]
     resources:
       requests:
@@ -130,7 +130,7 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   metadata:
     name: test-iscsi-pvc
   spec:
-    storageClassName: netapp-iscsi
+    storageClassName: rh-restricted-iscsi
     accessModes: [ReadWriteOnce]
     resources:
       requests:
@@ -140,7 +140,7 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   ```
 
   If the webhook rejects either, try a different storage class (the cluster may
-  alias them, e.g. `rh-restricted-nfs` / `rh-restricted-iscsi`).
+  alias them, e.g. `netapp-nfs` / `netapp-iscsi`).
 
 - Run the deployment script:
 
@@ -226,9 +226,9 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
 
 A dedicated Route (`route-trace-server-cname.yml`) accepts traffic for the
 `ymir.redhat.com` CNAME.  The OpenShift router's default wildcard certificate
-only covers `*.apps.gpc.ocp-hub.prod.psi.redhat.com`, so a TLS certificate
+only covers `*.apps.int.prod-scale-spoke1-dc-rdu3.itup.redhat.com`, so a TLS certificate
 for `ymir.redhat.com` must be stored in a Secret.  OpenShift Routes cannot
-reference Secrets directly, so `deploy.sh` automatically patches the
+reference Secrets directly, so `deploy-oc.sh` automatically patches the
 cert/key into the Route after each apply.
 
 One-time Secret creation:
@@ -238,7 +238,7 @@ oc create secret tls ymir-cname-tls \
   --cert=ymir.redhat.com.crt --key=ymir.redhat.com.key
 ```
 
-Subsequent deploys via `deploy.sh` will read the cert/key from the
+Subsequent deploys via `deploy-oc.sh` will read the cert/key from the
 `ymir-cname-tls` Secret and patch the Route automatically.  If the Secret
 does not exist yet, the patch is skipped with a warning.
 
@@ -493,7 +493,10 @@ To push a Jira issue into the triage queue (e.g. to force CVE triage):
 ```bash
 make process ISSUE=RHEL-XXXX
 # or:
-oc rsh deployment/valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "RHEL-XXXXXX", "force_cve_triage": true}}'
+oc rsh deployment/valkey valkey-cli --tls \
+  --cert /tls/tls.crt --key /tls/tls.key \
+  --cacert /etc/pki/service-ca/service-ca.crt \
+  LPUSH triage_queue '{"metadata": {"issue": "RHEL-XXXXXX", "force_cve_triage": true}}'
 ```
 
 Set `force_cve_triage` to `false` for a normal triage run. This mirrors the `make trigger-pipeline` target used locally.
@@ -556,17 +559,17 @@ make logs-rebuild-c9s      # rebuild-agent-c9s
 make logs-rebuild-c10s     # rebuild-agent-c10s
 make logs-reproducer       # reproducer-agent
 make logs-mcp              # mcp-gateway
-make logs-supervisor       # supervisor-processor
 make logs-valkey           # valkey
 make logs-phoenix          # phoenix
 make logs-redis-commander  # redis-commander
 make logs-otel-collector   # otel-collector
 ```
 
-## Image rebuilds of MCP Gateway and agent images
+## Image rebuilds
 
-They are built internally. If you need a rebuild right now, head over
-to [the Gitlab jobs view](https://gitlab.cee.redhat.com/jotnar-project/deployment/-/jobs?kind=BUILD)
-and respin those that you need.
-
-Otherwise they are rebuilt nightly at 3:00.
+Images are built and pushed to the `quay.io/jotnar` namespace by the
+[Build and push GitHub Actions workflow](../.github/workflows/build-and-push.yml).
+The workflow runs automatically when changes are pushed to `main` and can also
+be started manually from GitHub Actions. It builds the BeeAI agent images,
+MCP gateway, API, trace server, Phoenix, Jira fetcher, MR cleanup, and sweep
+images used by the OpenShift manifests.

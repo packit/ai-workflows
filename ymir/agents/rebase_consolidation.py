@@ -81,16 +81,40 @@ def add_jira_tickets_to_latest_changelog_entry(
         reference_lines = [
             reference_match for line in entry.content if (reference_match := RESOLVES_FOOTER_RE.match(line))
         ]
+        suffix_lines = [
+            (index, suffix)
+            for index, line in enumerate(entry.content)
+            if not re.match(r"^\s*(?:[-*]\s*)?(?:Resolves|Related):", line, re.IGNORECASE)
+            and (suffix := tasks._extract_jira_suffix(line))
+        ]
         existing_issues = {
             issue.upper()
             for reference_line in reference_lines
             for issue in re.findall(r"\bRHEL-\d+\b", reference_line.group("value"), re.IGNORECASE)
         }
+        existing_issues.update(
+            issue.upper()
+            for _, suffix in suffix_lines
+            for issue in re.findall(r"\bRHEL-\d+\b", suffix, re.IGNORECASE)
+        )
         missing_issues = [
             issue for issue in dict.fromkeys(jira_issues) if issue.upper() not in existing_issues
         ]
         if not missing_issues:
             return False
+
+        if suffix_lines:
+            index, suffix = suffix_lines[0]
+            line = entry.content[index]
+            suffix_issues = re.findall(r"\bRHEL-\d+\b", suffix, re.IGNORECASE)
+            suffix_issues.extend(issue for issue in missing_issues if issue.upper() not in existing_issues)
+            suffix_start = line.rfind(suffix)
+            entry.content[index] = (
+                line[:suffix_start]
+                + tasks._rewrite_jira_suffix(suffix, suffix_issues)
+                + line[suffix_start + len(suffix) :]
+            )
+            return True
 
         reference_prefix = reference_lines[0].group("prefix") if reference_lines else "- "
         reference_tag = reference_lines[0].group("tag") if reference_lines else "Resolves"
@@ -355,7 +379,13 @@ async def queue_siblings_for_triage(
                     await tasks.comment_in_jira(
                         jira_issue=candidate_key,
                         agent_type="Triage",
-                        comment_text=f"Queued for triage as potential sibling of {primary_issue}",
+                        comment_text=(
+                            f"Queued for triage as potential sibling of {primary_issue}. "
+                            "If triage confirms this issue needs a rebase to the same version, "
+                            f"it will be rebased together with {primary_issue} after all "
+                            "siblings have been triaged. "
+                            f"The shared MR will be linked to {primary_issue}."
+                        ),
                         available_tools=available_tools,
                         is_error=False,
                         user_triggered=user_triggered,

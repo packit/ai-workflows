@@ -857,7 +857,7 @@ Queue sibling Jira issues for triage and decide whether the primary issue should
    b. Check the candidate's labels for any terminal labels (`ymir_rebase_sibling`, `ymir_triaged_rebase`, `ymir_triaged_backport`, `ymir_triaged_rebuild`, `ymir_triaged_not_affected`, `ymir_triaged_postponed`, `ymir_backported`, `ymir_rebased`, `ymir_rebuilt`). If any are present, exclude it.
    c. If `dry_run` is false and the candidate passes all checks:
       - Add the `ymir_rebase_sibling` label to the candidate using `edit_jira_labels`.
-      - Post a comment on the candidate: `"Queued for triage as potential sibling of {{jira_issue}}"` using `add_jira_comment`.
+      - Post a comment on the candidate: `"Queued for triage as potential sibling of {{jira_issue}}. If triage confirms this issue needs a rebase to the same version, it will be rebased together with {{jira_issue}} after all siblings have been triaged. The shared MR will be linked to {{jira_issue}}."` using `add_jira_comment`.
       - Count the candidate as queued.
 
 5. **Decide whether to wait:**

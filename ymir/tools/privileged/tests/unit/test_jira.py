@@ -551,6 +551,60 @@ RHEL_CONFIG = {
 }
 
 
+@pytest.mark.parametrize(
+    "other_version,status,resolution,expected_shipped",
+    [
+        ("rhel-10.2", "Closed", "Done", False),
+        ("rhel-10.2.z", "Closed", "Done-Errata", False),
+        ("rhel-9.5", "Closed", "Done", True),
+        ("rhel-9.5", "Closed", "Done-Errata", True),
+        ("RHEL-9.5.0", "Closed", "Done", True),
+        ("rhel-9.5", "Closed", "Won't Do", False),
+        ("rhel-9.5", "In Progress", None, False),
+        ("rhel-9.4.z", "Closed", "Done-Errata", False),
+        ("unknown", "Closed", "Done", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_check_zstream_clones_same_major_shipping_gate(
+    other_version, status, resolution, expected_shipped
+):
+    """Only same-major fixes unblock a pending Z-stream; resolved Y-streams qualify."""
+    config = {
+        **RHEL_CONFIG,
+        "current_z_streams": {**RHEL_CONFIG["current_z_streams"], "10": "rhel-10.2.z"},
+    }
+    search_result = [
+        {
+            "key": "RHEL-111",
+            "fields": {
+                "fixVersions": [{"name": other_version}],
+                "status": {"name": status},
+                "resolution": {"name": resolution} if resolution else None,
+                "customfield_10578": "curl-8.0.1-2",
+            },
+        },
+        {
+            "key": "RHEL-222",
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.6.z"}],
+                "status": {"name": "In Progress"},
+                "resolution": None,
+            },
+        },
+    ]
+    flexmock(SearchJiraIssuesTool).should_receive("run").and_return(
+        _create_async_return(JSONToolOutput(result=search_result))
+    ).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(_create_async_return(config)).once()
+
+    result = await _check_zstream_clones_shipped("CVE-2026-43961", "curl", "RHEL-285530", "9")
+
+    assert result.any_shipped is expected_shipped
+    assert result.pending_keys == ([] if expected_shipped else ["RHEL-222"])
+    assert result.shipped_candidates == []
+
+
 @pytest.mark.asyncio
 async def test_check_zstream_clones_all_closed():
     search_result = [
@@ -570,7 +624,7 @@ async def test_check_zstream_clones_all_closed():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
     assert result.any_shipped is True
     assert result.pending_keys == []
 
@@ -595,7 +649,7 @@ async def test_check_zstream_clones_closed_done():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
     assert result.any_shipped is True
     assert result.pending_keys == []
 
@@ -629,7 +683,7 @@ async def test_check_zstream_clones_collects_only_current_zstream_candidates():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
 
     assert result == ZStreamDependencyResult(
         any_shipped=True,
@@ -662,7 +716,7 @@ async def test_check_zstream_clones_upcoming_pending_still_blocks_dependency():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
 
     assert result == ZStreamDependencyResult(
         any_shipped=False,
@@ -690,7 +744,7 @@ async def test_check_zstream_clones_shipped_without_nvr_is_not_candidate():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
 
     assert result.any_shipped is True
     assert result.shipped_candidates == []
@@ -724,7 +778,7 @@ async def test_check_zstream_clones_one_shipped_one_open():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
     assert result.any_shipped is True
     assert result.pending_keys == []
 
@@ -748,7 +802,7 @@ async def test_check_zstream_clones_none_shipped():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
     assert result.any_shipped is False
     assert result.pending_keys == ["RHEL-222"]
 
@@ -759,7 +813,7 @@ async def test_check_zstream_clones_none_found():
         _create_async_return(JSONToolOutput(result=[]))
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
     assert result.any_shipped is True
     assert result.pending_keys == []
 
@@ -782,7 +836,7 @@ async def test_check_zstream_clones_eus_filtered_out():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
     assert result.any_shipped is True
     assert result.pending_keys == []
 
@@ -806,7 +860,7 @@ async def test_check_zstream_clones_maintenance_filtered_out():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
     assert result.any_shipped is True
     assert result.pending_keys == []
 
@@ -831,7 +885,7 @@ async def test_check_zstream_clones_closed_wontdo_ignored():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
     assert result.any_shipped is True
     assert result.pending_keys == []
 
@@ -864,7 +918,7 @@ async def test_check_zstream_clones_wontdo_with_pending():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
     assert result.any_shipped is False
     assert result.pending_keys == ["RHEL-222"]
 
@@ -889,7 +943,7 @@ async def test_check_zstream_clones_stale_ystream_fixversion():
         _create_async_return(RHEL_CONFIG)
     ).once()
 
-    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999")
+    result = await _check_zstream_clones_shipped("CVE-2025-12345", "curl", "RHEL-999", "9")
     assert result.any_shipped is False
     assert result.pending_keys == ["RHEL-333"]
 
@@ -1224,7 +1278,7 @@ async def test_eligibility_ystream_any_clone_shipped():
         _create_async_return((None, False))
     ).once()
     flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9"
     ).and_return(
         _create_async_return(
             ZStreamDependencyResult(
@@ -1307,7 +1361,7 @@ async def test_eligibility_ystream_clones_pending():
         _create_async_return((None, False))
     ).once()
     flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9"
     ).and_return(
         _create_async_return(ZStreamDependencyResult(any_shipped=False, pending_keys=["RHEL-999"]))
     ).once()
@@ -1594,7 +1648,7 @@ async def test_eligibility_dependency_blocker_zstream_not_affected():
     ).once()
     # Has Z-stream clones but none shipped yet (would normally block)
     flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9"
     ).and_return(
         _create_async_return(ZStreamDependencyResult(any_shipped=False, pending_keys=["RHEL-777"]))
     ).once()
@@ -1632,7 +1686,7 @@ async def test_eligibility_dependency_blocker_zstream_not_affected_error():
     ).once()
     # Has Z-stream clones but none shipped yet
     flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9"
     ).and_return(
         _create_async_return(ZStreamDependencyResult(any_shipped=False, pending_keys=["RHEL-777"]))
     ).once()
@@ -1670,7 +1724,7 @@ async def test_eligibility_dependency_blocker_zstream_not_affected_with_duplicat
     ).once()
     # Has Z-stream clones but none shipped yet (would normally block)
     flexmock(jira_tools).should_receive("_check_zstream_clones_shipped").with_args(
-        "CVE-2025-12345", "curl", "RHEL-12345"
+        "CVE-2025-12345", "curl", "RHEL-12345", "9"
     ).and_return(
         _create_async_return(ZStreamDependencyResult(any_shipped=False, pending_keys=["RHEL-777"]))
     ).once()

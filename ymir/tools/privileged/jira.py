@@ -428,15 +428,15 @@ class ZStreamDependencyResult(BaseModel):
 
 
 async def _check_zstream_clones_shipped(
-    cve_id: str, component: str, exclude_key: str
+    cve_id: str, component: str, exclude_key: str, major_version: str
 ) -> ZStreamDependencyResult:
-    """Check whether any Z-stream clone has shipped (Critical/Important Y-stream path).
+    """Check whether a same-major fix has shipped (Critical/Important Y-stream path).
 
     Used for Critical/Important CVEs where the Y-stream fix requires an internal
-    build — we wait for at least one relevant Z-stream clone to reach Done-Errata
-    before the Y-stream becomes eligible for triage. The dependency gate checks
-    configured current and upcoming Z-streams for each non-maintenance major, while
-    only shipped current Z-stream clones are returned as inheritance candidates.
+    build — we wait for a relevant clone to be Closed with Done or Done-Errata.
+    The dependency gate checks configured current and upcoming Z-streams for the
+    target major. Resolved Y-stream clones in that major also satisfy the gate,
+    while only current Z-stream clones are returned as inheritance candidates.
     """
     escaped_cve_id = cve_id.replace('"', '\\"')
     escaped_component = component.replace('"', '\\"')
@@ -478,13 +478,13 @@ async def _check_zstream_clones_shipped(
         variant.lower()
         for streams in (current_z_streams, upcoming_z_streams)
         for major, version in streams.items()
-        if major not in maintenance_majors
+        if major == major_version and major not in maintenance_majors
         for variant in get_fix_version_variants(version)
     }
     inheritance_z_streams = {
         variant.lower()
         for major, version in current_z_streams.items()
-        if major not in maintenance_majors
+        if major == major_version and major not in maintenance_majors
         for variant in get_fix_version_variants(version)
     }
     logger.info(f"Dependency Z-streams from config: {sorted(relevant_z_streams)}")
@@ -504,11 +504,17 @@ async def _check_zstream_clones_shipped(
         resolution_name = issue.get("fields", {}).get("resolution", {})
         resolution_name = resolution_name.get("name", "") if resolution_name else ""
 
-        if not has_relevant_zstream:
+        is_shipped = status_name == "Closed" and resolution_name in ("Done-Errata", "Done")
+        has_same_major_ystream = any(
+            parsed and parsed[0] == major_version and not parsed[2]
+            for fv in fv_names
+            for parsed in [parse_rhel_version(fv)]
+        )
+        if not has_relevant_zstream and not (is_shipped and has_same_major_ystream):
             logger.info(f"  {key}: fixVersions={fv_names} — not a relevant Z-stream, skipping")
             continue
 
-        if status_name == "Closed" and resolution_name in ("Done-Errata", "Done"):
+        if is_shipped:
             logger.info(f"  {key}: fixVersions={fv_names}, resolution={resolution_name} — shipped")
             any_shipped = True
             fixed_in_build = issue.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
@@ -541,10 +547,11 @@ async def _check_zstream_clones_shipped(
         )
         if pending_keys:
             logger.info(
-                f"At least one Z-stream clone shipped for {cve_id}, proceeding (remaining: {pending_keys})"
+                f"At least one RHEL {major_version} clone shipped for {cve_id}, "
+                f"proceeding (remaining: {pending_keys})"
             )
         else:
-            logger.info(f"All relevant Z-stream clones shipped for {cve_id}")
+            logger.info(f"Relevant RHEL {major_version} clones shipped for {cve_id}")
         return ZStreamDependencyResult(
             any_shipped=True,
             shipped_candidates=shipped_candidates,
@@ -1208,7 +1215,11 @@ class CheckCveTriageEligibilityTool(
 
         logger.info(f"Checking clones for {cve_id}, component={component}, exclude={issue_key}")
         try:
-            dependency = await _check_zstream_clones_shipped(cve_id, component, issue_key)
+            parsed = parse_rhel_version(target_version)
+            if not parsed:
+                raise ValueError(f"Cannot parse target RHEL version: {target_version}")
+            major_version = parsed[0]
+            dependency = await _check_zstream_clones_shipped(cve_id, component, issue_key, major_version)
         except Exception as e:
             logger.warning(f"Clone dependency check failed for {cve_id}: {e}")
             return (
@@ -1226,13 +1237,11 @@ class CheckCveTriageEligibilityTool(
         if dependency.any_shipped:
             logger.info(
                 f"Dependency check for {issue_key} ({target_version}): "
-                f"at least one clone for {cve_id} shipped"
+                f"at least one RHEL {major_version} clone for {cve_id} shipped"
             )
             return None, dependency.shipped_candidates
 
         # Before postponing, check if any Z-stream clones were NOT_AFFECTED
-        parsed = parse_rhel_version(target_version)
-        major_version = parsed[0] if parsed else None
         if major_version:
             try:
                 not_affected_clones = await _check_zstream_not_affected(
@@ -1286,7 +1295,7 @@ class CheckCveTriageEligibilityTool(
                     eligibility=TriageEligibility.PENDING_DEPENDENCIES,
                     reason=(
                         f"CVE {cve_id} ({target_version}): "
-                        "waiting for at least one Z-stream clone to ship — "
+                        f"waiting for at least one RHEL {major_version} clone to ship — "
                         "RHEL first approach, internal fix is needed first"
                     ),
                     needs_internal_fix=False,
@@ -1380,7 +1389,7 @@ class CheckCveTriageEligibilityTool(
                 eligibility=TriageEligibility.IMMEDIATELY,
                 reason=(
                     f"Y-stream CVE ({target_version}): "
-                    "at least one Z-stream clone shipped, eligible for triage"
+                    "at least one same-major clone shipped, eligible for triage"
                 ),
                 needs_internal_fix=False,
                 duplicate_of=duplicate_of,

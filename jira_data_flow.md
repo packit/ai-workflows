@@ -139,8 +139,15 @@ sequenceDiagram
     end
 ```
 
+For Important and Critical Y-stream CVEs, the shipped-fix dependency gate only
+considers the target RHEL major. A clone in that major's configured current or
+upcoming Z-stream, or a Y-stream clone in the same major, satisfies the gate when
+it is Closed with resolution Done or Done-Errata. A fix shipped in another major
+does not unblock pending clones in the target major. Existing behavior when no
+relevant pending clones exist is unchanged.
+
 For an exactly Important or Critical Y-stream CVE, `CVEEligibilityResult` also
-contains shipped clones from each RHEL major's configured current Z-stream that
+contains shipped clones from the target major's configured current Z-stream that
 have a non-empty Fixed in Build value. `upcoming_z_streams` and older Z-stream
 clones are ignored for inheritance. Each source retains its Jira key, NVR, and
 fixVersions. This metadata travels in `Task.metadata` to the backport queue,

@@ -1715,6 +1715,7 @@ async def run_workflow(
                     state.package,
                     state.canonical_title,
                     state.changelog_entry_count,
+                    [state.jira_issue],
                 )
             state.log_result = log_output
 

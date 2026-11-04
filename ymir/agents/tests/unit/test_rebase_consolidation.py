@@ -54,6 +54,26 @@ def test_add_jira_tickets_to_latest_changelog_entry(tmp_path):
     )
 
 
+def test_add_jira_tickets_recognizes_and_extends_suffix_references(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(
+        _spec("* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n- Update package (RHEL-100/RHEL-200)\n")
+    )
+
+    assert add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200", "RHEL-300"])
+    assert spec.read_text().endswith("- Update package (RHEL-100/RHEL-200/RHEL-300)\n")
+
+
+def test_add_jira_tickets_preserves_suffix_trailing_whitespace(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(
+        _spec("* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n- Update package (RHEL-100/RHEL-200)   \n")
+    )
+
+    assert add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200", "RHEL-300"])
+    assert spec.read_text().endswith("- Update package (RHEL-100/RHEL-200/RHEL-300)   \n")
+
+
 def test_add_jira_tickets_skips_empty_changelog(tmp_path):
     spec = tmp_path / "package.spec"
     spec.write_text(_spec())

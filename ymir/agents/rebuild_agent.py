@@ -264,6 +264,7 @@ async def main() -> None:
                         state.package,
                         state.canonical_title,
                         state.changelog_entry_count,
+                        all_issues,
                     )
                 return "stage_changes"
 

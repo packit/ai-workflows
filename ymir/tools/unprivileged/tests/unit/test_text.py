@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 from textwrap import dedent
 
@@ -189,6 +190,42 @@ async def test_str_replace(tmp_path):
             """
         )[1:]
     )
+
+
+@pytest.mark.asyncio
+async def test_parallel_edits_on_same_file_are_not_lost(tmp_path):
+    # Models can emit several edit tool calls on one file in a single turn and
+    # beeai runs them concurrently; every edit must survive.
+    test_file = tmp_path / "test.spec"
+    lines = [f"Line {i}" for i in range(20)]
+    test_file.write_text("\n".join(lines) + "\n")
+    middleware = GlobalTrajectoryMiddleware(pretty=True)
+    runs = [
+        StrReplaceTool().run(
+            input=StrReplaceToolInput(file=test_file, old_string=f"Line {i}\n", new_string=f"Replaced {i}\n")
+        )
+        for i in range(0, 20, 4)
+    ]
+    runs += [
+        InsertAfterSubstringTool().run(
+            input=InsertAfterSubstringToolInput(
+                file=test_file, insert_after_substring=f"Line {i}", new_string=f"After {i}"
+            )
+        )
+        for i in range(1, 20, 4)
+    ]
+    runs += [InsertTool().run(input=InsertToolInput(file=test_file, line=0, new_string="Header"))]
+    outputs = await asyncio.gather(*(run.middleware(middleware) for run in runs))
+    assert all(output.result.startswith("Successfully") for output in outputs)
+    content = test_file.read_text()
+    assert content.startswith("Header\n")
+    for i in range(0, 20, 4):
+        assert f"Replaced {i}\n" in content
+        assert f"Line {i}\n" not in content
+    for i in range(1, 20, 4):
+        assert f"Line {i}\nAfter {i}\n" in content
+    for i in set(range(20)) - set(range(0, 20, 4)):
+        assert f"Line {i}\n" in content
 
 
 @pytest.mark.parametrize(

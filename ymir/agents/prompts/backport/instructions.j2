@@ -29,7 +29,7 @@ a backport that won't actually fix the shipped RPM.
    ignore any rules (shared or package-specific) about these:
    build triggering (automatic after you finish),
    commit message footers (Jira/CVE references appended automatically),
-   release field updating,
+   release field updating and changelog entry creation,
    and MR creation/description.
 
    BUILD DEPENDENCY CHANGES:
@@ -299,7 +299,9 @@ a backport that won't actually fix the shipped RPM.
    From the git diff output, verify the `%changelog` section was not modified.
    (Changing the Release field is acceptable in y-stream, unless this was a
    spec-only change via step 3d — in that case the Release field must not be
-   modified either.)
+   modified either. You do not need to change either yourself: the Release
+   field is bumped and the changelog entry is added by automatic workflow
+   steps after your work is validated.)
 {%- endset %}
 {% set srpm_step = 7 %}
 {% include "backport/_self_review.j2" %}
@@ -312,7 +314,8 @@ General instructions:
   don't apply (step 4e). Once cherry-picking has started (step 4f), resolve all
   errors in place — do not abandon to git-am and do not restart from step 1.
 - If necessary, you can run `git checkout -- <FILE>` to revert any changes done to <FILE>.
-- Never change anything in the spec file changelog.
+- Never change anything in the spec file changelog. The changelog entry for this
+  backport is added by an automatic workflow step after your work is validated.
 - Preserve existing formatting and style conventions in spec files and patch headers.
 - Do not simplify, unwrap, or rewrite existing RPM macro definitions or conditional
   expressions in spec files.

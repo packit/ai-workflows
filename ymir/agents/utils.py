@@ -19,6 +19,29 @@ from ymir.common.utils import get_absolute_path, mcp_tools, run_tool  # noqa: F4
 
 logger = logging.getLogger(__name__)
 
+# Opus models from 4.8 onward deprecate the temperature parameter entirely,
+# and Opus 5.5 additionally rejects forced tool choice (Anthropic removed
+# tool_choice types "any"/"tool" there — only "auto"/"none" are accepted).
+# litellm is told to strip these parameters so requests do not fail with a
+# provider 400. Extend the mapping when adopting newer Opus releases.
+_DROPPED_PARAMS_BY_MODEL: dict[str, tuple[str, ...]] = {
+    "opus-4-8": ("temperature",),
+    "opus-5-5": ("temperature", "tool_choice"),
+}
+
+
+def unsupported_model_params(chat_model: str) -> tuple[str, ...]:
+    """Parameters the provider rejects for *chat_model*.
+
+    Opus 5.5 runs without forced tool choice: the model is only *asked* to
+    call tools (auto mode), so agent loops and structured outputs rely on
+    prompt steering instead of API-level forcing.
+    """
+    for model, params in _DROPPED_PARAMS_BY_MODEL.items():
+        if model in chat_model:
+            return params
+    return ()
+
 
 def patch_fetch_tool_name(patch_url: str) -> str:
     """Select authenticated patch retrieval for HTTPS URLs hosted on GitHub."""
@@ -53,10 +76,10 @@ def get_chat_model() -> ChatModel:
 
     settings: dict[str, Any] = {"num_retries": int(os.getenv("LITELLM_NUM_RETRIES", 3))}
 
-    # opus-4-8 deprecates temperature entirely; tell litellm to strip it.
-    if "opus-4-8" in chat_model:
+    dropped_params = unsupported_model_params(chat_model)
+    if dropped_params:
         settings["drop_params"] = True
-        settings["additional_drop_params"] = ["temperature"]
+        settings["additional_drop_params"] = list(dropped_params)
 
     # BeeAI 0.1.84+ defaults prompt caching off for Vertex models; re-enable it
     # for Vertex Anthropic (set at construction so the adapter keeps the value).

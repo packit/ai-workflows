@@ -12,9 +12,11 @@ from ymir.agents.tasks import (
     InvalidReleaseBumpingConfigError,
     _canonical_mr_title_key,
     _check_zstream_branch_consistency,
+    _extract_jira_suffix,
     _is_newer_summary,
     _normalize_cve_title,
     _normalize_jira_updated,
+    _rewrite_jira_suffix,
     _validate_generated_title,
     canonical_title_mentions_components,
     change_jira_status,
@@ -560,6 +562,107 @@ def test_canonical_changelog_title_replaces_only_new_entry(tmp_path):
 
     assert changelog[0].content == ["- Previous title"]
     assert changelog[1].content == ["- Canonical title", "- Resolves: RHEL-1"]
+
+
+@pytest.mark.parametrize(
+    ("line", "suffix"),
+    [
+        ("- Paraphrased title (RHEL-1)", " (RHEL-1)"),
+        ("- Paraphrased title [RHEL-1, RHEL-2]", " [RHEL-1, RHEL-2]"),
+        ("- Paraphrased title - RHEL-1", " - RHEL-1"),
+    ],
+)
+def test_extract_jira_suffix(line, suffix):
+    assert _extract_jira_suffix(line) == suffix
+
+
+@pytest.mark.parametrize("line", ["- Paraphrased title", "- Mentioned RHEL-1 in prose"])
+def test_extract_jira_suffix_requires_trailing_reference(line):
+    assert _extract_jira_suffix(line) is None
+
+
+@pytest.mark.parametrize(
+    ("suffix", "expected"),
+    [
+        (" (RHEL-999/RHEL-998)", " (RHEL-1/RHEL-2)"),
+        (" [RHEL-999 & RHEL-998]", " [RHEL-1 & RHEL-2]"),
+        (" (RHEL-999, RHEL-998)", " (RHEL-1, RHEL-2)"),
+    ],
+)
+def test_rewrite_jira_suffix_preserves_separator(suffix, expected):
+    assert _rewrite_jira_suffix(suffix, ["RHEL-1", "RHEL-2"]) == expected
+
+
+def test_canonical_changelog_title_preserves_jira_suffix(tmp_path):
+    class Entry:
+        def __init__(self, content):
+            self.content = content
+
+    class Changelog(list):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    changelog = Changelog([Entry(["- Previous title"]), Entry(["- Paraphrased title (RHEL-1)"])])
+
+    class FakeSpecfile:
+        has_autochangelog = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def changelog(self):
+            return changelog
+
+    flexmock(agent_tasks).should_receive("find_spec").with_args(tmp_path, "curl").and_return(
+        "curl.spec"
+    ).once()
+    flexmock(agent_tasks).should_receive("Specfile").and_return(FakeSpecfile()).once()
+    ensure_canonical_changelog_title(tmp_path, "curl", "Canonical title", expected_entry_count=1)
+
+    assert changelog[1].content == ["- Canonical title (RHEL-1)"]
+
+
+def test_canonical_changelog_title_rewrites_stale_jira_suffix(tmp_path):
+    class Entry:
+        def __init__(self, content):
+            self.content = content
+
+    class Changelog(list):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    changelog = Changelog([Entry(["- Previous title"]), Entry(["- Paraphrased title (RHEL-999)"])])
+
+    class FakeSpecfile:
+        has_autochangelog = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def changelog(self):
+            return changelog
+
+    flexmock(agent_tasks).should_receive("find_spec").with_args(tmp_path, "curl").and_return(
+        "curl.spec"
+    ).once()
+    flexmock(agent_tasks).should_receive("Specfile").and_return(FakeSpecfile()).once()
+    ensure_canonical_changelog_title(
+        tmp_path, "curl", "Canonical title", expected_entry_count=1, jira_issues=["RHEL-1"]
+    )
+
+    assert changelog[1].content == ["- Canonical title (RHEL-1)"]
 
 
 def test_canonical_changelog_title_removes_wrapped_continuation(tmp_path):

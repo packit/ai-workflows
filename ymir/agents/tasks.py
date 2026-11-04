@@ -10,6 +10,7 @@ import unicodedata
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -1159,11 +1160,42 @@ def canonical_title_mentions_components(title: str, components: list[str]) -> bo
     return all(component.casefold() in normalized_title for component in components)
 
 
+_JIRA_KEY_PATTERN = r"RHEL-\d+"
+_JIRA_KEY_RE = re.compile(_JIRA_KEY_PATTERN, re.IGNORECASE)
+_JIRA_SUFFIX_KEYS = rf"{_JIRA_KEY_PATTERN}(?:\s*[,/&]\s*{_JIRA_KEY_PATTERN})*"
+_JIRA_SUFFIX_RE = re.compile(
+    rf"(?P<suffix>(?:\s+(?:\({_JIRA_SUFFIX_KEYS}\)|\[{_JIRA_SUFFIX_KEYS}\])|"
+    rf"\s+-\s+{_JIRA_SUFFIX_KEYS}|:\s+{_JIRA_SUFFIX_KEYS}))\s*$",
+    re.IGNORECASE,
+)
+
+
+def _extract_jira_suffix(line: str) -> str | None:
+    """Return a trailing Jira suffix, preserving its original formatting."""
+    match = _JIRA_SUFFIX_RE.search(line)
+    return match.group("suffix") if match else None
+
+
+def _rewrite_jira_suffix(suffix: str, jira_issues: list[str]) -> str:
+    """Replace suffix keys while retaining the suffix's delimiters and spacing."""
+    key_matches = list(_JIRA_KEY_RE.finditer(suffix))
+    if not key_matches:
+        return suffix
+    issues = list(dict.fromkeys(jira_issues))
+    separators = [suffix[left.end() : right.start()] for left, right in pairwise(key_matches)]
+    replacement = issues[0]
+    for index, issue in enumerate(issues[1:]):
+        separator = separators[min(index, len(separators) - 1)] if separators else ", "
+        replacement += separator + issue
+    return suffix[: key_matches[0].start()] + replacement + suffix[key_matches[-1].end() :]
+
+
 def ensure_canonical_changelog_title(
     local_clone: Path,
     package: str,
     title: str,
     expected_entry_count: int | None,
+    jira_issues: list[str] | None = None,
 ) -> None:
     """Replace exactly one new explicit changelog entry's descriptive line with ``title``.
 
@@ -1186,7 +1218,12 @@ def ensure_canonical_changelog_title(
             for index, line in enumerate(entry.content):
                 is_jira_reference = re.match(r"^\s*(?:[-*]\s*)?(?:Resolves|Related):", line, re.IGNORECASE)
                 if line.strip() and not is_jira_reference:
+                    jira_suffix = _extract_jira_suffix(line) or ""
                     entry.content[index] = f"- {escape_rpm_changelog_text(title)}"
+                    if jira_suffix:
+                        if jira_issues:
+                            jira_suffix = _rewrite_jira_suffix(jira_suffix, jira_issues)
+                        entry.content[index] += jira_suffix
                     while index + 1 < len(entry.content):
                         continuation = entry.content[index + 1]
                         if not continuation.startswith((" ", "\t")) or re.match(

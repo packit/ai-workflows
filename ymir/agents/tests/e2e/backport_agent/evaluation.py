@@ -12,13 +12,15 @@ Usage in tests::
 
 import json
 import os
+import re
 from dataclasses import dataclass
 
 from beeai_framework.backend import ChatModel, ChatModelParameters
 from beeai_framework.backend.message import UserMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ymir.agents.tests.e2e.backport_agent.artifact_capture import CapturedArtifacts
+from ymir.agents.utils import unsupported_model_params
 
 
 class VerdictSchema(BaseModel):
@@ -51,9 +53,17 @@ class LLMJudgeEvaluator:
             raise RuntimeError("LLM_JUDGE_MODEL or CHAT_MODEL must be set to use the LLM judge")
 
         settings = {}
-        if "opus-4-8" in model_name:
+        dropped_params = unsupported_model_params(model_name)
+        if dropped_params:
             settings["drop_params"] = True
-            settings["additional_drop_params"] = ["temperature"]
+            settings["additional_drop_params"] = list(dropped_params)
+
+        # Models without forced tool choice (Opus 5.5) cannot take
+        # response_format: litellm implements it for Anthropic models by
+        # forcing a hidden structured-output tool call, which those models
+        # reject with a 400. For them the schema is communicated through
+        # prompt instructions and the raw text is parsed by _parse_verdict.
+        self._use_response_format = "tool_choice" not in dropped_params
 
         self._model = ChatModel.from_name(
             model_name,
@@ -78,10 +88,18 @@ class LLMJudgeEvaluator:
             LLM response.
         """
         prompt = self.build_prompt(artifacts, context)
-        response = await self._model.run(
-            [UserMessage(prompt)],
-            response_format=VerdictSchema,
-        )
+        if self._use_response_format:
+            response = await self._model.run(
+                [UserMessage(prompt)],
+                response_format=VerdictSchema,
+            )
+        else:
+            prompt += (
+                "\n\n## Output format\n\n"
+                "Respond with ONLY a JSON object — no markdown fences, no text before or "
+                'after — with exactly two keys: "passed" (boolean) and "reasoning" (string).'
+            )
+            response = await self._model.run([UserMessage(prompt)])
         raw = response.get_text_content()
 
         passed, reasoning = self._parse_verdict(raw)
@@ -100,8 +118,23 @@ class LLMJudgeEvaluator:
     @staticmethod
     def _parse_verdict(text: str) -> tuple[bool, str]:
         """Parse the structured JSON verdict returned by the model."""
-        verdict = VerdictSchema.model_validate_json(text)
-        return verdict.passed, verdict.reasoning
+        try:
+            verdict = VerdictSchema.model_validate_json(text)
+            return verdict.passed, verdict.reasoning
+        except ValidationError:
+            pass
+        # Without schema enforcement the model sometimes wraps the JSON in
+        # markdown fences or adds prose around it, and that prose may itself
+        # contain braces (e.g. RPM macros), so try each candidate object.
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", text):
+            try:
+                obj, _ = decoder.raw_decode(text, match.start())
+                verdict = VerdictSchema.model_validate(obj)
+            except (json.JSONDecodeError, ValidationError):
+                continue
+            return verdict.passed, verdict.reasoning
+        raise ValueError(f"No valid verdict JSON found in judge response: {text!r}")
 
 
 class BackportEvaluator(LLMJudgeEvaluator):
@@ -190,8 +223,17 @@ Evaluate the backport on these criteria and explain your reasoning for each:
 2. **Spec file correctness**: Was a new Patch tag added correctly? Is it applied in
    the %prep section with the correct -p argument? Were existing patches left untouched?
 3. **No unrelated changes**: Does the diff introduce any changes unrelated to the
-   backport (e.g., changelog modifications, Release field changes, unrelated patches)?
+   backport? A Release field bump and a new %changelog entry are expected parts
+   of an RPM backport commit — deterministic workflow steps add them after the
+   agent finishes (the agent's report covers only its own edits), so neither
+   counts as an unrelated change. Unrelated changes are modifications to
+   existing patches, extra source changes not needed for the fix, or unrelated
+   spec changes (e.g. to BuildRequires/Requires).
 4. **Completeness**: Was the backport reported as successful? Was an SRPM generated?
+   (For a regular backport the SRPM is built before the deterministic Release
+   bump, so its filename may carry the pre-bump release value — that is
+   expected, not an error. For an inherited backport the Release is bumped
+   first, so the SRPM should match the bumped spec.)
 {similarity_criterion}
 
 Set `passed` to true only if the backport passes ALL criteria. Provide a brief

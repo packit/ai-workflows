@@ -53,6 +53,9 @@ CRITICAL CONSTRAINTS:
     * Loosening/removing existing BuildRequires version constraints
     * Any changes to %changelog, Release field, existing Patch tags, or patch ordering
 
+    The Release field bump and the changelog entry are added by automatic
+    workflow steps after the build passes — never add them yourself.
+
   IF rules do NOT explicitly allow it (or no rules exist):
     NEVER modify the spec file — the build worked before your patches; fix the patches instead.
     The build environment may differ from your local environment (e.g. unbuffer/expect

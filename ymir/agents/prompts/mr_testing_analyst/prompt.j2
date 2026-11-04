@@ -20,27 +20,33 @@ LINKED_JIRA_ISSUES (CVE id and Test Coverage already gathered for you):
 
 gating: {{ gating }}
 
-MR_COMMENTS will be appended below this prompt as a JSON list -- pass that list
-as-is to the `comments` argument of `parse_mr_test_results` / `parse_newa_mr_comment` /
-`parse_osci_results_comment`, whichever applies (see Step 1).
+PARSED_RESULTS will be appended below this prompt as JSON -- it is the output of
+whichever of `parse_osci_results_comment` / `parse_mr_test_results` /
+`parse_newa_mr_comment` applies to this run (see Step 1), already computed for you
+by Python from the MR's comments. Those three tools are **not available to you** --
+read PARSED_RESULTS directly instead of trying to call them.
 
 Do not create any local scratch directories or local files -- you only ever read
-from MR comments/CI traces and return formatted content.
+from PARSED_RESULTS/CI traces and return formatted content.
 
 Always use `format_mr_testing_comment` to format every comment -- never hand-compose
 markdown. `action` must be one of: `testing_farm_markdown`, `gating_results_markdown`,
-`cve_verification_markdown`, `jira_issue_coverage`, `jira_summary_comment`,
-`untested_issues_markdown`, `test_failures_markdown`. Use `fetch_testing_farm_results`
-to fetch `results.xml`/journal logs from an artifacts URL (from
-`results_by_arch`/`unfixed_results_by_arch` entries, or a gating test job's
+`newa_results_markdown`, `cve_verification_markdown`, `jira_issue_coverage`,
+`jira_summary_comment`, `untested_issues_markdown`, `test_failures_markdown`. Use
+`fetch_testing_farm_results` to fetch `results.xml`/journal logs from an artifacts
+URL (from `results_by_arch`/`unfixed_results_by_arch` entries, or a gating test job's
 `artifacts_url`) when you need per-testcase detail for CVE verification, failure
 analysis, or gating per-job pass/fail counts.
 
-## Step 1: Parse test results
+## Step 1: Read the parsed test results
 
-**If `gating` is true:** call `parse_osci_results_comment` with MR_COMMENTS. If
-`found` is false, stop here and return `analyzed: false` ("no OSCI bot results
-comment found on this MR" -- unusual, every MR should have one). Otherwise:
+**If `gating` is true:** PARSED_RESULTS is `parse_osci_results_comment`'s output
+(fields: `found`, `comment_id`, `pipeline_id`, `pipeline_url`, `all_passed`
+(authoritative, computed from job statuses), `banner_all_passed` (NOT authoritative
+-- OSCI bot's own banner, which can go stale), `jobs`, `test_jobs` (the subset of
+`jobs` that are actual gating test checks)). If `found` is false, stop here and
+return `analyzed: false` ("no OSCI bot results comment found on this MR" --
+unusual, every MR should have one). Otherwise:
 
 1. For every job in `test_jobs`, call `get_pipeline_job_trace` with `job_id`, then
    `extract_tf_request_from_job_trace` on its trace text. Keep `artifacts_url` for
@@ -56,24 +62,26 @@ comment found on this MR" -- unusual, every MR should have one). Otherwise:
    everywhere else in these steps (Step 2, 4, 6, 7) -- the formatting tool doesn't
    care whether the keys are architectures or job names, just that they're
    consistent. `architectures` in those tool calls becomes the list of job names.
-4. Use `parse_osci_results_comment`'s `all_passed` (computed from job statuses) as
-   authoritative. If it disagrees with `banner_all_passed`, add a **Note:** to the
-   Step 3 gating comment explaining the OSCI bot's own banner is stale and the
-   results above are authoritative instead.
+4. Use `all_passed` (computed from job statuses) as authoritative. If it disagrees
+   with `banner_all_passed`, add a **Note:** to the Step 3 gating comment explaining
+   the OSCI bot's own banner is stale and the results above are authoritative
+   instead.
 5. Skip straight to Step 2, then use Step 3's gating variant -- Step 7 (labeling)
    never applies to gating mode.
 
-**Otherwise (gating is false):** call `parse_mr_test_results` with MR_COMMENTS.
+**Otherwise (gating is false):** PARSED_RESULTS is the output of either
+`parse_mr_test_results` (anewa) or `parse_newa_mr_comment` (NEWA), whichever Python
+determined applies to this MR -- check which shape it is:
 
-- If it returns a non-empty `results_by_arch` (an anewa comment was found), proceed
-  with Steps 2-7 as written below (the "default" anewa path). This also covers the
-  case where anewa has only posted a "started" (not yet completed) comment --
-  `parse_mr_test_results` returns an empty `results_by_arch` for that too, so it's
-  handled identically to "no anewa comment found" below.
-- If `results_by_arch` is empty (no anewa comment, or anewa hasn't finished yet),
-  call `parse_newa_mr_comment` with the same MR_COMMENTS:
-  - If `found` is false too, stop here and return `analyzed: false` ("no anewa or
-    NEWA results found on this MR").
+- If it has a `results_by_arch` key (anewa's shape -- fields: `nvr`,
+  `results_by_arch`, `unfixed_results_by_arch`, `note_id`, `note_body`,
+  `report_portal_url`) and `results_by_arch` is non-empty, an anewa comment was
+  found -- proceed with Steps 2-7 as written below (the "default" anewa path).
+- If it has a `found` key instead (NEWA's shape -- fields: `found`, `comment_id`,
+  `completed`, `all_passed` (NOT authoritative -- NEWA's own self-reported leading
+  emoji), `report_portal_url`, `jenkins_url`):
+  - If `found` is false, stop here and return `analyzed: false` ("no anewa or NEWA
+    results found on this MR").
   - If `found` is true but `completed` is false, stop here and return
     `analyzed: false` ("NEWA testing has started but not finished yet").
   - If `completed` is true: **this agent cannot currently reconstruct a
@@ -81,13 +89,9 @@ comment found on this MR" -- unusual, every MR should have one). Otherwise:
     fetching the Report Portal launch the comment links to, and no Report Portal
     tool exists in this agent's toolset yet (see the `mr_testing` skill's Step 1c
     for the full procedure once one does). Do the best-effort reduced flow instead:
-    1. Add one `new` comment to `mr_comments` summarizing NEWA's own reported status
-       (`all_passed` from `parse_newa_mr_comment` -- note in the comment that this
-       reading is NEWA's own and has not been independently verified against the
-       actual Testing Farm request, unlike the anewa path), with the
-       `report_portal_url` and `jenkins_url` as links for a human to inspect
-       manually, and a note that this agent cannot yet verify individual CVE fixes
-       or flag untested issues from a NEWA-only run.
+    1. Call `format_mr_testing_comment` with `action: newa_results_markdown`,
+       passing `all_passed`, `report_portal_url`, and `jenkins_url` from
+       PARSED_RESULTS, and add the result to `mr_comments` with `kind: "new"`.
     2. Skip Steps 2, 4, and 5 entirely (no `results_by_arch` to check test coverage
        or CVE status against).
     3. For Step 6, skip it too (no per-testcase detail available without the
@@ -97,7 +101,7 @@ comment found on this MR" -- unusual, every MR should have one). Otherwise:
        (`action: jira_issue_coverage`, `test_found: false`,
        `reason: "Tested via NEWA; this agent cannot yet verify per-issue test coverage from a NEWA-only run -- see the Report Portal link on the merge request"`),
        `test_section` as NEWA's own one-line status (Jira-safe plain unicode emoji,
-       never GitLab shortcodes), and `report_portal_url` from `parse_newa_mr_comment`.
+       never GitLab shortcodes), and `report_portal_url` from PARSED_RESULTS.
     5. Return `analyzed: true` with a summary noting the reduced NEWA-only treatment
        and the Report Portal link for manual follow-up.
 
@@ -116,7 +120,7 @@ untested. Build an `untested_issues` list (dicts with `jira_key`, `cve_id`,
 
 **If `gating` is true,** use the brief gating variant instead of the rest of this
 step: call `format_mr_testing_comment` with `action: gating_results_markdown`,
-passing `pipeline_id`, `pipeline_url` (from `parse_osci_results_comment`),
+passing `pipeline_id`, `pipeline_url` (from PARSED_RESULTS),
 `all_passed` (the authoritative, job-status-derived one -- see Step 1), and
 `test_jobs` (dict of job name -> `{status, artifacts_url, result_summary}` built in
 Step 1). Add it to `mr_comments` with `kind: "new"` -- OSCI bot's own comment is
@@ -127,16 +131,15 @@ rest of this step and go to Step 4. Also build a Jira-safe version
 **Otherwise,** call `format_mr_testing_comment` with `action: testing_farm_markdown`,
 passing `all_passed`, `architectures`, `results_by_arch`, `plans`, `untested_issues`
 (from step 2), and `unfixed_architectures`/`unfixed_results_by_arch`/`unfixed_plans`
-if `parse_mr_test_results` returned a non-empty `unfixed_results_by_arch`.
+if PARSED_RESULTS has a non-empty `unfixed_results_by_arch`.
 
-- **If `parse_mr_test_results` returned a non-null `note_id`** (anewa already
-  posted a completed comment on this MR), fold the formatted result into that
-  comment in place instead of adding a new one: call `fold_mr_comment_body` with
-  `note_body` (from `parse_mr_test_results`) and the formatted markdown, then add
-  the result to `mr_comments` with `kind: "update"` and `note_id` set to
-  `parse_mr_test_results`'s `note_id`. Always use `fold_mr_comment_body` for this --
-  never hand-splice `note_body` and the formatted markdown yourself, since getting
-  the marker handling wrong breaks idempotency on a rerun.
+- **If PARSED_RESULTS' `note_id` is non-null** (anewa already posted a completed
+  comment on this MR), add the formatted markdown to `mr_comments` with
+  `kind: "update"` and `note_id` set to PARSED_RESULTS' `note_id` -- put just the
+  plain `testing_farm_markdown` output in `body`, **not** folded into anewa's
+  comment yourself; Python does that fold deterministically after you return,
+  using PARSED_RESULTS' own `note_body`, so a paraphrase here could never corrupt
+  or lose anewa's original comment.
 - **If `note_id` is null** (no anewa comment exists to fold into), add the
   formatted markdown to `mr_comments` with `kind: "new"` instead.
 
@@ -155,6 +158,13 @@ using the real component/plan/test path you detected -- never guess a
 are the job-keyed structures from Step 1, and `plan_name` is the gating test job
 name (e.g. `osci.tier0`) instead of a tmt plan. Add each to `mr_comments` with
 `kind: "new"`.
+
+When you need to fetch Testing Farm results for a CVE test that ran in a specific
+plan (e.g. via `fetch_testing_farm_results`), look up that plan's own URL first via
+`results_by_arch[arch]["plan_urls"][plan_name]` if present -- it points at the exact
+plan's own artifacts, unlike the architecture-level `artifacts_url` (which may
+belong to a different plan on the same row). Fall back to the architecture-level
+`artifacts_url` only if `plan_urls` has no entry for that plan.
 
 ## Step 5: Build untested-issue and test-failure comments, if any
 
@@ -180,7 +190,7 @@ For each linked issue:
   otherwise `test_found: false` with `reason` from step 2's `untested_issues` entry).
 - Build the full comment via `action: jira_summary_comment` with `jira_key`,
   `mr_url`, `test_section` (from step 3), `issue_coverage`, and
-  `report_portal_url` (from `parse_mr_test_results`, omit if null).
+  `report_portal_url` (from PARSED_RESULTS, omit if null).
 - Add it to `jira_comments` with the issue's key.
 
 ## Step 7: Set `analyzed`
@@ -198,34 +208,33 @@ is itself a resolvable discussion thread (unlike every other OSCI bot note on th
 MR). When the gating pipeline fails, this thread is left unresolved and blocks
 merging until a human (or this agent's decision, applied outside it) resolves it.
 
-1. Call `get_merge_request_discussions` and find the discussion whose `body`
-   contains `<!--RESULTS_COMMENT-->` and whose embedded pipeline ID matches Step
-   1's `pipeline_id` (there can be more than one OSCI results thread in the MR's
-   history if the pipeline was re-run; always use the one matching the pipeline
-   this run analyzed). If it's already `resolved: true`, leave `resolve_discussion_id`
-   null -- there's nothing to do.
-2. Otherwise, decide using Step 5's failure assessments:
-   - **Set `resolve_discussion_id` to this discussion's ID** only if every
-     failed/errored gating test job's assessment from Step 5 is exactly
-     `Infrastructure issue` or `Test bug` (a broken/flaky test, not a regression in
-     the change under review). This is the one case where this agent proposes
-     resolving a thread without a human reviewing first -- deliberately narrower
-     than Step 5's own philosophy (its own threads always require a human), because
-     this thread isn't one this agent opened: it's OSCI bot's, and OSCI bot itself
-     auto-resolves it the moment a later pipeline run is clean, so resolving it here
-     for the same underlying reason (the failure has nothing to do with the change
-     under review) is consistent with how the thread already behaves.
-   - **Leave `resolve_discussion_id` null** if any failure's assessment is
-     `Real failure` or `Flaky test` that couldn't be confidently attributed to
-     infrastructure, or if no confident assessment was reached. A human must
-     resolve it themselves after reviewing Step 5's posted analysis.
-   - If different jobs failed for different reasons, treat it as one all-or-nothing
-     decision for this one thread -- leave it null if *any* failure isn't clearly
-     infra/test-bug.
-3. Always state in your `summary` whether you're proposing to resolve the OSCI
-   results thread and why (or leaving it unresolved and why), so this decision
-   doesn't have to be re-derived later.
+You only decide the boolean `resolve_osci_discussion` here -- finding the actual
+discussion thread and resolving it is Python's job afterwards (it independently
+looks up the right thread for this pipeline run; it never trusts an ID from you),
+so do not try to call `get_merge_request_discussions` yourself.
+
+- **Set `resolve_osci_discussion: true`** only if every failed/errored gating test
+  job's assessment from Step 5 is exactly `Infrastructure issue` or `Test bug` (a
+  broken/flaky test, not a regression in the change under review). This is the one
+  case where this agent proposes resolving a thread without a human reviewing first
+  -- deliberately narrower than Step 5's own philosophy (its own threads always
+  require a human), because this thread isn't one this agent opened: it's OSCI
+  bot's, and OSCI bot itself auto-resolves it the moment a later pipeline run is
+  clean, so resolving it here for the same underlying reason (the failure has
+  nothing to do with the change under review) is consistent with how the thread
+  already behaves.
+- **Leave `resolve_osci_discussion: false`** (the default) if any failure's
+  assessment is `Real failure` or `Flaky test` that couldn't be confidently
+  attributed to infrastructure, if no confident assessment was reached, or if
+  nothing failed at all (OSCI bot resolves its own thread on a clean run, so there's
+  nothing for this agent to do). A human must resolve a genuinely open thread
+  themselves after reviewing Step 5's posted analysis.
+- If different jobs failed for different reasons, treat it as one all-or-nothing
+  decision -- set it `false` if *any* failure isn't clearly infra/test-bug.
+- Always state in your `summary` whether you're proposing to resolve the OSCI
+  results thread and why (or leaving it unresolved and why), so this decision
+  doesn't have to be re-derived later.
 
 Your final answer's schema already documents every field (`mr_comments`,
-`jira_comments`, `resolve_discussion_id`, `analyzed`, `summary`) -- populate them
+`jira_comments`, `resolve_osci_discussion`, `analyzed`, `summary`) -- populate them
 directly; nothing else needs to be called to submit your answer.

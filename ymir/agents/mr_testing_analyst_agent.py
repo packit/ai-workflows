@@ -32,6 +32,7 @@ from ymir.agents.utils import (
 )
 from ymir.common.cve import extract_cve_ids
 from ymir.common.logging_setup import configure_logging, get_trajectory_writeable
+from ymir.tools.privileged.mr_testing import fold_comment_body
 from ymir.tools.unprivileged.greenwave import FetchTestingFarmResultsTool
 
 logger = logging.getLogger(__file__)
@@ -64,16 +65,10 @@ _GATEWAY_TOOL_NAMES = [
     "get_authorized_comments_from_merge_request",
     "get_merge_request_details",
     "get_jira_details",
-    "parse_mr_test_results",
     "format_mr_testing_comment",
-    "fold_mr_comment_body",
-    # NEWA support
-    "parse_newa_mr_comment",
     # Gating mode (OSCI bot pipeline results, no anewa/NEWA run)
-    "parse_osci_results_comment",
     "get_pipeline_job_trace",
     "extract_tf_request_from_job_trace",
-    "get_merge_request_discussions",
 ]
 
 
@@ -95,7 +90,7 @@ class InputSchema(BaseModel):
             "Gating mode: source results from the MR's latest OSCI bot pipeline comment (the "
             "required gating pipeline every MR runs) instead of an anewa/NEWA comment. Produces a "
             "briefer results comment, and this agent should propose resolving OSCI bot's own "
-            "results discussion thread (via resolve_discussion_id below) only when a failure is "
+            "results discussion thread (via resolve_osci_discussion below) only when a failure is "
             "judged to be bad infrastructure or a broken test, not a real regression."
         ),
     )
@@ -105,17 +100,17 @@ class MrCommentToPost(BaseModel):
     kind: Literal["new", "update", "blocking"] = Field(
         description=(
             "'new': post a plain new comment. "
-            "'update': replace an existing comment in place (note_id required; body must be the "
-            "output of fold_mr_comment_body, not hand-composed) -- used only to fold the Testing "
-            "Farm Results summary into anewa's own completed comment. "
+            "'update': replace an existing comment in place (note_id required) -- used only to "
+            "fold the Testing Farm Results summary into anewa's own completed comment. "
             "'blocking': this needs explicit human sign-off (Untested Issues / Test Failure "
             "Analysis) -- posted as an unresolved discussion thread, or a plain comment in poc "
             "mode; which one is Python's decision, not yours."
         )
     )
     body: str = Field(
-        description="Fully formatted comment markdown, built via format_mr_testing_comment "
-        "(or fold_mr_comment_body for kind='update') -- never hand-composed"
+        description="Fully formatted comment markdown, built via format_mr_testing_comment -- "
+        "never hand-composed. For kind='update', just the formatted testing_farm_markdown/"
+        "gating_results_markdown output -- Python folds it into anewa's note"
     )
     note_id: int | None = Field(
         default=None, description="Required when kind == 'update': the note ID to update in place"
@@ -139,13 +134,10 @@ class MrTestingAnalystResult(BaseModel):
     jira_comments: list[JiraCommentToPost] = Field(
         default_factory=list, description="One consolidated summary comment per linked Jira issue"
     )
-    resolve_discussion_id: str | None = Field(
-        default=None,
-        description="Gating mode only: the discussion_id of OSCI bot's own results thread to "
-        "resolve, if every failed/errored gating test job's assessment is exactly 'Infrastructure "
-        "issue' or 'Test bug'. Null otherwise -- including when gating is false, when nothing "
-        "failed (OSCI bot resolves its own thread on a clean run), or when any failure needs a "
-        "human to review first.",
+    resolve_osci_discussion: bool = Field(
+        default=False,
+        description="Gating mode only: true if every failed/errored gating job's assessment is "
+        "exactly 'Infrastructure issue' or 'Test bug' per Step 5/8 of the prompt.",
     )
 
 
@@ -194,6 +186,11 @@ class MrTestingAnalystWorkflowState(BaseModel):
     linked_issues: list[JiraIssueContext] = Field(default_factory=list)
     mr_comments: list[dict[str, Any]] = Field(default_factory=list)
 
+    parsed_results: dict[str, Any] = Field(default_factory=dict)
+    note_id: Any = None
+    note_body: str | None = None
+    osci_pipeline_id: str | None = None
+
     result: MrTestingAnalystResult | None = Field(default=None)
 
 
@@ -210,6 +207,97 @@ def _parse_mr_url(mr_url: str) -> tuple[str, int]:
     if not match:
         raise ValueError(f"Could not parse merge request URL: {mr_url}")
     return match.group(1), int(match.group(2))
+
+
+def _comment_text(comment: dict[str, Any]) -> str:
+    """Return a comment's text body, whatever the gateway tool called it --
+    mirrors mr_testing.py's own private helper of the same name, duplicated
+    here (rather than imported) since it's a one-line local text extraction,
+    not something worth coupling this module to that one's internals for."""
+    return comment.get("body") or comment.get("message") or ""
+
+
+def _comments_contain_expected_marker(comments: list[dict[str, Any]], gating: bool) -> bool:
+    """Whether `comments` actually contains the results-bot marker this mode
+    expects to find. Used to detect get_authorized_comments_from_merge_request
+    silently filtering out the results bot's own note (it only returns notes
+    from Developer-role-or-higher MR members) on an otherwise *successful*
+    call -- unlike an outright exception, that case wouldn't otherwise trigger
+    the fetch_gitlab_mr_notes fallback at all. See fetch_test_results."""
+    if gating:
+        return any("<!--RESULTS_COMMENT-->" in _comment_text(c) for c in comments)
+    return any("**ANEWA:**" in _comment_text(c) or re.search(r"\bNEWA\b", _comment_text(c)) for c in comments)
+
+
+async def _fetch_mr_notes_fallback(mr_url: str, gateway_tools: list) -> list[dict[str, Any]]:
+    """Fetch every note on the MR via fetch_gitlab_mr_notes -- unlike
+    get_authorized_comments_from_merge_request, this doesn't filter by
+    author role, so it still sees a results bot that isn't a Developer-role-
+    or-higher MR member. Unlike every other MR-related gateway tool used in
+    this agent, fetch_gitlab_mr_notes takes project/mr_iid rather than
+    merge_request_url, and returns its result as a JSON string body
+    (StringToolOutput), not structured JSON -- both quirks are handled here."""
+    project, mr_iid = _parse_mr_url(mr_url)
+    comments_result = await run_tool(
+        "fetch_gitlab_mr_notes",
+        available_tools=gateway_tools,
+        project=project,
+        mr_iid=mr_iid,
+    )
+    if isinstance(comments_result, str):
+        comments_result = json.loads(comments_result)
+
+    if isinstance(comments_result, dict):
+        return comments_result.get("comments", [])
+    if isinstance(comments_result, list):
+        return comments_result
+    return []
+
+
+async def _find_osci_discussion_to_resolve(
+    mr_url: str, gateway_tools: list, osci_pipeline_id: str | None
+) -> str | None:
+    """Find OSCI bot's own ``<!--RESULTS_COMMENT-->`` discussion thread to
+    resolve -- computed here in Python, never supplied directly by the model
+    (see MrTestingAnalystResult.resolve_osci_discussion), so a compromised or
+    confused model response can't make this agent resolve an arbitrary
+    discussion thread.
+
+    A match must have the results-comment marker, be resolvable, not already
+    resolved, and (if ``osci_pipeline_id`` is known) embed that pipeline ID in
+    its body -- there can be more than one OSCI results thread in the MR's
+    history if the pipeline was re-run. If more than one still matches, the
+    most recently created one is used. Returns None (after logging a warning)
+    if nothing matches -- this never resolves blind.
+    """
+    discussions = await run_tool(
+        "get_merge_request_discussions",
+        available_tools=gateway_tools,
+        merge_request_url=mr_url,
+    )
+
+    candidates = []
+    for discussion in discussions:
+        body = discussion.get("body") or ""
+        if "<!--RESULTS_COMMENT-->" not in body:
+            continue
+        if not discussion.get("resolvable") or discussion.get("resolved"):
+            continue
+        if osci_pipeline_id and osci_pipeline_id not in body:
+            continue
+        candidates.append(discussion)
+
+    if not candidates:
+        logger.warning(
+            "resolve_osci_discussion was set for %s but no matching unresolved OSCI results "
+            "discussion was found (osci_pipeline_id=%s) -- skipping, never resolving blind.",
+            mr_url,
+            osci_pipeline_id,
+        )
+        return None
+
+    candidates.sort(key=lambda d: d.get("created_at") or "")
+    return candidates[-1].get("discussion_id")
 
 
 async def _mark_mr_analyzed(mr_url: str, gateway_tools: list, dry_run: bool) -> None:
@@ -278,10 +366,13 @@ async def run_mr_testing_analyst(
             return "fetch_test_results"
 
         async def fetch_test_results(state: MrTestingAnalystWorkflowState):
-            """Fetch raw MR comments -- parsing itself is left to the LLM step via
-            the parse_mr_test_results tool, mirroring preliminary_testing_agent.py's
-            pattern of handing its own local tools to the agent rather than calling
-            them directly from a workflow step."""
+            """Fetch raw MR comments. get_authorized_comments_from_merge_request
+            only returns notes from Developer-role-or-higher MR members -- if the
+            results bot isn't one, its note is silently absent even from a
+            *successful* call, not just a failed one. So a successful response is
+            also checked for the marker this mode expects before being trusted,
+            falling back to fetch_gitlab_mr_notes (which isn't role-filtered) the
+            same way an outright exception already does."""
             try:
                 comments_result = await run_tool(
                     "get_authorized_comments_from_merge_request",
@@ -295,21 +386,8 @@ async def run_mr_testing_analyst(
                     state.mr_url,
                     e,
                 )
-                # Unlike every other MR-related gateway tool used in this
-                # agent, fetch_gitlab_mr_notes takes project/mr_iid rather
-                # than merge_request_url, and returns its result as a JSON
-                # string body (StringToolOutput), not structured JSON --
-                # both need handling here that the dict/list branches below
-                # don't otherwise apply.
-                project, mr_iid = _parse_mr_url(state.mr_url)
-                comments_result = await run_tool(
-                    "fetch_gitlab_mr_notes",
-                    available_tools=gateway_tools,
-                    project=project,
-                    mr_iid=mr_iid,
-                )
-                if isinstance(comments_result, str):
-                    comments_result = json.loads(comments_result)
+                state.mr_comments = await _fetch_mr_notes_fallback(state.mr_url, gateway_tools)
+                return "parse_mr_results"
 
             if isinstance(comments_result, dict):
                 comments = comments_result.get("comments", [])
@@ -317,7 +395,60 @@ async def run_mr_testing_analyst(
                 comments = comments_result
             else:
                 comments = []
+
+            if not _comments_contain_expected_marker(comments, state.gating):
+                logger.warning(
+                    "get_authorized_comments_from_merge_request returned no results-bot marker "
+                    "for %s in %s mode -- falling back to fetch_gitlab_mr_notes in case the bot's "
+                    "note was filtered out by author role.",
+                    state.mr_url,
+                    "gating" if state.gating else "anewa/NEWA",
+                )
+                fallback_comments = await _fetch_mr_notes_fallback(state.mr_url, gateway_tools)
+                if _comments_contain_expected_marker(fallback_comments, state.gating):
+                    comments = fallback_comments
+                # Else keep the original (possibly genuinely empty) result --
+                # no results posted yet is a legitimate state, not an error.
+
             state.mr_comments = comments
+
+            return "parse_mr_results"
+
+        async def parse_mr_results(state: MrTestingAnalystWorkflowState):
+            """Deterministically parse the raw MR comments fetched above, in
+            Python, rather than handing the model the raw MR_COMMENTS JSON to
+            parse itself via tool calls -- a paraphrase/truncation by the model
+            while copying anewa's note_body for the later fold step
+            (act_on_result) would otherwise corrupt or permanently lose anewa's
+            original comment."""
+            if state.gating:
+                parsed = await run_tool(
+                    "parse_osci_results_comment",
+                    available_tools=gateway_tools,
+                    comments=state.mr_comments,
+                )
+                state.parsed_results = parsed
+                state.osci_pipeline_id = parsed.get("pipeline_id")
+                return "gather_jira_context"
+
+            parsed = await run_tool(
+                "parse_mr_test_results",
+                available_tools=gateway_tools,
+                comments=state.mr_comments,
+            )
+            if parsed.get("note_id") is not None or parsed.get("results_by_arch"):
+                state.parsed_results = parsed
+                state.note_id = parsed.get("note_id")
+                state.note_body = parsed.get("note_body")
+            else:
+                # No anewa comment (or anewa hasn't finished yet) -- fall back
+                # to NEWA's own, much sparser comment. NEWA's comment is never
+                # folded into, so note_id/note_body stay unset.
+                state.parsed_results = await run_tool(
+                    "parse_newa_mr_comment",
+                    available_tools=gateway_tools,
+                    comments=state.mr_comments,
+                )
 
             return "gather_jira_context"
 
@@ -389,8 +520,9 @@ async def run_mr_testing_analyst(
 
             prompt = render_prompt(input_data)
             prompt += (
-                "\n\nMR_COMMENTS (JSON, pass as-is to parse_mr_test_results): "
-                f"{json.dumps(state.mr_comments)}"
+                "\n\nPARSED_RESULTS (JSON, already parsed by Python -- do not call "
+                "parse_mr_test_results/parse_newa_mr_comment/parse_osci_results_comment yourself, "
+                f"they are no longer available to you): {json.dumps(state.parsed_results)}"
             )
 
             response = await agent.run(
@@ -422,12 +554,16 @@ async def run_mr_testing_analyst(
                     len(result.mr_comments),
                     0 if state.no_jira_comments else len(result.jira_comments),
                     state.mr_url,
-                    f", and resolve discussion {result.resolve_discussion_id}"
-                    if result.resolve_discussion_id
+                    ", and consider resolving the OSCI results discussion"
+                    if state.gating and result.resolve_osci_discussion
                     else "",
                 )
                 return Workflow.END
 
+            # Posting mr_comments is left unguarded -- if it fails partway
+            # through, let the exception propagate and skip labeling (below),
+            # so the whole run can be safely retried without risking
+            # duplicate CVE/blocking comments from a partial success.
             for comment in result.mr_comments:
                 if comment.kind == "update":
                     if comment.note_id is None:
@@ -442,12 +578,22 @@ async def run_mr_testing_analyst(
                             comment=comment.body,
                         )
                     else:
+                        # The model never folds this itself (fold_mr_comment_body
+                        # isn't in its toolset) -- it just supplies the plain
+                        # formatted markdown, and Python folds it into anewa's
+                        # own note_body here, so a model paraphrase/truncation
+                        # can never corrupt or lose anewa's original comment.
+                        body = (
+                            fold_comment_body(state.note_body, comment.body)
+                            if state.note_body
+                            else comment.body
+                        )
                         await run_tool(
                             "update_merge_request_comment",
                             available_tools=gateway_tools,
                             merge_request_url=state.mr_url,
                             note_id=comment.note_id,
-                            comment=comment.body,
+                            comment=body,
                         )
                 elif comment.kind == "blocking":
                     tool_name = (
@@ -467,32 +613,55 @@ async def run_mr_testing_analyst(
                         comment=comment.body,
                     )
 
-            if not state.no_jira_comments:
-                for jira_comment in result.jira_comments:
-                    await run_tool(
-                        "add_jira_comment",
-                        available_tools=gateway_tools,
-                        issue_key=jira_comment.jira_key,
-                        comment=jira_comment.body,
-                        private=True,
-                    )
-
-            if result.resolve_discussion_id:
-                await run_tool(
-                    "resolve_merge_request_discussion",
-                    available_tools=gateway_tools,
-                    merge_request_url=state.mr_url,
-                    discussion_id=result.resolve_discussion_id,
-                )
-
+            # Labeling happens right after mr_comments succeeds, and no longer
+            # depends on the Jira-comments loop or discussion resolution below
+            # -- a failure in either of those must never block the MR from
+            # being marked analyzed once its own comments are up.
             if result.analyzed and not state.gating:
                 await _mark_mr_analyzed(state.mr_url, gateway_tools, state.dry_run)
+
+            if not state.no_jira_comments:
+                try:
+                    for jira_comment in result.jira_comments:
+                        await run_tool(
+                            "add_jira_comment",
+                            available_tools=gateway_tools,
+                            issue_key=jira_comment.jira_key,
+                            comment=jira_comment.body,
+                            private=True,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to post one or more Jira comments for %s, continuing: %s",
+                        state.mr_url,
+                        e,
+                    )
+
+            if state.gating and result.resolve_osci_discussion:
+                try:
+                    discussion_id = await _find_osci_discussion_to_resolve(
+                        state.mr_url, gateway_tools, state.osci_pipeline_id
+                    )
+                    if discussion_id is not None:
+                        await run_tool(
+                            "resolve_merge_request_discussion",
+                            available_tools=gateway_tools,
+                            merge_request_url=state.mr_url,
+                            discussion_id=discussion_id,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to resolve OSCI results discussion for %s, continuing: %s",
+                        state.mr_url,
+                        e,
+                    )
 
             logger.info("MR testing analyst workflow completed for %s", state.mr_url)
             return Workflow.END
 
         workflow.add_step("fetch_and_validate_mr", fetch_and_validate_mr)
         workflow.add_step("fetch_test_results", fetch_test_results)
+        workflow.add_step("parse_mr_results", parse_mr_results)
         workflow.add_step("gather_jira_context", gather_jira_context)
         workflow.add_step("run_analysis", run_analysis)
         workflow.add_step("act_on_result", act_on_result)

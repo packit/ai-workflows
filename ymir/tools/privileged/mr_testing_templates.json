@@ -11,5 +11,6 @@
   "jira_issue_coverage_not_found": "⚠️ **No test was found covering this issue.** {reason}",
   "jira_report_portal_section": "\n**Report Portal:** [{report_portal_url}]({report_portal_url})\n",
   "jira_summary_comment": "## Testing Results\n\n{test_section}\n\n{issue_coverage}\n{report_portal_section}\nFor full regression testing results and detailed test failure analysis, see the [merge request]({mr_url}).",
-  "gating_results_markdown": "## Gating Pipeline Results\n\n{pipeline_line}\n\n### Summary\n{summary}\n\n{table}\n"
+  "gating_results_markdown": "## Gating Pipeline Results\n\n{pipeline_line}\n\n### Summary\n{summary}\n\n{table}\n",
+  "newa_results_markdown": "## Testing Results (NEWA)\n\n{status_line}\n\n:warning: **This is NEWA's own self-reported status and has not been independently re-verified against the underlying Testing Farm request**, unlike the anewa-based flow in this agent.\n\n{links_section}\nThis agent cannot yet verify individual CVE fixes or flag untested issues from a NEWA-only run -- please check the links above manually.\n"
 }

@@ -27,6 +27,7 @@ SKILLS = [
     "preliminary-testing",
     "issue-verification",
     "errata-workflow",
+    "mr-testing-analyst",
 ]
 
 VENV_PATH = Path.home() / ".local" / "share" / "ymir-venv"

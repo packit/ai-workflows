@@ -77,6 +77,74 @@ async def test_parse_older_shared_artifact_link_format():
 
 
 @pytest.mark.asyncio
+async def test_parse_modern_per_plan_keeps_each_plans_own_url():
+    """Each plan's own Testing Farm URL must be retrievable individually via
+    plan_urls, not just the architecture-level artifacts_url fallback (which
+    only ever reflects the first plan's URL for backward compatibility)."""
+    body = (
+        "**ANEWA:** Testing for `perl-IO-Compress` completed.\n"
+        "**Build:** `perl-IO-Compress-2.102-4.el9_8.1`\n\n"
+        "| Architecture | /plans/general | /plans/upstream-tests |\n"
+        "|---|---|---|\n"
+        "| x86_64 | [✅ pass](https://artifacts.osci.redhat.com/testing-farm/aaa) | "
+        "[✅ pass](https://artifacts.osci.redhat.com/testing-farm/bbb) |\n"
+    )
+    comments = [{"id": 1, "created_at": "2026-01-01T00:00:00Z", "body": body}]
+
+    out = await ParseMrTestResultsTool().run(input={"comments": comments})
+    by_arch = out.result.results_by_arch
+
+    assert by_arch["x86_64"]["plan_urls"]["/plans/general"] == (
+        "https://artifacts.osci.redhat.com/testing-farm/aaa"
+    )
+    assert by_arch["x86_64"]["plan_urls"]["/plans/upstream-tests"] == (
+        "https://artifacts.osci.redhat.com/testing-farm/bbb"
+    )
+    # Architecture-level fallback still reflects only the first plan's URL,
+    # for backward compatibility.
+    assert by_arch["x86_64"]["artifacts_url"] == "https://artifacts.osci.redhat.com/testing-farm/aaa"
+
+
+@pytest.mark.asyncio
+async def test_parse_modern_per_plan_all_passing_derives_overall_status():
+    """Modern per-plan-only tables (no dedicated Result column) must still
+    get an overall_status derived from the per-plan statuses, instead of
+    always falling back to the formatter's generic unknown placeholder."""
+    body = (
+        "**ANEWA:** Testing for `foo-1.0-1.el9` completed.\n"
+        "**Build:** `foo-1.0-1.el9`\n\n"
+        "| Architecture | /plans/general | /plans/upstream-tests |\n"
+        "|---|---|---|\n"
+        "| x86_64 | ✅ pass | ✅ pass |\n"
+    )
+    comments = [{"id": 1, "created_at": "2026-01-01T00:00:00Z", "body": body}]
+
+    out = await ParseMrTestResultsTool().run(input={"comments": comments})
+    by_arch = out.result.results_by_arch
+
+    assert by_arch["x86_64"]["overall_status"] == "✅ pass"
+
+
+@pytest.mark.asyncio
+async def test_parse_modern_per_plan_mixed_derives_failing_plan_status():
+    """A mixed row (one plan failing) must surface that plan's own status
+    string as the overall one, not a generic unknown/pass placeholder."""
+    body = (
+        "**ANEWA:** Testing for `foo-1.0-1.el9` completed.\n"
+        "**Build:** `foo-1.0-1.el9`\n\n"
+        "| Architecture | /plans/general | /plans/upstream-tests |\n"
+        "|---|---|---|\n"
+        "| x86_64 | ✅ pass | ❌ fail (1 fail, 2 pass) |\n"
+    )
+    comments = [{"id": 1, "created_at": "2026-01-01T00:00:00Z", "body": body}]
+
+    out = await ParseMrTestResultsTool().run(input={"comments": comments})
+    by_arch = out.result.results_by_arch
+
+    assert by_arch["x86_64"]["overall_status"] == "❌ fail (1 fail, 2 pass)"
+
+
+@pytest.mark.asyncio
 async def test_parse_no_anewa_comment_found():
     comments = [
         {"id": 1, "author": "someone", "created_at": "2026-01-01T00:00:00Z", "body": "unrelated comment"},
@@ -444,6 +512,41 @@ async def test_format_gating_results_markdown():
     assert "`osci.tier0`" in comment
     assert "`osci.rpminspect`" in comment
     assert ":x: (1 fail)" in comment
+
+
+@pytest.mark.asyncio
+async def test_format_newa_results_markdown_all_passed_with_links():
+    out = await FormatMrTestingCommentTool().run(
+        input={
+            "action": "newa_results_markdown",
+            "all_passed": True,
+            "report_portal_url": "https://reportportal.example.com/run/123",
+            "jenkins_url": "https://jenkins.example.com/job/x/5/console",
+        }
+    )
+    comment = out.result
+
+    assert "## Testing Results (NEWA)" in comment
+    assert "NEWA reports all tests passed" in comment
+    assert "[Report Portal](https://reportportal.example.com/run/123)" in comment
+    assert "[Jenkins build](https://jenkins.example.com/job/x/5/console)" in comment
+    assert "has not been independently re-verified" in comment
+
+
+@pytest.mark.asyncio
+async def test_format_newa_results_markdown_failed_without_links():
+    out = await FormatMrTestingCommentTool().run(
+        input={
+            "action": "newa_results_markdown",
+            "all_passed": False,
+            "report_portal_url": None,
+            "jenkins_url": None,
+        }
+    )
+    comment = out.result
+
+    assert "NEWA reports one or more tests failed or errored" in comment
+    assert "—" in comment
 
 
 # ---------------------------------------------------------------------------

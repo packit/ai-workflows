@@ -87,14 +87,33 @@ def _split_table_row(line: str) -> list[str]:
 _TF_REQUEST_ID_RE = re.compile(r"testing-farm/([^/\s)]+)")
 
 
+def _derive_overall_status(plans: dict[str, str]) -> str | None:
+    """Derive an architecture row's overall_status from its per-plan statuses,
+    for the modern per-plan-only table format (no dedicated "Result" column).
+    Returns None if there are no plans to derive anything from.
+
+    If every plan passed, the row as a whole is a clean pass. Otherwise,
+    surface the first non-passing plan's own status string as the overall
+    one, so a failing/erroring plan's detail isn't hidden behind a generic
+    "unknown" -- there's no single authoritative "overall" reading in this
+    format beyond "did everything pass or not".
+    """
+    if not plans:
+        return None
+    if all(status.startswith("✅") for status in plans.values()):
+        return "✅ pass"
+    return next(status for status in plans.values() if not status.startswith("✅"))
+
+
 def _parse_markdown_table(body: str) -> dict[str, dict[str, Any]]:
     """Parse the first markdown table found in `body` into the
     architecture-keyed dict shape format_mr_testing_comment's
     testing_farm_markdown/cve_verification_markdown actions require directly
-    (``{arch: {"overall_status": ..., "plans": {plan: status}, "artifacts_url": ...,
-    "request_id": ...}}``) -- not a flat list of per-row dicts with
-    `plan_<name>`-prefixed keys, which doesn't match what those actions
-    accept and previously had to be reshaped by hand before every call.
+    (``{arch: {"overall_status": ..., "plans": {plan: status}, "plan_urls":
+    {plan: url}, "artifacts_url": ..., "request_id": ...}}``) -- not a flat
+    list of per-row dicts with `plan_<name>`-prefixed keys, which doesn't
+    match what those actions accept and previously had to be reshaped by hand
+    before every call.
     """
     results_by_arch: dict[str, dict[str, Any]] = {}
     lines = body.split("\n")
@@ -162,6 +181,7 @@ def _parse_markdown_table(body: str) -> dict[str, dict[str, Any]]:
                 link_match = re.match(r"\[(.*)\]\(([^)]+)\)$", cell)
                 if link_match:
                     arch_data["plans"][plan_name] = link_match.group(1)
+                    arch_data.setdefault("plan_urls", {})[plan_name] = link_match.group(2)
                     if first_plan_url is None:
                         first_plan_url = link_match.group(2)
                 else:
@@ -174,6 +194,11 @@ def _parse_markdown_table(body: str) -> dict[str, dict[str, Any]]:
                 id_match = _TF_REQUEST_ID_RE.search(arch_data["artifacts_url"])
                 if id_match:
                     arch_data["request_id"] = id_match.group(1)
+
+            if "overall_status" not in arch_data and arch_data["plans"]:
+                derived = _derive_overall_status(arch_data["plans"])
+                if derived is not None:
+                    arch_data["overall_status"] = derived
 
             results_by_arch[arch] = arch_data
 
@@ -318,7 +343,11 @@ class ParsedMrTestResults(BaseModel):
     results_by_arch: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
         description="Fixed-build results, keyed by architecture -- directly usable as "
-        "format_mr_testing_comment's results_by_arch argument, no reshaping needed",
+        "format_mr_testing_comment's results_by_arch argument, no reshaping needed. Each "
+        "architecture's dict may include overall_status, plans (plan name -> status), "
+        "plan_urls (plan name -> that plan's own Testing Farm artifacts URL, when known), "
+        "artifacts_url (architecture-level fallback, from the first plan with a known URL "
+        "or an older shared-Artifacts-column comment), and request_id",
     )
     unfixed_results_by_arch: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
@@ -1114,6 +1143,40 @@ def _format_gating_results_markdown(
     )
 
 
+def _format_newa_results_markdown(
+    all_passed: bool,
+    report_portal_url: str | None,
+    jenkins_url: str | None,
+    target: str = "gitlab",
+) -> str:
+    """Format a best-effort results comment for a NEWA-only run (no anewa
+    comment, so no per-architecture/per-plan table to report against) --
+    just NEWA's own self-reported overall status plus whatever links it
+    posted, with a clear caveat that none of this has been independently
+    re-verified against the underlying Testing Farm request, unlike the
+    anewa-derived comment.
+    """
+    check, warn = _render_emoji("✅", target), _render_emoji("⚠️", target)
+
+    status_line = (
+        f"{check} **NEWA reports all tests passed**"
+        if all_passed
+        else f"{warn} **NEWA reports one or more tests failed or errored**"
+    )
+
+    link_lines = []
+    if report_portal_url:
+        link_lines.append(f"- [Report Portal]({report_portal_url})")
+    if jenkins_url:
+        link_lines.append(f"- [Jenkins build]({jenkins_url})")
+    links_section = "\n".join(link_lines) if link_lines else "- —"
+
+    return _TEMPLATES["newa_results_markdown"].format(
+        status_line=status_line,
+        links_section=links_section,
+    )
+
+
 def _cve_status_is_pass(status: str) -> bool:
     """A CVE status counts as passed only if it carries no failure/error
     indicator -- a naive substring check on "pass" false-matches status text
@@ -1416,6 +1479,7 @@ def _format_jira_summary_comment(
 _FORMAT_ACTIONS = (
     "testing_farm_markdown",
     "gating_results_markdown",
+    "newa_results_markdown",
     "cve_verification_markdown",
     "jira_issue_coverage",
     "jira_summary_comment",
@@ -1443,6 +1507,9 @@ class FormatMrTestingCommentInput(BaseModel):
     pipeline_id: str | None = None
     pipeline_url: str | None = None
     test_jobs: dict[str, dict[str, Any]] | None = None
+
+    # newa_results_markdown (also uses all_passed, report_portal_url above)
+    jenkins_url: str | None = None
 
     # cve_verification_markdown
     cve_id: str | None = None
@@ -1474,6 +1541,7 @@ class FormatMrTestingCommentTool(Tool[FormatMrTestingCommentInput, ToolRunOption
 
     Dispatches on ``action``, mirroring the ``mr_testing`` skill's
     ``format_comments.py`` CLI. Supported actions: ``testing_farm_markdown``,
+    ``gating_results_markdown``, ``newa_results_markdown``,
     ``cve_verification_markdown``, ``jira_issue_coverage``,
     ``jira_summary_comment``, ``untested_issues_markdown``,
     ``test_failures_markdown``.
@@ -1529,6 +1597,15 @@ class FormatMrTestingCommentTool(Tool[FormatMrTestingCommentInput, ToolRunOption
                 pipeline_url=input.pipeline_url,
                 all_passed=input.all_passed,  # type: ignore[arg-type]
                 test_jobs=input.test_jobs,  # type: ignore[arg-type]
+                target=input.target,
+            )
+
+        elif input.action == "newa_results_markdown":
+            self._require(input, "all_passed")
+            result = _format_newa_results_markdown(
+                all_passed=input.all_passed,  # type: ignore[arg-type]
+                report_portal_url=input.report_portal_url,
+                jenkins_url=input.jenkins_url,
                 target=input.target,
             )
 

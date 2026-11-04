@@ -13,6 +13,34 @@ from ymir.agents.mr_testing_analyst_agent import (
     _extract_linked_issues,
     run_mr_testing_analyst,
 )
+from ymir.tools.privileged.mr_testing import fold_comment_body
+
+_EMPTY_PARSE_MR_TEST_RESULTS = {
+    "nvr": None,
+    "results_by_arch": {},
+    "unfixed_results_by_arch": {},
+    "note_id": None,
+    "note_body": None,
+    "report_portal_url": None,
+}
+_NOT_FOUND_PARSE_NEWA = {
+    "found": False,
+    "comment_id": None,
+    "completed": False,
+    "all_passed": None,
+    "report_portal_url": None,
+    "jenkins_url": None,
+}
+_DEFAULT_PARSE_OSCI = {
+    "found": True,
+    "comment_id": None,
+    "pipeline_id": "123",
+    "pipeline_url": "https://gitlab.com/x/y/-/pipelines/123",
+    "all_passed": True,
+    "banner_all_passed": True,
+    "jobs": {},
+    "test_jobs": {},
+}
 
 
 @pytest.mark.parametrize(
@@ -122,6 +150,12 @@ async def test_jira_fetch_failure_aborts_without_posting_or_labeling(monkeypatch
             return {"description": "Resolves: RHEL-111"}
         if name == "get_authorized_comments_from_merge_request":
             return {"comments": []}
+        if name == "fetch_gitlab_mr_notes":
+            return "[]"
+        if name == "parse_mr_test_results":
+            return dict(_EMPTY_PARSE_MR_TEST_RESULTS)
+        if name == "parse_newa_mr_comment":
+            return dict(_NOT_FOUND_PARSE_NEWA)
         if name == "get_jira_details":
             raise RuntimeError("Jira is down")
         raise AssertionError(f"Unexpected tool call: {name}")
@@ -143,7 +177,10 @@ async def test_linked_issues_gather_jira_context_and_prompt_has_no_posting_knobs
     """Linked issues are resolved to CVE id / Test Coverage. dry_run/poc/
     no_jira_comments must NOT appear in the agent's prompt -- those are
     posting-time concerns handled entirely by act_on_result, never something
-    the agent's own analysis needs to reason about."""
+    the agent's own analysis needs to reason about. The raw MR comments are
+    parsed deterministically in Python (parse_mr_results) and only the
+    already-parsed PARSED_RESULTS JSON is appended to the prompt -- never the
+    raw comments."""
     jira_fields = {
         "RHEL-111": {
             "summary": "CVE-2024-12345 some overflow",
@@ -157,6 +194,15 @@ async def test_linked_issues_gather_jira_context_and_prompt_has_no_posting_knobs
         },
     }
 
+    parsed_results = {
+        "nvr": "foo-1.0",
+        "results_by_arch": {"x86_64": {"overall_status": "✅ passed"}},
+        "unfixed_results_by_arch": {},
+        "note_id": 7,
+        "note_body": "**ANEWA:** testing completed.",
+        "report_portal_url": None,
+    }
+
     async def _mock_run_tool(name, available_tools=None, **kwargs):
         if name == "get_merge_request_details":
             return {"description": "Resolves: RHEL-111\nResolves: RHEL-222"}
@@ -164,6 +210,11 @@ async def test_linked_issues_gather_jira_context_and_prompt_has_no_posting_knobs
             return {
                 "comments": [{"body": "**ANEWA:** testing completed.", "created_at": "2024-01-01T00:00:00Z"}]
             }
+        if name == "parse_mr_test_results":
+            assert kwargs["comments"] == [
+                {"body": "**ANEWA:** testing completed.", "created_at": "2024-01-01T00:00:00Z"}
+            ]
+            return parsed_results
         if name == "get_jira_details":
             return {"fields": jira_fields[kwargs["issue_key"]]}
         raise AssertionError(f"Unexpected tool call: {name}")
@@ -208,16 +259,17 @@ async def test_linked_issues_gather_jira_context_and_prompt_has_no_posting_knobs
     assert "dry_run" not in prompt
     assert "poc:" not in prompt
     assert "no_jira_comments" not in prompt
-    # Raw MR comments are appended for the agent's own parse_mr_test_results call.
-    assert "**ANEWA:** testing completed." in prompt
-    comments_json = prompt.split("MR_COMMENTS (JSON, pass as-is to parse_mr_test_results): ", 1)[1]
-    assert json.loads(comments_json) == [
-        {"body": "**ANEWA:** testing completed.", "created_at": "2024-01-01T00:00:00Z"}
-    ]
+    # Raw MR comments are no longer appended -- only the already-parsed result.
+    assert "MR_COMMENTS" not in prompt
+    parsed_json = prompt.split(
+        "they are no longer available to you): ",
+        1,
+    )[1]
+    assert json.loads(parsed_json) == parsed_results
 
 
 @pytest.mark.asyncio
-async def test_fetch_test_results_falls_back_to_mr_notes(monkeypatch):
+async def test_fetch_test_results_falls_back_to_mr_notes_on_exception(monkeypatch):
     """If get_authorized_comments_from_merge_request fails, fall back to
     fetch_gitlab_mr_notes -- which (unlike every other MR tool used here)
     takes project/mr_iid rather than merge_request_url, and returns its
@@ -236,6 +288,11 @@ async def test_fetch_test_results_falls_back_to_mr_notes(monkeypatch):
             # The real tool returns StringToolOutput -- a JSON string, not
             # structured data -- so the fallback must json.loads() it itself.
             return json.dumps([{"author": "anewa", "body": "**ANEWA:** done", "created_at": "t"}])
+        if name == "parse_mr_test_results":
+            assert kwargs["comments"] == [{"author": "anewa", "body": "**ANEWA:** done", "created_at": "t"}]
+            return dict(_EMPTY_PARSE_MR_TEST_RESULTS)
+        if name == "parse_newa_mr_comment":
+            return dict(_NOT_FOUND_PARSE_NEWA)
         if name == "get_jira_details":
             return {"fields": {"summary": "", "labels": [], "customfield_10638": None}}
         if name in ("add_merge_request_labels", "remove_merge_request_labels"):
@@ -257,22 +314,130 @@ async def test_fetch_test_results_falls_back_to_mr_notes(monkeypatch):
     assert "fetch_gitlab_mr_notes" in call_names
 
 
-# ---------------------------------------------------------------------------
-# act_on_result: deterministic posting
-# ---------------------------------------------------------------------------
-
-
-async def _run_with_result(monkeypatch, result: MrTestingAnalystResult, **run_kwargs):
-    """Run the full workflow with a minimal happy-path fetch/Jira mock and a
-    fake ReasoningAgent that returns `result`, recording every run_tool call."""
+@pytest.mark.asyncio
+async def test_fetch_test_results_falls_back_when_successful_result_lacks_marker(monkeypatch):
+    """get_authorized_comments_from_merge_request filters to Developer-role-
+    or-higher MR members -- if the results bot isn't one, its note can be
+    silently absent even from a *successful* response. That must also
+    trigger the fetch_gitlab_mr_notes fallback, not just an outright
+    exception."""
     calls = []
 
     async def _mock_run_tool(name, available_tools=None, **kwargs):
         calls.append((name, kwargs))
         if name == "get_merge_request_details":
+            return {"description": "Resolves: RHEL-444"}
+        if name == "get_authorized_comments_from_merge_request":
+            # Successful call, but the bot's own note was filtered out.
+            return {"comments": [{"body": "unrelated human comment", "created_at": "t0"}]}
+        if name == "fetch_gitlab_mr_notes":
+            assert kwargs == {"project": "x/y", "mr_iid": 1}
+            return json.dumps(
+                [
+                    {"body": "unrelated human comment", "created_at": "t0"},
+                    {"body": "**ANEWA:** done", "created_at": "t1", "note_id": 9},
+                ]
+            )
+        if name == "parse_mr_test_results":
+            assert len(kwargs["comments"]) == 2
+            return dict(_EMPTY_PARSE_MR_TEST_RESULTS)
+        if name == "parse_newa_mr_comment":
+            return dict(_NOT_FOUND_PARSE_NEWA)
+        if name == "get_jira_details":
+            return {"fields": {"summary": "", "labels": [], "customfield_10638": None}}
+        if name in ("add_merge_request_labels", "remove_merge_request_labels"):
+            return "ok"
+        raise AssertionError(f"Unexpected tool call: {name}")
+
+    flexmock(m).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(m).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(m).should_receive("create_mr_testing_analyst_agent").and_return(
+        _fake_agent(MrTestingAnalystResult(analyzed=True, summary="done"))
+    )
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+
+    result = await run_mr_testing_analyst("https://gitlab.com/x/y/-/merge_requests/1")
+
+    assert result.analyzed is True
+    call_names = [name for name, _ in calls]
+    assert "get_authorized_comments_from_merge_request" in call_names
+    assert "fetch_gitlab_mr_notes" in call_names
+
+
+@pytest.mark.asyncio
+async def test_fetch_test_results_no_fallback_when_marker_already_present(monkeypatch):
+    """If get_authorized_comments_from_merge_request's own result already
+    contains the expected marker, don't bother falling back at all."""
+    calls = []
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        calls.append((name, kwargs))
+        if name == "get_merge_request_details":
+            return {"description": "Resolves: RHEL-555"}
+        if name == "get_authorized_comments_from_merge_request":
+            return {"comments": [{"body": "**ANEWA:** done", "created_at": "t0"}]}
+        if name == "parse_mr_test_results":
+            return dict(_EMPTY_PARSE_MR_TEST_RESULTS)
+        if name == "parse_newa_mr_comment":
+            return dict(_NOT_FOUND_PARSE_NEWA)
+        if name == "get_jira_details":
+            return {"fields": {"summary": "", "labels": [], "customfield_10638": None}}
+        if name in ("add_merge_request_labels", "remove_merge_request_labels"):
+            return "ok"
+        raise AssertionError(f"Unexpected tool call: {name}")
+
+    flexmock(m).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(m).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(m).should_receive("create_mr_testing_analyst_agent").and_return(
+        _fake_agent(MrTestingAnalystResult(analyzed=True, summary="done"))
+    )
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+
+    result = await run_mr_testing_analyst("https://gitlab.com/x/y/-/merge_requests/1")
+
+    assert result.analyzed is True
+    call_names = [name for name, _ in calls]
+    assert "get_authorized_comments_from_merge_request" in call_names
+    assert "fetch_gitlab_mr_notes" not in call_names
+
+
+# ---------------------------------------------------------------------------
+# act_on_result: deterministic posting
+# ---------------------------------------------------------------------------
+
+
+async def _run_with_result(
+    monkeypatch,
+    result: MrTestingAnalystResult,
+    parse_overrides: dict | None = None,
+    discussions: list | None = None,
+    raise_on: dict | None = None,
+    **run_kwargs,
+):
+    """Run the full workflow with a minimal happy-path fetch/Jira mock and a
+    fake ReasoningAgent that returns `result`, recording every run_tool call."""
+    calls = []
+    parse_overrides = parse_overrides or {}
+    raise_on = raise_on or {}
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        calls.append((name, kwargs))
+        if name in raise_on:
+            raise raise_on[name]
+        if name == "get_merge_request_details":
             return {"description": "Resolves: RHEL-111"}
         if name == "get_authorized_comments_from_merge_request":
             return {"comments": []}
+        if name == "fetch_gitlab_mr_notes":
+            return "[]"
+        if name == "parse_mr_test_results":
+            return parse_overrides.get("parse_mr_test_results", dict(_EMPTY_PARSE_MR_TEST_RESULTS))
+        if name == "parse_newa_mr_comment":
+            return parse_overrides.get("parse_newa_mr_comment", dict(_NOT_FOUND_PARSE_NEWA))
+        if name == "parse_osci_results_comment":
+            return parse_overrides.get("parse_osci_results_comment", dict(_DEFAULT_PARSE_OSCI))
+        if name == "get_merge_request_discussions":
+            return discussions if discussions is not None else []
         if name == "get_jira_details":
             return {"fields": {"summary": "", "labels": [], "customfield_10638": None}}
         # Every posting tool: just acknowledge the call.
@@ -308,17 +473,33 @@ async def test_act_on_result_posts_new_comments_and_jira_comments_and_labels(mon
 
 
 @pytest.mark.asyncio
-async def test_act_on_result_update_kind_calls_update_tool_with_note_id(monkeypatch):
+async def test_act_on_result_update_kind_folds_into_anewas_note(monkeypatch):
+    """The model never folds this itself (fold_mr_comment_body isn't in its
+    toolset) -- Python folds the model's plain formatted markdown into
+    anewa's own note_body (from parse_mr_test_results) using
+    fold_comment_body directly."""
+    note_body = "**ANEWA:** done\n**Build:** `foo-1.0`"
     result = MrTestingAnalystResult(
         analyzed=True,
         summary="done",
-        mr_comments=[MrCommentToPost(kind="update", body="merged body", note_id=42)],
+        mr_comments=[MrCommentToPost(kind="update", body="## Testing Farm Results\nnew", note_id=42)],
     )
+    overrides = {
+        "parse_mr_test_results": {
+            "nvr": "foo-1.0",
+            "results_by_arch": {"x86_64": {"overall_status": "✅ pass"}},
+            "unfixed_results_by_arch": {},
+            "note_id": 42,
+            "note_body": note_body,
+            "report_portal_url": None,
+        }
+    }
 
-    _, calls = await _run_with_result(monkeypatch, result)
+    _, calls = await _run_with_result(monkeypatch, result, parse_overrides=overrides)
     update_call = next(kwargs for name, kwargs in calls if name == "update_merge_request_comment")
+
     assert update_call["note_id"] == 42
-    assert update_call["comment"] == "merged body"
+    assert update_call["comment"] == fold_comment_body(note_body, "## Testing Farm Results\nnew")
     assert all(name != "add_merge_request_comment" for name, _ in calls)
 
 
@@ -356,18 +537,55 @@ async def test_act_on_result_blocking_kind_uses_discussion_unless_poc(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_act_on_result_resolves_discussion_when_set(monkeypatch):
-    result = MrTestingAnalystResult(
-        analyzed=True,
-        summary="done",
-        resolve_discussion_id="d1",
-    )
+async def test_act_on_result_resolves_matching_osci_discussion(monkeypatch):
+    """The model only returns a boolean (resolve_osci_discussion) -- Python
+    independently finds the right discussion to resolve, matching the
+    results-comment marker, resolvable/unresolved state, and this run's own
+    pipeline ID (from parse_osci_results_comment)."""
+    result = MrTestingAnalystResult(analyzed=True, summary="done", resolve_osci_discussion=True)
+    discussions = [
+        {
+            "discussion_id": "d1",
+            "resolvable": True,
+            "resolved": False,
+            "body": "<!--RESULTS_COMMENT-->Results for pipeline [123](https://x)",
+            "created_at": "2024-01-01T00:00:00Z",
+        },
+        {
+            "discussion_id": "d2",
+            "resolvable": False,
+            "resolved": None,
+            "body": "unrelated",
+            "created_at": "2024-01-01T00:00:01Z",
+        },
+    ]
 
-    _, calls = await _run_with_result(monkeypatch, result, gating=True)
+    _, calls = await _run_with_result(monkeypatch, result, gating=True, discussions=discussions)
     resolve_call = next(kwargs for name, kwargs in calls if name == "resolve_merge_request_discussion")
     assert resolve_call["discussion_id"] == "d1"
     # Gating mode never labels the MR, even though analyzed is true.
     assert all(name != "add_merge_request_labels" for name, _ in calls)
+
+
+@pytest.mark.asyncio
+async def test_act_on_result_resolve_osci_discussion_no_match_skips_without_raising(monkeypatch):
+    """If resolve_osci_discussion is set but nothing actually matches (wrong
+    pipeline ID, already resolved, or no results-comment thread at all),
+    this must skip resolving -- never resolve blind -- and must not raise."""
+    result = MrTestingAnalystResult(analyzed=True, summary="done", resolve_osci_discussion=True)
+    discussions = [
+        {
+            "discussion_id": "d1",
+            "resolvable": True,
+            "resolved": False,
+            "body": "<!--RESULTS_COMMENT-->Results for pipeline [999](https://x)",
+            "created_at": "2024-01-01T00:00:00Z",
+        },
+    ]
+
+    _, calls = await _run_with_result(monkeypatch, result, gating=True, discussions=discussions)
+    call_names = [name for name, _ in calls]
+    assert "resolve_merge_request_discussion" not in call_names
 
 
 @pytest.mark.asyncio
@@ -387,7 +605,7 @@ async def test_act_on_result_dry_run_posts_nothing(monkeypatch):
         summary="done",
         mr_comments=[MrCommentToPost(kind="new", body="x")],
         jira_comments=[{"jira_key": "RHEL-111", "body": "y"}],
-        resolve_discussion_id="d1",
+        resolve_osci_discussion=True,
     )
 
     _, calls = await _run_with_result(monkeypatch, result, dry_run=True)
@@ -417,3 +635,28 @@ async def test_act_on_result_no_jira_comments_skips_jira_posting_only(monkeypatc
     assert "add_jira_comment" not in call_names
     assert "add_merge_request_comment" in call_names
     assert "add_merge_request_labels" in call_names
+
+
+@pytest.mark.asyncio
+async def test_act_on_result_jira_failure_does_not_block_labeling(monkeypatch):
+    """A Jira-comment-posting failure must not prevent the MR from being
+    labeled once its own mr_comments have already posted successfully --
+    otherwise a retry would repost every mr_comment from scratch, risking
+    duplicates, just because of an unrelated Jira outage."""
+    result = MrTestingAnalystResult(
+        analyzed=True,
+        summary="done",
+        mr_comments=[MrCommentToPost(kind="new", body="x")],
+        jira_comments=[{"jira_key": "RHEL-111", "body": "y"}],
+    )
+
+    final, calls = await _run_with_result(
+        monkeypatch, result, raise_on={"add_jira_comment": RuntimeError("Jira is down")}
+    )
+    call_names = [name for name, _ in calls]
+
+    assert final.analyzed is True
+    assert "add_merge_request_comment" in call_names
+    assert "add_jira_comment" in call_names
+    assert "add_merge_request_labels" in call_names
+    assert "remove_merge_request_labels" in call_names

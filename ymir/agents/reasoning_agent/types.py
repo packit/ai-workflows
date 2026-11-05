@@ -2,7 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 
-from beeai_framework.agents import AgentOutput
+from beeai_framework.agents import AgentOptions, AgentOutput
 from beeai_framework.backend import AssistantMessage, UserMessage
 from beeai_framework.backend.types import ChatModelCost, ChatModelUsage
 from beeai_framework.errors import FrameworkError
@@ -71,6 +71,14 @@ class ReasoningAgentRunState(BaseModel):
 
 class ReasoningAgentOutput(AgentOutput):
     state: ReasoningAgentRunState
+
+
+class ReasoningAgentOptions(AgentOptions, total=False):
+    validate_output: Callable[[str], str]
+    """
+    Checks the final answer text before the run ends and returns the text to keep
+    (possibly normalized). Raising sends the error back to the model so it can retry.
+    """
 
 
 @dataclass

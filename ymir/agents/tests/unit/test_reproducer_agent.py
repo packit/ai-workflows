@@ -35,7 +35,7 @@ from ymir.agents.reproducer_agent import (
 )
 from ymir.agents.tasks import InvalidReproducerConfigError, fetch_reproducer_config
 from ymir.common.base_utils import check_subprocess
-from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.constants import GITLAB_MR_PAGE_SIZE, JiraLabels, RedisQueues
 from ymir.common.models import (
     ErrorData,
     ErrorListEntry,
@@ -196,6 +196,422 @@ def test_needs_merge_request():
     assert _needs_merge_request(_output(success=True, lock_deferred=True)) is False
 
 
+@pytest.mark.parametrize(
+    ("repository_url", "expected"),
+    [
+        ("https://gitlab.com/redhat/rhel/tests/shared", True),
+        ("https://gitlab.cee.redhat.com/redhat/rhel/tests/shared", False),
+        ("https://example.com/redhat/rhel/tests/shared", False),
+    ],
+)
+def test_is_gitlab_repository_matches_supported_host(repository_url, expected):
+    assert r_agent._is_gitlab_repository(repository_url) is expected
+
+
+@pytest.mark.asyncio
+async def test_list_open_reproducer_mrs_skips_unsupported_host():
+    flexmock(r_agent).should_receive("run_tool").never()
+
+    mrs = await r_agent._list_open_reproducer_mrs(
+        "https://gitlab.cee.redhat.com/redhat/rhel/tests/shared",
+        available_tools=[],
+    )
+
+    assert mrs == []
+
+
+@pytest.mark.asyncio
+async def test_list_open_reproducer_mrs_fetches_all_pages():
+    page_one = [
+        {"iid": index, "title": f"pkg: [RHEL-{index}] ymir reproducer test"}
+        for index in range(GITLAB_MR_PAGE_SIZE)
+    ]
+    page_two = [
+        {"iid": GITLAB_MR_PAGE_SIZE, "title": f"pkg: [RHEL-{GITLAB_MR_PAGE_SIZE}] ymir reproducer test"}
+    ]
+    page_calls = []
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        assert name == "list_project_merge_requests"
+        assert kwargs["project"] == "redhat/rhel/tests/shared"
+        assert kwargs["state"] == "opened"
+        assert kwargs["labels"] == ["ymir_reproducer"]
+        page_calls.append(kwargs["page"])
+        return {1: page_one, 2: page_two}[kwargs["page"]]
+
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    mrs = await r_agent._list_open_reproducer_mrs(
+        "https://gitlab.com/redhat/rhel/tests/shared",
+        available_tools=[],
+    )
+
+    assert len(mrs) == GITLAB_MR_PAGE_SIZE + 1
+    assert mrs[-1] == page_two[0]
+    assert (
+        r_agent._match_open_reproducer_mr(
+            mrs,
+            package="pkg",
+            jira_issue=f"RHEL-{GITLAB_MR_PAGE_SIZE}",
+        )
+        == page_two[0]
+    )
+    assert page_calls == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_list_open_reproducer_mrs_stops_when_page_repeats():
+    repeated_page = [
+        {"iid": index, "title": f"pkg: [RHEL-{index}] ymir reproducer test"}
+        for index in range(GITLAB_MR_PAGE_SIZE)
+    ]
+    page_calls = []
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        assert name == "list_project_merge_requests"
+        page_calls.append(kwargs["page"])
+        return repeated_page
+
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    with pytest.raises(r_agent.IncompleteReproducerMRListingError) as exc_info:
+        await r_agent._list_open_reproducer_mrs(
+            "https://gitlab.com/redhat/rhel/tests/shared",
+            available_tools=[],
+        )
+
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert "pagination did not advance" in str(exc_info.value.__cause__)
+    assert page_calls == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_list_open_reproducer_mrs_raises_on_later_page_failure():
+    pages = []
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        assert name == "list_project_merge_requests"
+        page = kwargs["page"]
+        pages.append(page)
+        if page == 1:
+            return [{"iid": index} for index in range(GITLAB_MR_PAGE_SIZE)]
+        raise RuntimeError("GitLab page two unavailable")
+
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    with pytest.raises(r_agent.IncompleteReproducerMRListingError, match="complete open-MR listing"):
+        await r_agent._list_open_reproducer_mrs(
+            "https://gitlab.com/redhat/rhel/tests/shared",
+            available_tools=[],
+        )
+
+    assert pages == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_list_open_reproducer_mrs_raises_on_malformed_page():
+    async def _mock_run_tool(name, available_tools=None, **_kwargs):
+        assert name == "list_project_merge_requests"
+        return {"unexpected": "response"}
+
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    with pytest.raises(r_agent.IncompleteReproducerMRListingError, match="complete open-MR listing"):
+        await r_agent._list_open_reproducer_mrs(
+            "https://gitlab.com/redhat/rhel/tests/shared",
+            available_tools=[],
+        )
+
+
+def test_tmt_lint_fix_output_schema_rejects_workflow_fields():
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        r_agent.TmtLintFixOutputSchema.model_validate(
+            {
+                "success": True,
+                "summary": "Fixed the FMF metadata.",
+                "test_directory": "Regression/RHEL-OTHER",
+            }
+        )
+
+
+def test_tmt_lint_fix_merge_preserves_original_workflow_fields():
+    original = _output(
+        jira_issue="RHEL-114607",
+        reproducer_type="cve",
+        package="expat",
+        summary="Reproducer detects the buffer overflow in the crafted input.",
+        compose="RHEL-9.8.0",
+        arch="x86_64",
+        test_directory="packages/expat/Security/CVE-2025-59375",
+        test_already_exists=False,
+        adapted_existing=False,
+        testing_farm_request_id="tf-original",
+    )
+    fixed = r_agent.TmtLintFixOutputSchema(
+        success=False,
+        summary="Fixed the FMF metadata.",
+        retryable_error=True,
+    )
+
+    result = r_agent._merge_tmt_lint_fix_result(original, fixed)
+
+    assert result.jira_issue == "RHEL-114607"
+    assert result.reproducer_type == "cve"
+    assert result.package == "expat"
+    assert result.compose == "RHEL-9.8.0"
+    assert result.arch == "x86_64"
+    assert result.test_directory == "packages/expat/Security/CVE-2025-59375"
+    assert result.test_already_exists is False
+    assert result.adapted_existing is False
+    assert result.existing_mr_url is None
+    assert result.testing_farm_request_id == "tf-original"
+    assert result.success is False
+    assert result.summary == (
+        "Reproducer detects the buffer overflow in the crafted input.\n\nLint fix: Fixed the FMF metadata."
+    )
+    assert result.retryable_error is True
+
+    with_new_tf_request = r_agent.TmtLintFixOutputSchema(
+        success=True,
+        summary="Verified after the fix.",
+        testing_farm_request_id="tf-new",
+    )
+    result_with_new_tf_request = r_agent._merge_tmt_lint_fix_result(result, with_new_tf_request)
+    assert result_with_new_tf_request.testing_farm_request_id == "tf-new"
+    assert result_with_new_tf_request.summary == (
+        "Reproducer detects the buffer overflow in the crafted input.\n\n"
+        "Lint fix: Fixed the FMF metadata.\n\nLint fix: Verified after the fix."
+    )
+
+
+def test_tmt_lint_fix_merge_does_not_repeat_existing_lint_note():
+    original = _output(summary="Original reproducer summary.\n\nLint fix: Added the missing require.")
+    fixed = r_agent.TmtLintFixOutputSchema(
+        success=True,
+        summary="Added the missing require.",
+    )
+
+    result = r_agent._merge_tmt_lint_fix_result(original, fixed)
+
+    assert result.summary == original.summary
+
+
+def test_tmt_lint_fix_merge_keeps_original_summary_when_fix_summary_is_empty():
+    original = _output(summary="Original reproducer summary.")
+    fixed = r_agent.TmtLintFixOutputSchema(success=True, summary="  ")
+
+    result = r_agent._merge_tmt_lint_fix_result(original, fixed)
+
+    assert result.summary == original.summary
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_setup_loads_config_from_jira_component():
+    config = PackageReproducerConfig(
+        enabled=True,
+        test_repository="https://gitlab.com/redhat/rhel/tests/shared-tests",
+        test_directory_prefix="packages/bind",
+    )
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        assert name == "get_jira_details"
+        assert kwargs == {"issue_key": "RHEL-12345"}
+        return {"fields": {"components": [{"name": "bind"}]}}
+
+    async def _mock_fetch_reproducer_config(package, available_tools):
+        assert package == "bind"
+        return config
+
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(agent_tasks).should_receive("fetch_reproducer_config").replace_with(
+        _mock_fetch_reproducer_config
+    )
+
+    resolved_input, resolved_config, repository_url = await r_agent._resolve_reproducer_setup(
+        ReproducerInputSchema(jira_issue="RHEL-12345"),
+        reproducer_config=None,
+        available_tools=[],
+    )
+
+    assert resolved_input.package == "bind"
+    assert resolved_config is config
+    assert repository_url == config.test_repository
+
+
+@pytest.mark.parametrize("components", [[], [{"name": "bind"}, {"name": "kernel"}]])
+def test_package_from_jira_details_requires_exactly_one_component(components):
+    with pytest.raises(ValueError, match="expected exactly one Jira component"):
+        r_agent._package_from_jira_details({"fields": {"components": components}})
+
+
+@pytest.mark.parametrize("package", ["bind", "python3.11", "gcc-c++", "libstdc++"])
+def test_validate_reproducer_package_name_accepts_rpm_names(package):
+    assert r_agent._validate_reproducer_package_name(package) == package
+
+
+@pytest.mark.parametrize("package", ["", ".", "..", "../victim", "foo/bar", r"foo\bar", "bad package"])
+def test_validate_reproducer_package_name_rejects_unsafe_names(package):
+    with pytest.raises(ValueError, match="Invalid reproducer package name"):
+        r_agent._validate_reproducer_package_name(package)
+
+
+def test_validate_reproducer_output_package_requires_resolved_package():
+    result = _output(package="other-package")
+
+    with pytest.raises(ValueError, match="expected resolved package 'bind'"):
+        r_agent._validate_reproducer_output_package(result, "bind")
+
+
+def test_package_from_jira_details_rejects_path_like_component():
+    with pytest.raises(ValueError, match="Invalid reproducer package name"):
+        r_agent._package_from_jira_details({"fields": {"components": [{"name": "../victim"}]}})
+
+
+@pytest.mark.parametrize("components", [[], [{"name": "bind"}, {"name": "kernel"}]])
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.asyncio
+async def test_standalone_package_resolution_error_stops_before_agent(
+    monkeypatch,
+    tmp_path: Path,
+    components,
+    dry_run,
+):
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+    comments = []
+
+    @contextlib.asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        assert name == "get_jira_details"
+        assert kwargs["issue_key"] == "RHEL-12345"
+        return {"fields": {"components": components}}
+
+    async def _capture_terminal_error_comment(**kwargs):
+        comments.append(kwargs)
+
+    monkeypatch.setattr(r_agent, "mcp_tools", _mock_mcp_tools)
+    monkeypatch.setattr(agent_tasks, "post_terminal_error_comment", _capture_terminal_error_comment)
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    def _unexpected_agent_factory(*_args, **_kwargs):
+        raise AssertionError("reproducer agent must not run without one package")
+
+    state = await r_agent.run_workflow(
+        "RHEL-12345",
+        dry_run,
+        _unexpected_agent_factory,
+    )
+
+    assert state.result is None
+    assert not (tmp_path / "Reproducer" / "RHEL-12345" / "tests-bind").exists()
+    if dry_run:
+        assert comments == []
+    else:
+        assert len(comments) == 1
+        assert comments[0]["jira_issue"] == "RHEL-12345"
+        assert "exactly one Jira component" in comments[0]["comment_text"]
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.asyncio
+async def test_standalone_invalid_reproducer_config_stops_before_agent(monkeypatch, tmp_path: Path, dry_run):
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+    comments = []
+
+    @contextlib.asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        assert name == "get_jira_details"
+        assert kwargs["issue_key"] == "RHEL-12345"
+        return {"fields": {"components": [{"name": "bind"}]}}
+
+    async def _invalid_config(*_args, **_kwargs):
+        raise InvalidReproducerConfigError("ymir.yaml reproducer section for bind is malformed")
+
+    async def _capture_terminal_error_comment(**kwargs):
+        comments.append(kwargs)
+
+    monkeypatch.setattr(r_agent, "mcp_tools", _mock_mcp_tools)
+    monkeypatch.setattr(agent_tasks, "fetch_reproducer_config", _invalid_config)
+    monkeypatch.setattr(agent_tasks, "post_terminal_error_comment", _capture_terminal_error_comment)
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    def _unexpected_agent_factory(*_args, **_kwargs):
+        raise AssertionError("reproducer agent must not run with invalid package configuration")
+
+    state = await r_agent.run_workflow(
+        "RHEL-12345",
+        dry_run,
+        _unexpected_agent_factory,
+    )
+
+    assert state.result is None
+    assert not (tmp_path / "Reproducer" / "RHEL-12345" / "tests-bind").exists()
+    if dry_run:
+        assert comments == []
+    else:
+        assert len(comments) == 1
+        assert comments[0]["jira_issue"] == "RHEL-12345"
+        assert "reproducer section for bind is malformed" in comments[0]["comment_text"]
+        assert "package rules repository" in comments[0]["comment_text"]
+        assert "None" not in comments[0]["comment_text"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_setup_keeps_explicit_package_and_config():
+    config = PackageReproducerConfig(
+        enabled=True,
+        test_repository="https://gitlab.com/redhat/rhel/tests/shared-tests",
+    )
+    flexmock(r_agent).should_receive("run_tool").never()
+    flexmock(agent_tasks).should_receive("fetch_reproducer_config").never()
+
+    resolved_input, resolved_config, repository_url = await r_agent._resolve_reproducer_setup(
+        ReproducerInputSchema(jira_issue="RHEL-12345", package="openssl"),
+        reproducer_config=config,
+        available_tools=[],
+    )
+
+    assert resolved_input.package == "openssl"
+    assert resolved_config is config
+    assert repository_url == config.test_repository
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_setup_rejects_unsafe_supplied_package():
+    flexmock(r_agent).should_receive("run_tool").never()
+    flexmock(agent_tasks).should_receive("fetch_reproducer_config").never()
+
+    with pytest.raises(ValueError, match="Invalid reproducer package name"):
+        await r_agent._resolve_reproducer_setup(
+            ReproducerInputSchema(jira_issue="RHEL-12345", package="../victim"),
+            reproducer_config=None,
+            available_tools=[],
+            load_config_if_missing=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_setup_does_not_fetch_config_for_supplied_package():
+    flexmock(r_agent).should_receive("run_tool").never()
+    flexmock(agent_tasks).should_receive("fetch_reproducer_config").never()
+
+    resolved_input, resolved_config, repository_url = await r_agent._resolve_reproducer_setup(
+        ReproducerInputSchema(jira_issue="RHEL-12345", package="bind"),
+        reproducer_config=None,
+        available_tools=[],
+        load_config_if_missing=False,
+    )
+
+    assert resolved_input.package == "bind"
+    assert resolved_config is None
+    assert repository_url == "https://gitlab.com/redhat/rhel/tests/bind"
+
+
 def test_resolve_test_dir_uses_agent_relative_path(tmp_path: Path):
     security = tmp_path / "Security" / "CVE-2026-11331"
     security.mkdir(parents=True)
@@ -220,6 +636,89 @@ def test_resolve_test_dir_rejects_traversal_and_missing(tmp_path: Path):
     assert _resolve_test_dir(tmp_path, "Security/CVE-missing") is None
 
 
+@pytest.mark.parametrize(
+    ("test_directory", "prefix", "expected"),
+    [
+        ("shared_pkg/exp_security/Security/CVE-1", "shared_pkg/exp_security", True),
+        ("/shared_pkg/exp_security/Security/CVE-1", "shared_pkg/exp_security", True),
+        ("shared_pkg/exp_security_extra/Security/CVE-1", "shared_pkg/exp_security", False),
+        ("Security/CVE-1", "shared_pkg/exp_security", False),
+        ("shared_pkg/../Security/CVE-1", "shared_pkg/exp_security", False),
+        (None, "shared_pkg/exp_security", False),
+    ],
+)
+def test_test_directory_is_under_prefix(tmp_path, test_directory, prefix, expected):
+    tests_clone = tmp_path / "tests"
+    tests_clone.mkdir()
+    assert r_agent._test_directory_is_under_prefix(tests_clone, test_directory, prefix) is expected
+
+
+def test_prefix_exception_requires_bootstrapped_adaptation(tmp_path: Path):
+    result = _output(adapted_existing=True, test_directory="legacy/Security/CVE-2026-1")
+    bootstrap_without_existing_test = PreparedTestsClone(tests_clone=tmp_path)
+    bootstrap_with_existing_test = PreparedTestsClone(
+        tests_clone=tmp_path,
+        existing_test_directory="legacy/Security/CVE-2026-1",
+    )
+
+    assert not r_agent._is_bootstrapped_test_adaptation(result, bootstrap_without_existing_test)
+    assert r_agent._is_bootstrapped_test_adaptation(result, bootstrap_with_existing_test)
+
+    result.test_directory = "legacy/Security/CVE-2026-1/"
+    assert r_agent._is_bootstrapped_test_adaptation(result, bootstrap_with_existing_test)
+
+    result.test_directory = "other/Security/CVE-2026-1"
+    assert not r_agent._is_bootstrapped_test_adaptation(result, bootstrap_with_existing_test)
+
+
+def test_test_directory_is_under_prefix_rejects_symlinked_prefix(tmp_path: Path):
+    tests_clone = tmp_path / "tests"
+    (tests_clone / "shared").mkdir(parents=True)
+    (tests_clone / "packages").mkdir()
+    (tests_clone / "packages" / "bind").symlink_to(tests_clone / "shared", target_is_directory=True)
+
+    assert (
+        r_agent._test_directory_is_under_prefix(
+            tests_clone,
+            "packages/bind/Security/CVE-1",
+            "packages/bind",
+        )
+        is False
+    )
+
+
+def test_test_directory_is_under_prefix_rejects_test_symlink_outside_prefix(tmp_path: Path):
+    tests_clone = tmp_path / "tests"
+    prefix = tests_clone / "packages" / "bind"
+    target = tests_clone / "packages" / "openssl" / "Security"
+    prefix.mkdir(parents=True)
+    target.mkdir(parents=True)
+    (prefix / "Security").symlink_to(target, target_is_directory=True)
+
+    assert (
+        r_agent._test_directory_is_under_prefix(
+            tests_clone,
+            "packages/bind/Security/CVE-1",
+            "packages/bind",
+        )
+        is False
+    )
+
+
+def test_test_directory_is_under_prefix_accepts_test_symlink_inside_prefix(tmp_path: Path):
+    tests_clone = tmp_path / "tests"
+    prefix = tests_clone / "packages" / "bind"
+    target = prefix / "real" / "Security"
+    target.mkdir(parents=True)
+    (prefix / "alias").symlink_to(prefix / "real", target_is_directory=True)
+
+    assert r_agent._test_directory_is_under_prefix(
+        tests_clone,
+        "packages/bind/alias/Security/CVE-1",
+        "packages/bind",
+    )
+
+
 def test_discover_existing_reproducer_test_dir_prefers_security_cve(tmp_path: Path):
     repo = tmp_path / "tests-pkg"
     repo.mkdir()
@@ -234,6 +733,157 @@ def test_discover_existing_reproducer_test_dir_prefers_security_cve(tmp_path: Pa
         reproducer_type="cve",
     )
     assert discovered == canonical
+
+
+def test_discover_existing_reproducer_test_dir_finds_prefixed_security_cve(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    canonical = repo / "shared_pkg" / "exp_security" / "Security" / "CVE-2026-50219"
+    canonical.mkdir(parents=True)
+    (canonical / "main.fmf").write_text("summary: test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id="CVE-2026-50219",
+        jira_issue="RHEL-220981",
+        reproducer_type="cve",
+        test_directory_prefix="shared_pkg/exp_security",
+    )
+
+    assert discovered == canonical
+
+
+def test_discover_existing_reproducer_test_dir_finds_prefixed_regression(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    canonical = repo / "shared_pkg" / "exp_security" / "Regression" / "RHEL-100"
+    canonical.mkdir(parents=True)
+    (canonical / "main.fmf").write_text("summary: test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id=None,
+        jira_issue="RHEL-100",
+        reproducer_type="bug",
+        test_directory_prefix="shared_pkg/exp_security",
+    )
+
+    assert discovered == canonical
+
+
+def test_discover_existing_reproducer_test_dir_finds_exact_root_cve_with_prefix(tmp_path: Path):
+    repo = tmp_path / "tests-pkg"
+    repo.mkdir()
+    legacy = repo / "Security" / "CVE-2026-50219"
+    legacy.mkdir(parents=True)
+    (legacy / "main.fmf").write_text("summary: test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id="CVE-2026-50219",
+        jira_issue="RHEL-220981",
+        reproducer_type="cve",
+        test_directory_prefix="shared_pkg/exp_security",
+    )
+
+    assert discovered == legacy
+
+
+def test_discover_shared_repo_ignores_root_cve_not_changed_by_mr(tmp_path: Path):
+    repo = tmp_path / "tests-shared"
+    legacy = repo / "Security" / "CVE-2026-50219"
+    legacy.mkdir(parents=True)
+    (legacy / "main.fmf").write_text("summary: another package's test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id="CVE-2026-50219",
+        jira_issue="RHEL-220981",
+        reproducer_type="cve",
+        test_directory_prefix="packages/expat",
+        mr_changed_paths={"README"},
+    )
+
+    assert discovered is None
+
+
+def test_discover_shared_repo_regression_reuse_requires_mr_changes(tmp_path: Path):
+    repo = tmp_path / "tests-shared"
+    root_test = repo / "Regression" / "RHEL-100"
+    root_test.mkdir(parents=True)
+    (root_test / "main.fmf").write_text("summary: root regression test\n")
+
+    exact_match = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id=None,
+        jira_issue="RHEL-100",
+        reproducer_type="bug",
+        mr_changed_paths={"README"},
+    )
+    assert exact_match is None
+
+    prefix = "packages/expat"
+    fallback_test = repo / prefix / "Regression" / "RHEL-101"
+    fallback_test.mkdir(parents=True)
+    (fallback_test / "main.fmf").write_text("summary: prefixed regression test\n")
+    unrelated_mr_paths = {"README"}
+    common = {
+        "cve_id": None,
+        "jira_issue": "RHEL-200",
+        "reproducer_type": "bug",
+        "test_directory_prefix": prefix,
+    }
+
+    assert (
+        _discover_existing_reproducer_test_dir(
+            repo,
+            **common,
+            mr_changed_paths=unrelated_mr_paths,
+        )
+        is None
+    )
+    assert (
+        _discover_existing_reproducer_test_dir(
+            repo,
+            **common,
+            mr_changed_paths={f"{prefix}/Regression/RHEL-101/main.fmf"},
+        )
+        == fallback_test
+    )
+
+
+def test_discover_existing_reproducer_test_dir_does_not_fallback_to_shared_repo_root(tmp_path: Path):
+    repo = tmp_path / "tests-shared"
+    unrelated = repo / "Regression" / "RHEL-100"
+    unrelated.mkdir(parents=True)
+    (unrelated / "main.fmf").write_text("summary: unrelated package test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id=None,
+        jira_issue="RHEL-200",
+        reproducer_type="bug",
+        test_directory_prefix="packages/bind",
+    )
+
+    assert discovered is None
+
+
+def test_discover_existing_reproducer_test_dir_fallback_stays_under_prefix(tmp_path: Path):
+    repo = tmp_path / "tests-shared"
+    candidate = repo / "packages" / "bind" / "Regression" / "RHEL-100"
+    candidate.mkdir(parents=True)
+    (candidate / "main.fmf").write_text("summary: bind test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id=None,
+        jira_issue="RHEL-200",
+        reproducer_type="bug",
+        test_directory_prefix="packages/bind",
+    )
+
+    assert discovered == candidate
 
 
 def test_discover_existing_reproducer_test_dir_rejects_cve_prefix_collision(tmp_path: Path):
@@ -269,6 +919,23 @@ def test_discover_existing_reproducer_test_dir_finds_sole_regression_dir(tmp_pat
     assert discovered == regression
 
 
+def test_discover_existing_reproducer_test_dir_skips_unscoped_custom_repo_fallback(tmp_path: Path):
+    repo = tmp_path / "tests-shared"
+    unrelated = repo / "Regression" / "RHEL-100"
+    unrelated.mkdir(parents=True)
+    (unrelated / "main.fmf").write_text("summary: unrelated package test\n")
+
+    discovered = _discover_existing_reproducer_test_dir(
+        repo,
+        cve_id=None,
+        jira_issue="RHEL-200",
+        reproducer_type="bug",
+        allow_unscoped_regression_fallback=False,
+    )
+
+    assert discovered is None
+
+
 def test_cve_only_needles_splits_and_normalizes():
     assert _cve_only_needles("CVE-2026-56132") == ["CVE-2026-56132"]
     assert _cve_only_needles("cve-1; CVE-2") == ["CVE-1", "CVE-2"]
@@ -284,7 +951,7 @@ def test_match_open_reproducer_mr_by_cve_bracket_in_title():
             "source_branch": "reproducer/RHEL-221017",
         }
     ]
-    matched = _match_open_reproducer_mr(mrs, cve_ids=["CVE-2026-56132"])
+    matched = _match_open_reproducer_mr(mrs, package="expat", cve_ids=["CVE-2026-56132"])
     assert matched is not None
     assert matched["source_branch"] == "reproducer/RHEL-221017"
 
@@ -297,8 +964,8 @@ def test_match_open_reproducer_mr_ignores_unrelated_cve_in_description():
             "description": "Test for CVE-2026-99999 which is unrelated.",
         }
     ]
-    assert _match_open_reproducer_mr(mrs, cve_ids=["CVE-2026-99999"]) is None
-    assert _match_open_reproducer_mr(mrs, cve_ids=["CVE-2026-56132"]) is not None
+    assert _match_open_reproducer_mr(mrs, package="expat", cve_ids=["CVE-2026-99999"]) is None
+    assert _match_open_reproducer_mr(mrs, package="expat", cve_ids=["CVE-2026-56132"]) is not None
 
 
 def test_match_open_reproducer_mr_ignores_bare_cve_token_without_brackets():
@@ -309,26 +976,67 @@ def test_match_open_reproducer_mr_ignores_bare_cve_token_without_brackets():
             "description": "Security test for CVE-2026-56132 in expat.",
         }
     ]
-    assert _match_open_reproducer_mr(mrs, cve_ids=["CVE-2026-56132"]) is None
+    assert _match_open_reproducer_mr(mrs, package="expat", cve_ids=["CVE-2026-56132"]) is None
+
+
+def test_match_open_reproducer_mr_scopes_cve_and_existing_url_to_package():
+    cve_id = "CVE-2026-56132"
+    expat_mr = {
+        "url": "https://gitlab.com/redhat/rhel/tests/shared/-/merge_requests/1",
+        "title": f"expat: [{cve_id}] ymir reproducer test",
+    }
+    bind_mr = {
+        "url": "https://gitlab.com/redhat/rhel/tests/shared/-/merge_requests/2",
+        "title": f"bind: [{cve_id}] ymir reproducer test",
+    }
+    mrs = [expat_mr, bind_mr]
+
+    assert _match_open_reproducer_mr(mrs, package="bind", cve_ids=[cve_id]) == bind_mr
+    assert (
+        _match_open_reproducer_mr(
+            mrs,
+            package="bind",
+            cve_ids=[cve_id],
+            existing_mr_url=expat_mr["url"],
+        )
+        == bind_mr
+    )
+    assert (
+        _match_open_reproducer_mr(
+            [expat_mr],
+            package="bind",
+            cve_ids=[cve_id],
+            existing_mr_url=expat_mr["url"],
+        )
+        is None
+    )
 
 
 def test_match_regression_sibling_mr_when_issue_not_yet_in_title():
     mrs = [
         {
             "url": "https://gitlab.com/a/1",
-            "title": "bind: [RHEL-100] ymir reproducer test",
+            "title": "expat: [RHEL-100] ymir reproducer test",
         },
         {
             "url": "https://gitlab.com/a/2",
             "title": "bind: [RHEL-500] ymir reproducer test",
         },
     ]
-    assert _match_regression_sibling_mr(mrs, "RHEL-300") is None
-    assert _match_regression_sibling_mr(mrs, "RHEL-300", clone_root="RHEL-100") == mrs[0]
+    assert _match_regression_sibling_mr([mrs[0]], "RHEL-300", package="bind") is None
+    assert _match_regression_sibling_mr(mrs, "RHEL-300", package="bind") == mrs[1]
+    assert (
+        _match_regression_sibling_mr(
+            mrs,
+            "RHEL-300",
+            package="bind",
+            clone_root="RHEL-500",
+        )
+        == mrs[1]
+    )
 
     single = [mrs[0]]
-    assert _match_regression_sibling_mr(single, "RHEL-200") == single[0]
-    assert _match_regression_sibling_mr(single, "RHEL-200", clone_root="RHEL-100") == single[0]
+    assert _match_regression_sibling_mr(single, "RHEL-200", package="bind") is None
 
 
 def test_match_open_reproducer_mr_uses_clone_root_tag():
@@ -342,8 +1050,24 @@ def test_match_open_reproducer_mr_uses_clone_root_tag():
             "title": "bind: [RHEL-500] ymir reproducer test",
         },
     ]
-    assert _match_open_reproducer_mr(mrs, jira_issue="RHEL-200", clone_root="RHEL-100") == mrs[0]
-    assert _match_open_reproducer_mr(mrs, jira_issue="RHEL-600", clone_root="RHEL-500") == mrs[1]
+    assert (
+        _match_open_reproducer_mr(
+            mrs,
+            package="bind",
+            jira_issue="RHEL-200",
+            clone_root="RHEL-100",
+        )
+        == mrs[0]
+    )
+    assert (
+        _match_open_reproducer_mr(
+            mrs,
+            package="bind",
+            jira_issue="RHEL-600",
+            clone_root="RHEL-500",
+        )
+        == mrs[1]
+    )
 
 
 def test_discover_existing_reproducer_test_dir_prefers_clone_root_regression_path(tmp_path: Path):
@@ -460,9 +1184,9 @@ def test_match_open_reproducer_mr_by_jira_bracket():
             "description": "Also mentions RHEL-88888 in prose.",
         }
     ]
-    matched = _match_open_reproducer_mr(mrs, jira_issue="RHEL-99999")
+    matched = _match_open_reproducer_mr(mrs, package="bind", jira_issue="RHEL-99999")
     assert matched is not None
-    assert _match_open_reproducer_mr(mrs, jira_issue="RHEL-88888") is None
+    assert _match_open_reproducer_mr(mrs, package="bind", jira_issue="RHEL-88888") is None
 
 
 def test_build_mr_title_uses_cve_bracket_for_security():
@@ -492,12 +1216,14 @@ def test_build_mr_title_multi_cve_roundtrip():
 
     matched = _match_open_reproducer_mr(
         [{"url": "https://gitlab.com/a/1", "title": title}],
+        package="expat",
         cve_ids=["CVE-2026-56132"],
     )
     assert matched is not None
 
     matched2 = _match_open_reproducer_mr(
         [{"url": "https://gitlab.com/a/1", "title": title}],
+        package="expat",
         cve_ids=["CVE-2026-50219"],
     )
     assert matched2 is not None
@@ -511,15 +1237,90 @@ def test_build_mr_title_uses_jira_bracket_for_regression():
 
 def test_match_open_reproducer_mr_prefers_existing_url():
     mrs = [
-        {"url": "https://gitlab.com/a/1", "title": "other", "description": ""},
-        {"url": "https://gitlab.com/a/2", "title": "target", "description": ""},
+        {
+            "url": "https://gitlab.com/a/1",
+            "title": "expat: [CVE-2026-12345] ymir reproducer test",
+            "description": "",
+        },
+        {
+            "url": "https://gitlab.com/a/2",
+            "title": "bind: [CVE-2026-12345] ymir reproducer test",
+            "description": "",
+        },
     ]
     matched = _match_open_reproducer_mr(
         mrs,
+        package="bind",
         cve_ids=["CVE-1"],
         existing_mr_url="https://gitlab.com/a/2",
     )
     assert matched["url"] == "https://gitlab.com/a/2"
+    assert (
+        _match_open_reproducer_mr(
+            mrs,
+            package="expat",
+            cve_ids=["CVE-1"],
+            existing_mr_url="https://gitlab.com/a/2",
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_mr_target_does_not_restore_bootstrap_rejection(tmp_path: Path):
+    rejected_mr_url = "https://gitlab.com/redhat/rhel/tests/shared/-/merge_requests/10"
+    result = _output(
+        jira_issue="RHEL-10",
+        success=True,
+        package="bind",
+        reproducer_type="cve",
+        existing_mr_url=rejected_mr_url,
+    )
+    agent_input = ReproducerInputSchema(
+        jira_issue="RHEL-10",
+        package="bind",
+        cve_id="CVE-2026-12345",
+    )
+    bootstrap = r_agent.TestsCloneBootstrap(tests_clone=tmp_path)
+
+    flexmock(r_agent).should_receive("_list_open_reproducer_mrs").never()
+    mr_url, branch, matched_mr = await _resolve_reproducer_mr_target(
+        result,
+        agent_input,
+        "bind",
+        [],
+        bootstrap=bootstrap,
+    )
+
+    assert mr_url is None
+    assert branch == "reproducer/RHEL-10"
+    assert matched_mr is None
+    assert result.existing_mr_url is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_mr_target_refuses_rejected_mr_branch_collision(tmp_path: Path):
+    result = _output(
+        jira_issue="RHEL-10",
+        success=True,
+        package="bind",
+        reproducer_type="bug",
+    )
+    agent_input = ReproducerInputSchema(jira_issue="RHEL-10", package="bind")
+    bootstrap = r_agent.TestsCloneBootstrap(
+        tests_clone=tmp_path,
+        rejected_mr_url="https://gitlab.com/redhat/rhel/tests/shared/-/merge_requests/10",
+        rejected_mr_source_branch="reproducer/RHEL-10",
+    )
+
+    with pytest.raises(RuntimeError, match="Refusing to overwrite rejected open reproducer MR"):
+        await _resolve_reproducer_mr_target(
+            result,
+            agent_input,
+            "bind",
+            [],
+            bootstrap=bootstrap,
+        )
 
 
 @pytest.mark.asyncio
@@ -617,6 +1418,24 @@ async def test_resolve_reproducer_mr_target_new_branch_without_open_mr():
     assert branch == "reproducer/RHEL-221017"
     assert matched_mr is None
     assert result.adapted_existing is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_reproducer_mr_target_propagates_incomplete_listing():
+    result = _output(jira_issue="RHEL-221017", success=True, package="expat", reproducer_type="cve")
+    agent_input = ReproducerInputSchema(
+        jira_issue="RHEL-221017",
+        package="expat",
+        cve_id="CVE-2026-56132",
+    )
+
+    async def _incomplete_listing(*_args, **_kwargs):
+        raise r_agent.IncompleteReproducerMRListingError("page two failed")
+
+    flexmock(r_agent).should_receive("_list_open_reproducer_mrs").replace_with(_incomplete_listing)
+
+    with pytest.raises(r_agent.IncompleteReproducerMRListingError, match="page two failed"):
+        await _resolve_reproducer_mr_target(result, agent_input, "expat", [])
 
 
 def test_reproducer_agent_enables_context_management():
@@ -735,8 +1554,20 @@ async def test_prepare_reproducer_branch_bootstrapped_adapt_preserves_worktree(t
     assert (test_dir / "runtest.sh").read_text() == "local-adapt\n"
 
 
+@pytest.mark.parametrize(
+    ("existing_under_prefix", "test_directory_prefix"),
+    [
+        (True, "shared_pkg/exp_security"),
+        (False, "shared_pkg/exp_security"),
+        (False, None),
+    ],
+)
 @pytest.mark.asyncio
-async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Path):
+async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(
+    tmp_path: Path,
+    existing_under_prefix: bool,
+    test_directory_prefix: str | None,
+):
     working_dir = tmp_path / "Reproducer" / "RHEL-2"
     working_dir.mkdir(parents=True)
     repo = working_dir / "tests-bind"
@@ -745,7 +1576,8 @@ async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Pat
 
     async def _mock_run_tool(name, available_tools=None, **_kwargs):
         if name == "clone_repository":
-            (repo / "README").write_text("cloned\n")
+            await _git_init_with_main(repo)
+            await check_subprocess(["git", "update-ref", "refs/remotes/origin/main", "main"], cwd=repo)
             return "ok"
         if name == "list_project_merge_requests":
             return [
@@ -767,12 +1599,13 @@ async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Pat
                 comments=[],
             ).model_dump(mode="json")
         if name == "fetch_branch":
-            await _git_init_with_main(repo)
             await check_subprocess(["git", "checkout", "-b", "reproducer/RHEL-1"], cwd=repo)
             mr_dir = repo / "Security" / cve_id
+            if existing_under_prefix and test_directory_prefix:
+                mr_dir = repo / test_directory_prefix / "Security" / cve_id
             mr_dir.mkdir(parents=True)
             (mr_dir / "main.fmf").write_text("summary: on mr\n")
-            await check_subprocess(["git", "add", "Security"], cwd=repo)
+            await check_subprocess(["git", "add", str(mr_dir.relative_to(repo))], cwd=repo)
             await check_subprocess(["git", "commit", "-m", "mr test"], cwd=repo)
             return "ok"
         raise AssertionError(f"unexpected tool {name}")
@@ -784,13 +1617,126 @@ async def test_bootstrap_tests_clone_checks_out_existing_mr_branch(tmp_path: Pat
         package="bind",
         cve_id=cve_id,
     )
-    bootstrap = await _bootstrap_tests_clone(working_dir, input_data, [])
+    bootstrap = await _bootstrap_tests_clone(
+        working_dir,
+        input_data,
+        [],
+        test_directory_prefix=test_directory_prefix,
+        require_mr_changed_paths=True,
+    )
 
     assert bootstrap.existing_mr_url.endswith("/merge_requests/9")
     assert bootstrap.mr_source_branch == "reproducer/RHEL-1"
-    assert bootstrap.existing_test_directory == f"Security/{cve_id}"
+    expected_test_directory = f"Security/{cve_id}"
+    if existing_under_prefix and test_directory_prefix:
+        expected_test_directory = f"{test_directory_prefix}/{expected_test_directory}"
+    assert bootstrap.existing_test_directory == expected_test_directory
     head, _ = await check_subprocess(["git", "branch", "--show-current"], cwd=repo)
     assert head.strip() == "reproducer/RHEL-1"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_discards_mr_when_branch_has_no_matching_test(tmp_path: Path):
+    working_dir = tmp_path / "Reproducer" / "RHEL-4"
+    working_dir.mkdir(parents=True)
+    repo = working_dir / "tests-bind"
+    repo.mkdir()
+    cve_id = "CVE-2026-0002"
+    test_directory_prefix = "packages/bind"
+
+    async def _mock_run_tool(name, available_tools=None, **_kwargs):
+        if name == "clone_repository":
+            await _git_init_with_main(repo)
+            return "ok"
+        if name == "list_project_merge_requests":
+            return [
+                {
+                    "url": "https://gitlab.com/redhat/rhel/tests/shared/-/merge_requests/10",
+                    "title": f"bind: [{cve_id}] ymir reproducer test",
+                    "source_branch": "reproducer/RHEL-3",
+                }
+            ]
+        if name == "get_merge_request_details":
+            return MergeRequestDetails(
+                source_repo="https://gitlab.com/fork/tests-shared.git",
+                source_branch="reproducer/RHEL-3",
+                target_repo_name="shared",
+                target_branch="main",
+                title=f"bind: [{cve_id}] ymir reproducer test",
+                description="",
+                last_updated_at=datetime.now(UTC),
+                comments=[],
+            ).model_dump(mode="json")
+        if name == "fetch_branch":
+            await check_subprocess(["git", "checkout", "-b", "reproducer/RHEL-3"], cwd=repo)
+            unrelated_dir = repo / test_directory_prefix / "Security" / "CVE-2026-0001"
+            unrelated_dir.mkdir(parents=True)
+            (unrelated_dir / "main.fmf").write_text("summary: unrelated test\n")
+            await check_subprocess(["git", "add", test_directory_prefix], cwd=repo)
+            await check_subprocess(["git", "commit", "-m", "unrelated test"], cwd=repo)
+            return "ok"
+        raise AssertionError(f"unexpected tool {name}")
+
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    input_data = ReproducerInputSchema(jira_issue="RHEL-4", package="bind", cve_id=cve_id)
+
+    bootstrap = await _bootstrap_tests_clone(
+        working_dir,
+        input_data,
+        [],
+        test_directory_prefix=test_directory_prefix,
+    )
+
+    assert bootstrap.existing_mr_url is None
+    assert bootstrap.mr_source_branch is None
+    assert bootstrap.existing_test_directory is None
+    assert bootstrap.matched_mr is None
+    assert bootstrap.rejected_mr_url.endswith("/merge_requests/10")
+    assert bootstrap.rejected_mr_source_branch == "reproducer/RHEL-3"
+    head, _ = await check_subprocess(["git", "branch", "--show-current"], cwd=repo)
+    assert head.strip() == "main"
+    assert not (repo / test_directory_prefix / "Security" / "CVE-2026-0001").exists()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_tests_clone_uses_configured_repository_url(tmp_path: Path):
+    working_dir = tmp_path / "Reproducer" / "RHEL-3"
+    working_dir.mkdir(parents=True)
+    repository_url = "https://gitlab.com/redhat/rhel/tests/shared.git"
+    cloned_urls = []
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        if name == "clone_repository":
+            cloned_urls.append(kwargs["repository"])
+            return "ok"
+        if name == "list_project_merge_requests":
+            assert kwargs["project"] == "redhat/rhel/tests/shared"
+            return []
+        raise AssertionError(f"unexpected tool {name}")
+
+    flexmock(r_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    input_data = ReproducerInputSchema(jira_issue="RHEL-3", package="bind")
+
+    await _bootstrap_tests_clone(working_dir, input_data, [], repository_url=repository_url)
+
+    assert cloned_urls == [repository_url]
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_rejects_clone_destination_symlink_outside_issue_workspace(tmp_path: Path):
+    working_dir = tmp_path / "Reproducer" / "RHEL-3"
+    working_dir.mkdir(parents=True)
+    outside = tmp_path / "victim"
+    outside.mkdir()
+    (working_dir / "tests-bind").symlink_to(outside, target_is_directory=True)
+    flexmock(r_agent).should_receive("run_tool").never()
+
+    with pytest.raises(ValueError, match="Tests clone destination escapes issue workspace"):
+        await _bootstrap_tests_clone(
+            working_dir,
+            ReproducerInputSchema(jira_issue="RHEL-3", package="bind"),
+            [],
+        )
 
 
 # =============================================================================
@@ -968,6 +1914,38 @@ async def test_process_task_proceeds_when_no_terminal_labels(
 
 
 @pytest.mark.asyncio
+async def test_process_task_delays_retry_for_incomplete_mr_listing(
+    _mock_env_vars,
+    _mock_reproducer_config_enabled,
+    _mock_workflow_lock,
+    monkeypatch,
+):
+    monkeypatch.setenv("REPRODUCER_RETRY_DELAY_SECONDS", "12")
+    scheduled = []
+
+    async def _mock_jira_metadata(*_args, **_kwargs):
+        return [], "New"
+
+    async def _incomplete_mr_lookup(*_args, **_kwargs):
+        raise r_agent.IncompleteReproducerMRListingError("GitLab MR listing unavailable")
+
+    async def _capture_schedule(_redis, queue, payload, delay_seconds):
+        scheduled.append((queue, payload, delay_seconds))
+
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
+    flexmock(r_agent).should_receive("run_workflow").once().replace_with(_incomplete_mr_lookup)
+    flexmock(r_agent).should_receive("schedule_task").once().replace_with(_capture_schedule)
+
+    await _run_process_task(_make_reproducer_payload())
+
+    assert len(scheduled) == 1
+    queue, payload, delay_seconds = scheduled[0]
+    assert queue == RedisQueues.REPRODUCER_DELAYED_QUEUE.value
+    assert Task.model_validate_json(payload).attempts == 1
+    assert delay_seconds == 12
+
+
+@pytest.mark.asyncio
 async def test_process_task_passes_reproducer_config_to_workflow(_mock_env_vars, _mock_workflow_lock):
     config = PackageReproducerConfig(
         enabled=True,
@@ -1104,6 +2082,7 @@ def test_render_prompt_includes_package_fmf_metadata():
     )
     config = PackageReproducerConfig(
         enabled=True,
+        test_directory_prefix="packages/bind",
         fmf={
             "require": ["runtime-package"],
             "recommend": ["optional-tool"],
@@ -1121,6 +2100,29 @@ def test_render_prompt_includes_package_fmf_metadata():
     assert '"PACKAGE_SETTING": "3.3"' in prompt
     assert '"duration": "30m"' in prompt
     assert "${runtime_version}" not in prompt
+    assert "Configured test directory prefix: `packages/bind`." in prompt
+
+
+def test_render_prompt_passes_configured_test_repository_to_template(monkeypatch):
+    captured = {}
+    config = PackageReproducerConfig(
+        enabled=True,
+        test_repository="https://gitlab.com/redhat/rhel/tests/shared.git",
+        test_directory_prefix="packages/bind",
+    )
+
+    def _capture_context(_template_name, context):
+        captured["context"] = context
+        return ""
+
+    monkeypatch.setattr(r_agent, "render_template", _capture_context)
+    _render_prompt(
+        ReproducerInputSchema(jira_issue="RHEL-12345", package="bind"),
+        reproducer_config=config,
+    )
+
+    assert captured["context"].test_repository_url == config.test_repository
+    assert captured["context"].test_directory_prefix == config.test_directory_prefix
 
 
 def test_render_fmf_templates_rejects_unknown_variable():

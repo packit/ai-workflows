@@ -55,6 +55,7 @@ async def _run_from_build_step(monkeypatch, *, is_modular_issue, module_stream):
                 error=None,
             )
             state.log_result = LogOutputSchema(title="title", description="description")
+            state.backport_log = ["Prepared SRPM"]
             state.local_clone = Path("/git-repos/package")
             state.fork_url = "https://example.invalid/fork.git"
             state.update_branch = "ymir-update"

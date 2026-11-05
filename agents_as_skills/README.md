@@ -8,12 +8,10 @@ Supported clients include [Claude Code](https://docs.anthropic.com/en/docs/agent
 
 | Skill | Directory | Description |
 |-------|-----------|-------------|
-| **Triage** | [`triage/`](triage/) | Triage CVE/bug Jira issues for RHEL packages |
-| **Backport** | [`backport/`](backport/) | Cherry-pick or git-am upstream patches, verify builds, and create merge requests |
-| **Rebase** | [`rebase/`](rebase/) | Rebase a package to a new upstream version |
-| **Rebuild** | [`rebuild/`](rebuild/) | Rebuild a package in the build system |
 | **Preliminary Testing** | [`preliminary-testing/`](preliminary-testing/) | Analyze gating and OSCI results to determine preliminary testing status |
 | **Issue Verification** | [`issue-verification/`](issue-verification/) | Post-fix lifecycle management through errata creation and testing |
+| **Errata Workflow** | [`errata-workflow/`](errata-workflow/) | Advance errata through testing and release preparation |
+| **Reproducer** | [`reproducer/`](reproducer/) | Create and verify tests that reproduce bugs and CVEs |
 
 Each skill is a directory containing a `SKILL.md` file that follows the [Agent Skills specification](https://agentskills.io/specification).
 
@@ -33,16 +31,16 @@ For manual per-client setup (skill paths, MCP config), see the [Skills Installat
 
 ## How to use
 
-Triage JIRA issue:
+Analyze preliminary testing for a JIRA issue:
 
 ```
-Use the triage skill with jira_issue=RHEL-12345
+Use the preliminary-testing skill with jira_issue=RHEL-12345
 ```
 
-Backport JIRA issue:
+Verify a JIRA issue after its fix has merged:
 
 ```
-Use the backport skill with jira_issue=RHEL-12345
+Use the issue-verification skill with jira_issue=RHEL-12345
 ```
 
 Set the `DRY_RUN` environment variable or add `dry_run=true` to your prompt to avoid any updates (e.g., updating JIRA, GitLab, etc.) when executing the workflow.

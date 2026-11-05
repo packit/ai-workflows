@@ -34,7 +34,7 @@ the repo and point your client at that directory, or download individual
 REPO_URL="https://raw.githubusercontent.com/packit/ai-workflows/main/agents_as_skills"
 SKILLS_DIR=~/.claude/skills  # adjust to your client's skills directory
 
-for skill in backport rebase triage rebuild preliminary-testing issue-verification; do
+for skill in preliminary-testing issue-verification errata-workflow reproducer; do
   mkdir -p "$SKILLS_DIR/$skill"
   curl -fsSL "$REPO_URL/$skill/SKILL.md" -o "$SKILLS_DIR/$skill/SKILL.md"
 done

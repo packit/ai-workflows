@@ -54,11 +54,10 @@ Available skills:
 
 | Skill | Description |
 |-------|-------------|
-| **Triage** | Triage CVE/bug Jira issues for RHEL packages |
-| **Backport** | Cherry-pick or git-am upstream patches, verify builds, and create merge requests |
-| **Rebase** | Rebase a package to a new upstream version |
-| **Rebuild** | Rebuild a package in the build system |
 | **Preliminary Testing** | Analyze gating and OSCI results to determine preliminary testing status |
+| **Issue Verification** | Manage issues from merged MRs through errata creation and testing |
+| **Errata Workflow** | Advance errata through testing and release preparation |
+| **Reproducer** | Create and verify tests that reproduce bugs and CVEs |
 
 For installation instructions (skill setup and MCP tool configuration), see the [Skills Installation Guide](skills_installation.md).
 

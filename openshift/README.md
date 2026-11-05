@@ -271,12 +271,15 @@ When `BUILD_BACKEND=konflux`, the MCP gateway authenticates to Konflux as the
 is bound and **expires every 24h**, so it is rotated automatically by a CronJob
 (`konflux-token-rotation`) that lives in the Konflux tenant tree
 (`konflux-release-data`, synced by Argo) -- NOT in this repo. See that tenant's
-`cronjobs/README.md` for the mint side.
+`cronjobs/konflux-token-rotation-cronjob.yaml` for the mint side.
 
 The CronJob mints a fresh token on `kflux-rhel-p01` and **pushes it into this
 project** as the Opaque Secret `konflux-bot-0-token` (key `token`). The gateway
 mounts that Secret at `KONFLUX_TOKEN_FILE` and reads it fresh per build, so
 rotation needs no gateway restart.
+The `ymir-tenant` rotation pod must reach the gateway cluster API on port
+6443. Confirm this network path when moving the gateway to another cluster;
+updating the push kubeconfig alone does not establish connectivity.
 
 > `konflux-bot-0-token` is created and kept up to date by the CronJob -- do not
 > create it by hand. `deploy-oc.sh` is apply-only (no `delete`, no `--prune`),
@@ -342,7 +345,7 @@ where the CronJob mounts it:
 
 ```bash
 # Still logged in to the gateway cluster:
-SERVER=https://api.gpc.ocp-hub.prod.psi.redhat.com:6443
+SERVER=https://api.prod-scale-spoke1-dc-rdu3.prod-scale-mgmthub1-dc-rdu3.itup.redhat.com:6443
 NS=jotnar-ymir--jotnar-ymir
 TOKEN=$(oc -n "$NS" get secret konflux-token-writer-token -o jsonpath='{.data.token}' | base64 -d)
 CA=$(oc -n "$NS" get secret konflux-token-writer-token -o jsonpath='{.data.ca\.crt}')  # already base64
@@ -379,13 +382,12 @@ oc -n ymir-tenant logs job/rotate-test     # expect "Rotation complete."
 oc -n jotnar-ymir--jotnar-ymir get secret konflux-bot-0-token
 ```
 
-### Gateway wiring (pending)
+### Gateway wiring
 
-To actually use the rotated token the gateway Deployment must mount
-`konflux-bot-0-token` and set `BUILD_BACKEND=konflux` +
-`KONFLUX_TOKEN_FILE=/home/mcp/konflux-token` (plus `KONFLUX_API_URL`,
-`KUBEARCHIVE_API_URL`, `KONFLUX_PIPELINE_URL`). Until that lands the gateway
-stays on the Copr backend and the Secret is simply kept fresh.
+`deployment-mcp-gateway.yml` mounts `konflux-bot-0-token` as a directory and
+sets `KONFLUX_TOKEN_FILE=/home/mcp/konflux/token`, together with
+`KONFLUX_API_URL`, `KUBEARCHIVE_API_URL`, and `KONFLUX_PIPELINE_URL`. The
+gateway stays on Copr until `BUILD_BACKEND=konflux` is selected separately.
 
 ## API Authentication (OIDC)
 

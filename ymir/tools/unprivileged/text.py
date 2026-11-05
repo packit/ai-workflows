@@ -1,6 +1,5 @@
 import asyncio
 import re
-import weakref
 from pathlib import Path
 
 from beeai_framework.context import RunContext
@@ -11,18 +10,7 @@ from pydantic import BaseModel, Field
 from ymir.common.utils import get_absolute_path
 from ymir.common.validators import NonEmptyString
 from ymir.tools.base import CloneableTool as Tool
-
-# Parallel tool calls run concurrently, so read-modify-write edits on the same
-# file must be serialized or they overwrite (or truncate) each other.
-_file_locks: weakref.WeakValueDictionary[Path, asyncio.Lock] = weakref.WeakValueDictionary()
-
-
-def _file_lock(path: Path) -> asyncio.Lock:
-    key = path.resolve()
-    lock = _file_locks.get(key)
-    if lock is None:
-        lock = _file_locks[key] = asyncio.Lock()
-    return lock
+from ymir.tools.base import file_lock
 
 
 class CreateToolInput(BaseModel):
@@ -52,7 +40,7 @@ class CreateTool(Tool[CreateToolInput, ToolRunOptions, StringToolOutput]):
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:
-            async with _file_lock(file_path):
+            async with file_lock(file_path):
                 await asyncio.to_thread(file_path.write_text, tool_input.content)
         except Exception as e:
             raise ToolError(f"Failed to create file: {e}") from e
@@ -102,7 +90,7 @@ class ViewTool(Tool[ViewToolInput, ToolRunOptions, StringToolOutput]):
         path = get_absolute_path(tool_input.path, self)
         try:
             if path.is_file():
-                async with _file_lock(path):
+                async with file_lock(path):
                     content = await asyncio.to_thread(path.read_text)
                 lines = content.splitlines(keepends=True)
                 start = tool_input.offset
@@ -141,7 +129,7 @@ class InsertTool(Tool[InsertToolInput, ToolRunOptions, StringToolOutput]):
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:
-            async with _file_lock(file_path):
+            async with file_lock(file_path):
                 lines = (await asyncio.to_thread(file_path.read_text)).splitlines(keepends=True)
                 lines.insert(tool_input.line, tool_input.new_string + "\n")
                 await asyncio.to_thread(file_path.write_text, "".join(lines))
@@ -180,7 +168,7 @@ class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOption
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:
-            async with _file_lock(file_path):
+            async with file_lock(file_path):
                 content = await asyncio.to_thread(file_path.read_text)
                 if tool_input.insert_after_substring not in content:
                     raise ToolError("No insertion was done because the specified substring wasn't present")
@@ -231,7 +219,7 @@ class StrReplaceTool(Tool[StrReplaceToolInput, ToolRunOptions, StringToolOutput]
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:
-            async with _file_lock(file_path):
+            async with file_lock(file_path):
                 content = await asyncio.to_thread(file_path.read_text)
                 if (count := content.count(tool_input.old_string)) == 0:
                     raise ToolError(
@@ -282,7 +270,7 @@ class SearchTextTool(Tool[SearchTextToolInput, ToolRunOptions, StringToolOutput]
         file_path = get_absolute_path(tool_input.file, self)
         try:
             pattern = re.compile(tool_input.pattern)
-            async with _file_lock(file_path):
+            async with file_lock(file_path):
                 content = await asyncio.to_thread(file_path.read_text)
             result = [
                 f"{num + 1}:{line}"

@@ -1,7 +1,9 @@
 import asyncio
 import copy
 import logging
+import weakref
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, ClassVar, Self
 
 from beeai_framework.context import Run
@@ -53,6 +55,19 @@ def tool_error_context(
 
 def make_additional_context(**additional_context) -> dict[str, str]:
     return {k: redact_credentials(str(v)) for k, v in additional_context.items()}
+
+
+# Parallel tool calls run concurrently, so read-modify-write edits on the same
+# file must be serialized or they overwrite (or truncate) each other.
+_file_locks: weakref.WeakValueDictionary[Path, asyncio.Lock] = weakref.WeakValueDictionary()
+
+
+def file_lock(path: Path) -> asyncio.Lock:
+    key = path.resolve()
+    lock = _file_locks.get(key)
+    if lock is None:
+        lock = _file_locks[key] = asyncio.Lock()
+    return lock
 
 
 class CloneableTool(Tool[TInput, TRunOptions, TOutput]):

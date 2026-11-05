@@ -129,6 +129,7 @@ async def test_mr_description_includes_build_url(monkeypatch, tmp_path):
     flexmock(backport_agent).should_receive("mcp_tools").replace_with(gateway)
     flexmock(backport_agent).should_receive("create_log_agent").and_return(None)
     flexmock(backport_agent).should_receive("get_mock_local_tool_env").and_return(None)
+
     async def _fake_needs_zstream_target_label(*_a, **_kw):
         return False
 

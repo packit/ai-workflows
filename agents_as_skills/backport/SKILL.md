@@ -144,6 +144,9 @@ If the backport fails (success=false), skip to **Step 10: Comment in JIRA** with
 ### Step 4: Run Build
 
 1. Call `build_package` with the SRPM path from Step 3, `dist_git_branch`, and `jira_issue`.
+   Modular issues are built the same way as non-modular ones. When a modular
+   `module:stream` was parsed from the Jira summary (for example `postgresql:16`),
+   pass it as `module_stream` so Copr enables that stream in the buildroot.
 2. If the build **succeeds** -> proceed to Step 5.
 3. If the build **timed out** (`is_timeout` = true) -> proceed to Step 5 (treat as success).
 4. If the build has an **infrastructure error** (`is_infra_error` = true) -> set `success=false` with the infrastructure error, skip to Step 10.
@@ -273,6 +276,11 @@ Then go back to **Step 6** to re-stage changes (the changelog was just modified)
 
      </details>
 
+     <build section, when a Copr build URL is known or the package is modular:
+       Copr build link, with a note that Copr projects are temporary and the link may expire.
+       For a modular package, also note the `module:stream` enabled in the buildroot,
+       or that the stream could not be determined and the build ran without one.>
+
      ---
 
      > **Warning: AI-Generated MR**: Created by Ymir AI assistant. AI may make mistakes,
@@ -328,6 +336,7 @@ Skip this step if any of the following are true:
 - No `merge_request_url` was created
 - The backport result was not successful
 - The MR was not newly created (it was reused from a prior attempt)
+- The issue is modular
 
 Otherwise, attempt to submit a consolidation job for `{{package}}` on `{{dist_git_branch}}`. This checks whether the package's rules (ymir.yaml, fetched via `get_maintainer_rules`) have a consolidation section configured and, if so, submits a job to consolidate related MRs.
 

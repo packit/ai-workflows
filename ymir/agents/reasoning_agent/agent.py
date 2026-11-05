@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from typing import Any
 
-from beeai_framework.agents import AgentExecutionConfig, AgentMeta, AgentOptions, BaseAgent
+from beeai_framework.agents import AgentExecutionConfig, AgentMeta, BaseAgent
 from beeai_framework.agents.requirement.agent import RequirementAgentRequirement
 from beeai_framework.agents.tool_calling.utils import ToolCallChecker, ToolCallCheckerConfig
 from beeai_framework.backend import AnyMessage
@@ -28,6 +28,7 @@ from ymir.agents.reasoning_agent.context_management import (
 from ymir.agents.reasoning_agent.events import reasoning_agent_event_types
 from ymir.agents.reasoning_agent.prompts import ReasoningAgentTaskPromptInput
 from ymir.agents.reasoning_agent.types import (
+    ReasoningAgentOptions,
     ReasoningAgentOutput,
     ReasoningAgentTemplateFactory,
     ReasoningAgentTemplates,
@@ -100,7 +101,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
 
     @runnable_entry
     async def run(
-        self, input: str | list[AnyMessage], /, **kwargs: Unpack[AgentOptions]
+        self, input: str | list[AnyMessage], /, **kwargs: Unpack[ReasoningAgentOptions]
     ) -> ReasoningAgentOutput:
         runner = self.runner_cls(
             llm=self._llm,
@@ -119,6 +120,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
             unconstrained=self._unconstrained,
             enable_context_management=self._enable_context_management,
             context_protected_tool_names=self._context_protected_tool_names,
+            validate_output=kwargs.get("validate_output"),
         )
         new_messages = self._process_input(
             input,

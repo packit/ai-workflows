@@ -82,7 +82,7 @@ bot-0` cannot mint its own token anyway; see below.)
 
 1. Log in to the **gateway** cluster (where the rotated Secret lives):
    ```bash
-   oc login https://api.gpc.ocp-hub.prod.psi.redhat.com:6443
+   oc login https://api.prod-scale-spoke1-dc-rdu3.prod-scale-mgmthub1-dc-rdu3.itup.redhat.com:6443
    ```
 2. Pull the token into the file the gateway container reads:
    ```bash
@@ -96,8 +96,10 @@ are logged in to the gateway cluster, then decodes
 host ownership, the script uses `podman unshare` to update the same file without
 changing ownership. The next build picks it up. The delivered
 token is rotated roughly every 12h, so re-run the command whenever a build
-starts returning 401. Override the defaults with `GATEWAY_API_URL`,
-`GATEWAY_NAMESPACE`, `SECRET_NAME`, or `OC` if your setup differs.
+starts returning 401. Logins through the cluster's direct API address
+(`https://10.5.229.33:6443`) are also accepted. Override the defaults with
+`GATEWAY_API_URL`, `GATEWAY_API_ALT_URL`, `GATEWAY_NAMESPACE`, `SECRET_NAME`,
+or `OC` if your setup differs.
 
 `konflux-bot-0` **cannot mint its own token** (platform RBAC forbids it);
 production mints and rotates it with an in-cluster minter CronJob, which is
@@ -107,3 +109,5 @@ exactly the token you pull here.
 
 Automated via a CronJob in `kflux-rhel-p01/ymir-tenant`, defined in the Konflux
 tenant GitOps repository (`konflux-release-data`).
+Its delivery kubeconfig must target the new gateway cluster's API, and the
+Konflux tenant must be able to connect to that API on port 6443.

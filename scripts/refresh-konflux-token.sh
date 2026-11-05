@@ -18,7 +18,9 @@ set -euo pipefail
 OC="${OC:-oc}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOKEN_FILE="${KONFLUX_TOKEN_HOST:-$REPO_ROOT/.secrets/konflux/token}"
-GATEWAY_API_URL="${GATEWAY_API_URL:-https://api.gpc.ocp-hub.prod.psi.redhat.com:6443}"
+GATEWAY_API_URL="${GATEWAY_API_URL:-https://api.prod-scale-spoke1-dc-rdu3.prod-scale-mgmthub1-dc-rdu3.itup.redhat.com:6443}"
+# The hosted cluster's direct API address is also used by existing oc logins.
+GATEWAY_API_ALT_URL="${GATEWAY_API_ALT_URL-https://10.5.229.33:6443}"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-jotnar-ymir--jotnar-ymir}"
 SECRET_NAME="${SECRET_NAME:-konflux-bot-0-token}"
 SECRET_KEY="${SECRET_KEY:-token}"
@@ -33,7 +35,7 @@ if ! "$OC" whoami >/dev/null 2>&1; then
 fi
 
 server="$("$OC" whoami --show-server)"
-if [[ -n "$GATEWAY_API_URL" && "$server" != "$GATEWAY_API_URL" ]]; then
+if [[ "$server" != "$GATEWAY_API_URL" && "$server" != "$GATEWAY_API_ALT_URL" ]]; then
   echo "ERROR: logged in to '$server' but the token lives on the gateway cluster." >&2
   echo "  $OC login $GATEWAY_API_URL" >&2
   exit 1

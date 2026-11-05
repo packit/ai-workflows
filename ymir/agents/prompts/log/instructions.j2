@@ -53,8 +53,13 @@ of changes performed, do the following:
    provided, return it verbatim even when it exceeds 80 characters. Otherwise, the
    generated title should be descriptive but shouldn't be longer than 80 characters.
 
-5. Summarize the changes in a short paragraph that will be used as commit message
-   and merge request description. Line length shouldn't exceed 80 characters.
+5. Summarize the changes in a single short paragraph (at most 6 lines) that will be
+   used as commit message and merge request description. Line length shouldn't
+   exceed 80 characters. Describe the change itself in the imperative, e.g.
+   "Backport upstream commit abc123def456 to fix CVE-XXXX-YYYY, a ... The patch ..."
+   or "Rebase to version X.Y.Z ...". Never write in the first person, do not
+   describe your own actions or the changelog entry, and do not use lists,
+   headings or labels.
    Do NOT include any Jira issue references (e.g. RHEL-XXXXX) in the title or
    description — Jira references are appended separately.
 

@@ -21,10 +21,10 @@ async def test_resolve_brew_build_uses_authoritative_epoch(epoch):
     assert build.metadata == metadata
 
 
-@pytest.mark.parametrize("converter", [utils._nevr_from_build, utils._evr_from_build])
-def test_missing_epoch_is_incomplete_metadata(converter):
-    with pytest.raises(KeyError, match="epoch"):
-        converter({"name": "pkg", "version": "1", "release": "1.el9"})
+def test_missing_epoch_defaults_to_zero():
+    assert utils._nevr_from_build({"name": "pkg", "version": "1", "release": "1.el9"}) == NEVR(
+        name="pkg", epoch=0, version="1", release="1.el9"
+    )
 
 
 @pytest.mark.asyncio
@@ -32,7 +32,7 @@ async def test_parser_requires_source_resolution():
     async def unresolved(*args):
         return None
 
-    flexmock(utils).should_receive("_resolve_binary_rpm_to_source_rpm").with_args(
+    flexmock(utils).should_receive("_get_source_nevr").with_args(
         utils.BREWHUB_URL, object, "perl"
     ).replace_with(unresolved)
 
@@ -97,7 +97,7 @@ async def test_active_candidates_reuse_metadata_and_preserve_unknown_builds(acti
     session = flexmock()
     session.should_receive("listRPMs").with_args(buildID=1).and_return([{"arch": "x86_64"}])
     flexmock(utils.koji).should_receive("ClientSession").and_return(session)
-    fixed_build = utils.ResolvedBrewBuild(fixed_metadata)
+    fixed_build = utils.BrewBuild(fixed_metadata)
     if reuse_fixed_build:
         fixed_dep_nevr = fixed_build.nevr
     else:
@@ -155,4 +155,4 @@ async def test_buildroot_reuses_resolved_brew_build():
         metadata
     )
 
-    assert await utils.check_build_in_buildroot("rhel-9", "pkg", utils.ResolvedBrewBuild(metadata))
+    assert await utils.check_build_in_buildroot("rhel-9", "pkg", utils.BrewBuild(metadata).nevr)

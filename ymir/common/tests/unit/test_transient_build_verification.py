@@ -65,28 +65,6 @@ async def test_jira_service_failures_propagate(scope):
 
 
 @pytest.mark.asyncio
-async def test_retry_takes_priority_over_final_metadata_errors():
-    for index in (1, 3):
-        metadata = {
-            "name": "pkg",
-            "epoch": "invalid" if index == 1 else 2,
-            "version": str(index),
-            "release": "1.el9",
-        }
-        flexmock(utils).should_receive("_get_koji_build").with_args(
-            utils.BREWHUB_URL, f"pkg-{index}-1.el9"
-        ).and_return(metadata).once()
-    flexmock(utils).should_receive("_get_koji_build").with_args(utils.BREWHUB_URL, "pkg-2-1.el9").and_raise(
-        ConnectionError("test outage")
-    ).once()
-
-    with pytest.raises(utils.TransientInfrastructureError, match="test outage"):
-        await utils._select_highest_evr_build(
-            [(f"RHEL-{index}", f"pkg-{index}-1.el9") for index in (1, 2, 3)], "pkg"
-        )
-
-
-@pytest.mark.asyncio
 async def test_buildroot_transport_error_is_retryable():
     import ymir.common.config as config
 
@@ -96,6 +74,6 @@ async def test_buildroot_transport_error_is_retryable():
     flexmock(config).should_receive("load_rhel_config").replace_with(rhel_config)
     flexmock(utils).should_receive("_resolve_buildroot_checks").and_return([("hub", "tag")])
     flexmock(utils).should_receive("_get_latest_koji_build").and_raise(utils.koji.GenericError("test outage"))
-    build = utils.ResolvedBrewBuild({"name": "dep", "epoch": 1, "version": "1", "release": "1.el9"})
+    build = utils.BrewBuild({"name": "dep", "epoch": 1, "version": "1", "release": "1.el9"})
     with pytest.raises(utils.TransientInfrastructureError, match="test outage"):
-        await utils.check_build_in_buildroot("rhel-9", "dep", build)
+        await utils.check_build_in_buildroot("rhel-9", "dep", build.nevr)

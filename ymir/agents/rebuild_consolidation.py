@@ -30,6 +30,7 @@ from ymir.common.utils import (
     FIXED_IN_BUILD_CUSTOM_FIELD,
     InvalidDependencyDataError,
     check_build_in_buildroot,
+    resolve_brew_build,
 )
 
 logger = logging.getLogger(__name__)
@@ -215,10 +216,16 @@ async def find_rebuild_siblings(
                         )
                         fib = dep_details.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
                         # fix_version is already normalized by run_triage_analysis
-                        if fib and not await check_build_in_buildroot(
+                        fib_build = await resolve_brew_build(fib) if fib else None
+                        if fib and fib_build is None:
+                            logger.warning(
+                                "Sibling %s: dependency build %s was not found in Brew", candidate_key, fib
+                            )
+                            continue
+                        if fib_build and not await check_build_in_buildroot(
                             target_branch,
                             analysis.dependency_component,
-                            fib,
+                            fib_build.nevr,
                             fix_version=rebuild_data.fix_version or "",
                         ):
                             logger.info(

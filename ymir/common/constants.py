@@ -183,6 +183,14 @@ class JiraLabels(Enum):
     APPLICABILITY_CONFIDENCE_MEDIUM = "ymir_applicability_confidence_medium"
     APPLICABILITY_CONFIDENCE_HIGH = "ymir_applicability_confidence_high"
 
+    # Terminal triage decisions for packages configured with
+    # `auto_processing.mode: triage_only`. Unlike the labels above, these do
+    # not imply a queued downstream task, so they are NOT in-flight labels.
+    # A maintainer adds `ymir_todo` to run the fix pipeline.
+    TRIAGED_DEFERRED_BACKPORT = "ymir_triaged_deferred_backport"
+    TRIAGED_DEFERRED_REBASE = "ymir_triaged_deferred_rebase"
+    TRIAGED_DEFERRED_REBUILD = "ymir_triaged_deferred_rebuild"
+
     # Applied when package maintainers must create a missing internal
     # z-stream branch before Ymir can continue processing the issue.
     MANUAL_BRANCH_NEEDED = "ymir_manual_branch_needed"
@@ -240,6 +248,18 @@ class JiraLabels(Enum):
     # TRIAGE_IN_PROGRESS on enqueue.
     TODO = "ymir_todo"
 
+    # Per-issue counterpart of TODO: run triage only and defer the fix, even when
+    # the package's ymir.yaml does not set auto_processing.mode: triage_only.
+    # Adding TODO later runs the full pipeline.
+    TODO_TRIAGE = "ymir_todo_triage"
+
+    # Persisted intent marker for a per-issue triage-only request. Set when
+    # TODO_TRIAGE is consumed and kept across automatic re-entry (sweep
+    # re-queue, crash retry) so a postponement or a lost task does not silently
+    # start the fix pipeline. The fetcher removes it when it consumes TODO,
+    # which is the explicit request for the full pipeline.
+    TRIAGE_ONLY = "ymir_triage_only"
+
     # When issue has been postponed too many times it must be marked as abandoned
     ABANDONED = "ymir_abandoned"
 
@@ -247,6 +267,15 @@ class JiraLabels(Enum):
     def all_labels(cls) -> set[str]:
         """Return all Ymir labels for cleanup operations"""
         return {label.value for label in cls}
+
+    @classmethod
+    def deferred_triage_labels(cls) -> set[str]:
+        """Return the terminal labels used when triage-only mode defers the fix."""
+        return {
+            cls.TRIAGED_DEFERRED_BACKPORT.value,
+            cls.TRIAGED_DEFERRED_REBASE.value,
+            cls.TRIAGED_DEFERRED_REBUILD.value,
+        }
 
     @classmethod
     def postponement_labels(cls) -> set[str]:

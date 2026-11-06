@@ -97,15 +97,20 @@ class SweepStrategy(ABC):
         issue_key: str,
         redis_conn: redis.Redis,
         comment: str | None = None,
+        triage_only: bool = False,
     ) -> None:
         """Push issue to triage queue, then remove the postponement label.
+
+        ``triage_only`` preserves a per-issue ``ymir_todo_triage`` request:
+        the re-triage must not start the fix pipeline just because the issue
+        was unblocked.
 
         Redis is written first so that a subsequent Jira API failure leaves
         the issue labelled (retried on the next sweep) rather than
         unlabelled but missing from the queue.  The comment is posted
         atomically with the label removal when provided.
         """
-        task = Task.from_issue(issue_key)
+        task = Task.from_issue(issue_key, triage_only=triage_only)
         await fix_await(redis_conn.lpush(RedisQueues.TRIAGE_QUEUE.value, task.to_json()))
         add_issue_label(issue_key, JiraLabels.TRIAGE_IN_PROGRESS.value)
         remove_issue_label(issue_key, self.label.value, comment=comment)
@@ -171,7 +176,12 @@ class SweepStrategy(ABC):
                 result = await self.is_unblocked(issue, comment_data)
 
                 if result.action == "unblocked":
-                    await self.on_unblock(issue_key, redis_conn, comment=result.detail)
+                    await self.on_unblock(
+                        issue_key,
+                        redis_conn,
+                        comment=result.detail,
+                        triage_only=JiraLabels.TRIAGE_ONLY.value in issue.labels,
+                    )
                     unblocked += 1
                 elif result.action == "transitioned":
                     transitioned += 1

@@ -1,3 +1,6 @@
+import json
+from contextlib import asynccontextmanager
+
 import pytest
 from flexmock import flexmock
 
@@ -7,11 +10,13 @@ from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
     build_rebase_siblings_jql,
     changelog_entry_headers,
+    check_and_queue_primary_if_ready,
     find_triaged_rebase_siblings,
     has_new_latest_changelog_entry,
+    sibling_link_is_stale,
     uses_autochangelog,
 )
-from ymir.common.constants import JiraLabels
+from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import ConsolidatedIssue, RebaseData
 from ymir.common.utils import extract_text_from_adf
 
@@ -216,6 +221,9 @@ def test_build_rebase_siblings_jql():
     assert '"ymir_triaged_not_affected"' in jql
     assert '"ymir_triaged_backport"' in jql
     assert '"ymir_triaged_rebuild"' in jql
+    assert '"ymir_triaged_deferred_rebase"' in jql
+    assert '"ymir_triaged_deferred_backport"' in jql
+    assert '"ymir_triaged_deferred_rebuild"' in jql
     assert '"ymir_triaged_postponed"' in jql
     assert 'status in ("New", "Planning")' in jql
 
@@ -263,6 +271,9 @@ def test_build_rebase_siblings_jql_excludes_correct_labels():
     assert '"ymir_triaged_backport"' in jql
     assert '"ymir_triaged_rebuild"' in jql
     assert '"ymir_triaged_rebase"' in jql
+    assert '"ymir_triaged_deferred_rebase"' in jql
+    assert '"ymir_triaged_deferred_backport"' in jql
+    assert '"ymir_triaged_deferred_rebuild"' in jql
     assert '"ymir_triaged_postponed"' in jql
 
     # Completion labels (non-retriable)
@@ -640,3 +651,170 @@ async def test_find_triaged_rebase_siblings_requires_exact_primary_key(monkeypat
         available_tools=[],
     )
     assert siblings == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "labels", "expected"),
+    [
+        ("Closed", [], True),
+        ("New", [JiraLabels.REBASED.value], True),
+        ("New", [JiraLabels.TRIAGED_DEFERRED_REBASE.value], True),
+        # A primary that stopped without producing a rebase will never collect
+        # its siblings either.
+        ("New", [JiraLabels.TRIAGE_ERRORED.value], True),
+        ("New", [JiraLabels.TRIAGED.value], True),
+        ("New", [JiraLabels.TRIAGED_BACKPORT.value], True),
+        ("New", [JiraLabels.TRIAGED_REBUILD.value], True),
+        ("New", [JiraLabels.WAITING_FOR_SIBLINGS.value], False),
+    ],
+)
+async def test_sibling_link_is_stale_follows_primary_state(monkeypatch, status, labels, expected):
+    async def run_tool(name, **kwargs):
+        assert name == "get_jira_details"
+        assert kwargs["issue_key"] == "RHEL-100"
+        return {"fields": {"status": {"name": status}, "labels": labels}}
+
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    assert await sibling_link_is_stale("RHEL-100", []) is expected
+
+
+@pytest.mark.asyncio
+async def test_sibling_link_is_stale_propagates_lookup_errors(monkeypatch):
+    """The caller decides whether an unreadable primary defers or fails the run."""
+
+    async def run_tool(*_args, **_kwargs):
+        raise Exception("MCP Gateway unreachable")
+
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    with pytest.raises(Exception, match="MCP Gateway unreachable"):
+        await sibling_link_is_stale("RHEL-100", [])
+
+
+@pytest.mark.asyncio
+async def test_primary_requeue_preserves_triage_only_intent(monkeypatch):
+    """A waiting primary re-queued by its last sibling must keep its own intent.
+
+    Siblings inherit ``user_triggered`` from the run that queued them, so without
+    reading the primary's labels the re-triage would silently drop a
+    per-issue triage-only request and start the fix.
+    """
+    pushed = []
+
+    async def run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            # An unrelated in-progress issue must neither block nor shadow the
+            # primary's labels (the pending-sibling scan reuses local names).
+            return [
+                {
+                    "key": "RHEL-300",
+                    "fields": {
+                        "labels": [JiraLabels.TRIAGE_IN_PROGRESS.value],
+                        "comment": {"comments": []},
+                    },
+                }
+            ]
+        if kwargs["issue_key"] == "RHEL-200":
+            return {
+                "fields": {
+                    "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]}
+                }
+            }
+        return {
+            "fields": {
+                "labels": [
+                    JiraLabels.WAITING_FOR_SIBLINGS.value,
+                    JiraLabels.TRIAGE_ONLY.value,
+                ],
+                "components": [{"name": "bash"}],
+                "fixVersions": [{"name": "rhel-10.3.z"}],
+            }
+        }
+
+    async def record(*_args, **_kwargs):
+        return None
+
+    class FakeRedis:
+        async def lpush(self, queue, payload):
+            pushed.append((queue, payload))
+
+    @asynccontextmanager
+    async def fake_redis_client(_url):
+        yield FakeRedis()
+
+    async def fake_fix_await(value):
+        return await value
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
+    monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
+    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
+    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+
+    await check_and_queue_primary_if_ready(
+        sibling_issue="RHEL-200", available_tools=[], dry_run=False, user_triggered=True
+    )
+
+    assert len(pushed) == 1
+    queue, payload = pushed[0]
+    assert queue == RedisQueues.TRIAGE_QUEUE.value
+    assert json.loads(payload)["triage_only"] is True
+
+
+@pytest.mark.asyncio
+async def test_queued_sibling_keeps_its_triage_only_marker(monkeypatch):
+    """A sibling queued by a user-triggered primary keeps its own triage-only intent.
+
+    The queued task inherits ``user_triggered`` from the primary, which on its own
+    selects full processing and deletes the persisted marker.
+    """
+    pushed = []
+
+    async def run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            return [{"key": "RHEL-400", "fields": {"labels": []}}]
+        if name == "check_cve_triage_eligibility":
+            return {"is_cve": True, "eligibility": "immediately", "reason": "tracked"}
+        raise AssertionError(f"unexpected tool {name}")
+
+    async def get_metadata(_issue_key):
+        return [JiraLabels.TRIAGE_ONLY.value], None
+
+    async def record(*_args, **_kwargs):
+        return None
+
+    class FakeRedis:
+        async def lpush(self, queue, payload):
+            pushed.append((queue, payload))
+
+    @asynccontextmanager
+    async def fake_redis_client(_url):
+        yield FakeRedis()
+
+    async def fake_fix_await(value):
+        return await value
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
+    monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
+    monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
+    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
+    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+
+    queued = await rebase_consolidation.queue_siblings_for_triage(
+        primary_issue="RHEL-100",
+        rebase_data=RebaseData(
+            package="bash", version="5.2", jira_issue="RHEL-100", fix_version="rhel-10.3.z"
+        ),
+        available_tools=[],
+        user_triggered=True,
+    )
+
+    assert queued == 1
+    queue, payload = pushed[0]
+    assert queue == RedisQueues.TRIAGE_QUEUE_TODO.value
+    task = json.loads(payload)
+    assert task["triage_only"] is True
+    assert task["user_triggered"] is True

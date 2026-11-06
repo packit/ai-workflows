@@ -276,6 +276,34 @@ async def test_check_zstream_pending_triage_terminal_excluded():
 
 
 @pytest.mark.asyncio
+async def test_check_zstream_pending_triage_excludes_deferred_labels_in_jql():
+    """Deferred clones must be excluded by the query itself.
+
+    The mocked search returns pre-filtered results, so only asserting the returned
+    keys would let a removed exclusion pass unnoticed.
+    """
+    captured_jql = {}
+
+    async def capture_run(*_args, **kwargs):
+        captured_jql["jql"] = kwargs["input"]["jql"]
+        return JSONToolOutput(result=[])
+
+    flexmock(SearchJiraIssuesTool).should_receive("run").replace_with(capture_run).once()
+    flexmock(jira_tools).should_receive("load_rhel_config").and_return(
+        _create_async_return(RHEL_CONFIG)
+    ).once()
+
+    await _check_zstream_pending_triage(
+        "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
+    )
+
+    jql = captured_jql["jql"]
+    assert 'labels != "ymir_triaged_deferred_backport"' in jql
+    assert 'labels != "ymir_triaged_deferred_rebase"' in jql
+    assert 'labels != "ymir_triaged_deferred_rebuild"' in jql
+
+
+@pytest.mark.asyncio
 async def test_check_zstream_pending_triage_none_found():
     """No pending Z-stream clones exist."""
     search_result = []

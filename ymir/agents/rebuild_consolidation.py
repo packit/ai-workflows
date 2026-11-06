@@ -46,6 +46,7 @@ def build_rebuild_siblings_jql(
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBASE.value,
+            *JiraLabels.deferred_triage_labels(),
         ],
         downstream_component=downstream_component,
     )

@@ -25,6 +25,7 @@ from ymir.tools.privileged.gitlab import (
     ForkRepositoryTool,
     GetAuthorizedCommentsFromMergeRequestTool,
     GetFailedPipelineJobsFromMergeRequestTool,
+    GetMergeRequestCommitMessagesTool,
     GetMergeRequestDiscussionsTool,
     GetPipelineJobTraceTool,
     GetRemoteBranchHeadTool,
@@ -1954,6 +1955,41 @@ async def test_get_merge_request_discussions():
     assert result[0].body == "<!--RESULTS_COMMENT-->..."
     assert result[1].discussion_id == "d2"
     assert result[1].resolvable is False
+
+
+@pytest.mark.asyncio
+async def test_get_merge_request_commit_messages():
+    merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/123"
+
+    commits = [
+        flexmock(message="Fix a thing\n\nResolves: RHEL-111\n"),
+        flexmock(message=None),
+        flexmock(message="Another\n\nResolves: RHEL-222\n"),
+    ]
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url="https://gitlab.com/redhat/centos-stream/rpms/bash"
+    ).and_return(
+        flexmock()
+        .should_receive("get_pr")
+        .with_args(123)
+        .and_return(
+            flexmock(
+                _raw_pr=flexmock().should_receive("commits").with_args(get_all=True).and_return(commits).mock()
+            )
+        )
+        .mock()
+    )
+
+    result = (
+        await GetMergeRequestCommitMessagesTool().run(input={"merge_request_url": merge_request_url})
+    ).result
+
+    assert result == [
+        "Fix a thing\n\nResolves: RHEL-111\n",
+        "",
+        "Another\n\nResolves: RHEL-222\n",
+    ]
 
 
 @pytest.mark.asyncio

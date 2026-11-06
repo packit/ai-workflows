@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+import re
 
 import pytest
 from flexmock import flexmock
@@ -13,6 +14,7 @@ from ymir.agents.mr_testing_analyst_agent import (
     _extract_linked_issues,
     run_mr_testing_analyst,
 )
+from ymir.common.models import ErrorListEntry, Task
 from ymir.tools.privileged.mr_testing import fold_comment_body
 
 _EMPTY_PARSE_MR_TEST_RESULTS = {
@@ -52,10 +54,53 @@ _DEFAULT_PARSE_OSCI = {
         ("resolves: rhel-999", ["RHEL-999"]),
         ("Resolves: RHEL-1\nResolves: RHEL-1", ["RHEL-1"]),
         ("", []),
+        ("Resolves: RHEL-1, RHEL-2", ["RHEL-1", "RHEL-2"]),
+        ("See RHEL-5 for details", []),
     ],
 )
 def test_extract_linked_issues(description, expected):
     assert _extract_linked_issues(description) == expected
+
+
+def test_extract_linked_issues_from_commit_messages_and_description():
+    commits = [
+        "Rebase to 2.0\n\nResolves: RHEL-10\n",
+        "Add patch\n\nResolves: RHEL-11\nRelated: RHEL-99\n",
+        "No footer here",
+    ]
+    assert _extract_linked_issues("Resolves: RHEL-12", commits) == ["RHEL-10", "RHEL-11", "RHEL-12"]
+    assert _extract_linked_issues("", commits) == ["RHEL-10", "RHEL-11"]
+
+
+def _render(gating: bool) -> str:
+    return m.render_prompt(
+        m.InputSchema(
+            mr_url="https://gitlab.com/x/y/-/merge_requests/1",
+            mr_description="desc",
+            linked_issues=[],
+            gating=gating,
+            parsed_results_json=json.dumps({"found": True}),
+        )
+    )
+
+
+def test_render_prompt_gating_only_shows_gating_instructions():
+    prompt = _render(gating=True)
+    assert "parse_osci_results_comment" in prompt
+    assert "Step 8" in prompt
+    assert "resolve_osci_discussion" in prompt
+    assert "NEWA" not in prompt
+    assert "{%" not in prompt
+
+
+def test_render_prompt_non_gating_hides_gating_instructions():
+    prompt = _render(gating=False)
+    assert "parse_newa_mr_comment" in prompt
+    assert "NEWA" in prompt
+    assert "Step 8" not in prompt
+    assert "resolve_osci_discussion" not in prompt
+    assert "OSCI bot's own" not in prompt
+    assert '{"found": true}' in prompt
 
 
 @contextlib.asynccontextmanager
@@ -90,6 +135,8 @@ async def test_no_linked_issues_bails_out_cleanly_and_labels_mr(monkeypatch):
 
     async def _mock_run_tool(name, available_tools=None, **kwargs):
         calls.append((name, kwargs))
+        if name == "get_merge_request_commit_messages":
+            return []
         if name == "get_merge_request_details":
             return {"description": "Just a plain MR with no linked issue."}
         if name in ("add_merge_request_labels", "remove_merge_request_labels"):
@@ -106,13 +153,71 @@ async def test_no_linked_issues_bails_out_cleanly_and_labels_mr(monkeypatch):
     call_names = [name for name, _ in calls]
     assert call_names == [
         "get_merge_request_details",
+        "get_merge_request_commit_messages",
         "add_merge_request_labels",
         "remove_merge_request_labels",
     ]
-    add_kwargs = dict(calls[1][1])
+    add_kwargs = dict(calls[2][1])
     assert add_kwargs["labels"] == ["mr_testing_analyzed"]
-    remove_kwargs = dict(calls[2][1])
+    remove_kwargs = dict(calls[3][1])
     assert remove_kwargs["labels"] == ["mr_testing_completed"]
+
+
+@pytest.mark.asyncio
+async def test_commit_fetch_failure_aborts_without_labeling(monkeypatch):
+    """A failed commit fetch must not be mistaken for "no linked issues" (which
+    would label the MR as analyzed) -- abort so the run can be retried."""
+    calls = []
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        calls.append(name)
+        if name == "get_merge_request_details":
+            return {"description": ""}
+        if name == "get_merge_request_commit_messages":
+            raise RuntimeError("gitlab down")
+        raise AssertionError(f"Unexpected tool call: {name}")
+
+    flexmock(m).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(m).should_receive("run_tool").replace_with(_mock_run_tool)
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+
+    result = await run_mr_testing_analyst("https://gitlab.com/x/y/-/merge_requests/1")
+
+    assert result.analyzed is False
+    assert "gitlab down" in result.summary
+    assert calls == ["get_merge_request_details", "get_merge_request_commit_messages"]
+
+
+@pytest.mark.asyncio
+async def test_linked_issues_found_only_in_commit_messages(monkeypatch):
+    """Keys that appear only in commit messages get past the "no linked
+    issues" bail-out (no labeling) and are looked up in Jira."""
+    calls = []
+
+    async def _mock_run_tool(name, available_tools=None, **kwargs):
+        calls.append((name, kwargs))
+        if name == "get_merge_request_details":
+            return {"description": "No footer in the description"}
+        if name == "get_merge_request_commit_messages":
+            return ["Rebase\n\nResolves: RHEL-777\n"]
+        if name == "get_authorized_comments_from_merge_request":
+            return {"comments": [{"body": "**ANEWA:** done"}]}
+        if name == "parse_mr_test_results":
+            return {**_EMPTY_PARSE_MR_TEST_RESULTS, "note_id": 1}
+        if name == "get_jira_details":
+            raise RuntimeError("jira down")
+        raise AssertionError(f"Unexpected tool call: {name}")
+
+    flexmock(m).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(m).should_receive("run_tool").replace_with(_mock_run_tool)
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+
+    result = await run_mr_testing_analyst("https://gitlab.com/x/y/-/merge_requests/1")
+
+    assert result.analyzed is False
+    assert "RHEL-777" in result.summary
+    assert ("get_jira_details", {"issue_key": "RHEL-777"}) in calls
+    assert "add_merge_request_labels" not in [name for name, _ in calls]
 
 
 @pytest.mark.asyncio
@@ -122,6 +227,8 @@ async def test_no_linked_issues_bail_skips_labeling_in_gating_mode(monkeypatch):
 
     async def _mock_run_tool(name, available_tools=None, **kwargs):
         calls.append(name)
+        if name == "get_merge_request_commit_messages":
+            return []
         if name == "get_merge_request_details":
             return {"description": "Just a plain MR with no linked issue."}
         raise AssertionError(f"Unexpected tool call: {name}")
@@ -133,7 +240,7 @@ async def test_no_linked_issues_bail_skips_labeling_in_gating_mode(monkeypatch):
     result = await run_mr_testing_analyst("https://gitlab.com/x/y/-/merge_requests/1", gating=True)
 
     assert result.analyzed is False
-    assert calls == ["get_merge_request_details"]
+    assert calls == ["get_merge_request_details", "get_merge_request_commit_messages"]
 
 
 @pytest.mark.asyncio
@@ -146,6 +253,8 @@ async def test_jira_fetch_failure_aborts_without_posting_or_labeling(monkeypatch
 
     async def _mock_run_tool(name, available_tools=None, **kwargs):
         calls.append(name)
+        if name == "get_merge_request_commit_messages":
+            return []
         if name == "get_merge_request_details":
             return {"description": "Resolves: RHEL-111"}
         if name == "get_authorized_comments_from_merge_request":
@@ -204,6 +313,8 @@ async def test_linked_issues_gather_jira_context_and_prompt_has_no_posting_knobs
     }
 
     async def _mock_run_tool(name, available_tools=None, **kwargs):
+        if name == "get_merge_request_commit_messages":
+            return []
         if name == "get_merge_request_details":
             return {"description": "Resolves: RHEL-111\nResolves: RHEL-222"}
         if name == "get_authorized_comments_from_merge_request":
@@ -261,10 +372,7 @@ async def test_linked_issues_gather_jira_context_and_prompt_has_no_posting_knobs
     assert "no_jira_comments" not in prompt
     # Raw MR comments are no longer appended -- only the already-parsed result.
     assert "MR_COMMENTS" not in prompt
-    parsed_json = prompt.split(
-        "they are no longer available to you): ",
-        1,
-    )[1]
+    parsed_json = re.search(r"^\{.*\}$", prompt, re.MULTILINE).group(0)
     assert json.loads(parsed_json) == parsed_results
 
 
@@ -279,6 +387,8 @@ async def test_fetch_test_results_falls_back_to_mr_notes_on_exception(monkeypatc
 
     async def _mock_run_tool(name, available_tools=None, **kwargs):
         calls.append((name, kwargs))
+        if name == "get_merge_request_commit_messages":
+            return []
         if name == "get_merge_request_details":
             return {"description": "Resolves: RHEL-333"}
         if name == "get_authorized_comments_from_merge_request":
@@ -325,6 +435,8 @@ async def test_fetch_test_results_falls_back_when_successful_result_lacks_marker
 
     async def _mock_run_tool(name, available_tools=None, **kwargs):
         calls.append((name, kwargs))
+        if name == "get_merge_request_commit_messages":
+            return []
         if name == "get_merge_request_details":
             return {"description": "Resolves: RHEL-444"}
         if name == "get_authorized_comments_from_merge_request":
@@ -372,6 +484,8 @@ async def test_fetch_test_results_no_fallback_when_marker_already_present(monkey
 
     async def _mock_run_tool(name, available_tools=None, **kwargs):
         calls.append((name, kwargs))
+        if name == "get_merge_request_commit_messages":
+            return []
         if name == "get_merge_request_details":
             return {"description": "Resolves: RHEL-555"}
         if name == "get_authorized_comments_from_merge_request":
@@ -424,6 +538,8 @@ async def _run_with_result(
         calls.append((name, kwargs))
         if name in raise_on:
             raise raise_on[name]
+        if name == "get_merge_request_commit_messages":
+            return []
         if name == "get_merge_request_details":
             return {"description": "Resolves: RHEL-111"}
         if name == "get_authorized_comments_from_merge_request":
@@ -660,3 +776,109 @@ async def test_act_on_result_jira_failure_does_not_block_labeling(monkeypatch):
     assert "add_jira_comment" in call_names
     assert "add_merge_request_labels" in call_names
     assert "remove_merge_request_labels" in call_names
+
+
+class _FakeRedis:
+    def __init__(self):
+        self.pushed: list[tuple[str, str]] = []
+        self._counter = 0
+
+    def incr(self, _key):
+        self._counter += 1
+        return self._counter
+
+    def lpush(self, key, value):
+        self.pushed.append((key, value))
+        return len(self.pushed)
+
+
+async def _run_queue_mode(monkeypatch, payloads, run_fn, max_retries="2"):
+    """Run main() in queue mode, feeding `payloads` to its process_task."""
+    fake_redis = _FakeRedis()
+
+    @contextlib.asynccontextmanager
+    async def _fake_redis_client(_url):
+        yield fake_redis
+
+    async def _fake_run_task_loop(redis, queues, process_fn, **kwargs):
+        assert queues == ["mr_testing_queue"]
+        for payload in payloads:
+            await process_fn(payload)
+
+    async def _fake_fix_await(value):
+        return value
+
+    span = flexmock(start_transaction=lambda *a, **k: contextlib.nullcontext())
+    flexmock(m).should_receive("init_sentry")
+    flexmock(m).should_receive("configure_logging")
+    flexmock(m).should_receive("setup_observability").and_return(span)
+    flexmock(m).should_receive("install_shutdown_handler")
+    flexmock(m).should_receive("redis_client").replace_with(_fake_redis_client)
+    flexmock(m).should_receive("run_task_loop").replace_with(_fake_run_task_loop)
+    flexmock(m).should_receive("fix_await").replace_with(_fake_fix_await)
+    flexmock(m).should_receive("run_mr_testing_analyst").replace_with(run_fn)
+    monkeypatch.delenv("MR_URL", raising=False)
+    monkeypatch.setenv("COLLECTOR_ENDPOINT", "http://collector.invalid")
+    monkeypatch.setenv("REDIS_URL", "redis://invalid")
+    monkeypatch.setenv("MAX_RETRIES", max_retries)
+
+    await m.main()
+    return fake_redis
+
+
+@pytest.mark.asyncio
+async def test_queue_mode_runs_task_with_metadata(monkeypatch):
+    calls = []
+
+    async def _run(mr_url, **kwargs):
+        calls.append((mr_url, kwargs))
+        return MrTestingAnalystResult(analyzed=True, summary="ok")
+
+    task = Task(metadata={"mr_url": "https://gitlab.com/x/y/-/merge_requests/1", "gating": True})
+    redis = await _run_queue_mode(monkeypatch, [task.model_dump_json()], _run)
+
+    assert calls == [
+        (
+            "https://gitlab.com/x/y/-/merge_requests/1",
+            {"dry_run": False, "poc": False, "no_jira_comments": False, "gating": True},
+        )
+    ]
+    assert redis.pushed == []
+
+
+@pytest.mark.asyncio
+async def test_queue_mode_retries_then_moves_to_error_list(monkeypatch):
+    async def _run(mr_url, **kwargs):
+        raise RuntimeError("boom")
+
+    task = Task(metadata={"mr_url": "https://gitlab.com/x/y/-/merge_requests/1"})
+    redis = await _run_queue_mode(monkeypatch, [task.model_dump_json()], _run, max_retries="2")
+
+    # attempts 0 -> 1: requeued; the requeued payload is not fed back by the fake loop
+    assert [key for key, _ in redis.pushed] == ["mr_testing_queue"]
+    requeued = Task.model_validate_json(redis.pushed[0][1])
+    assert requeued.attempts == 1
+
+    # Final attempt: moved to the error list with the task kept for requeueing
+    redis = await _run_queue_mode(monkeypatch, [requeued.model_dump_json()], _run, max_retries="2")
+    assert [key for key, _ in redis.pushed] == ["error_list"]
+    entry = ErrorListEntry.model_validate_json(redis.pushed[0][1])
+    assert entry.queue == "mr_testing_queue"
+    assert entry.task is not None
+    assert "boom" in entry.error.details
+
+
+@pytest.mark.asyncio
+async def test_queue_mode_malformed_metadata_goes_to_error_list(monkeypatch):
+    async def _run(mr_url, **kwargs):
+        raise AssertionError("must not run")
+
+    task = Task(metadata={"not_mr_url": 1})
+    redis = await _run_queue_mode(monkeypatch, [task.model_dump_json(), b"not json"], _run)
+
+    entries = [ErrorListEntry.model_validate_json(value) for key, value in redis.pushed]
+    assert [key for key, _ in redis.pushed] == ["error_list", "error_list"]
+    assert entries[0].task is not None
+    assert "Malformed task metadata" in entries[0].error.details
+    assert entries[1].task is None
+    assert "Malformed task payload" in entries[1].error.details

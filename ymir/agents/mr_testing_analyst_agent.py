@@ -30,22 +30,26 @@ from ymir.agents.utils import (
     render_template,
     run_tool,
 )
+from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
+from ymir.common.constants import RedisQueues
 from ymir.common.cve import extract_cve_ids
 from ymir.common.logging_setup import configure_logging, get_trajectory_writeable
+from ymir.common.models import ErrorData, ErrorListEntry, Task
+from ymir.common.utils import init_sentry
 from ymir.tools.privileged.mr_testing import fold_comment_body
 from ymir.tools.unprivileged.greenwave import FetchTestingFarmResultsTool
 
 logger = logging.getLogger(__file__)
+redis_logger = logging.getLogger("agent.redis")
 
 TEST_COVERAGE_CUSTOM_FIELD = "customfield_10638"
 MR_TESTING_ANALYZED_LABEL = "mr_testing_analyzed"
 MR_TESTING_COMPLETED_LABEL = "mr_testing_completed"
 
-# Matches `Resolves: RHEL-12345` (and similar) lines in an MR description,
-# mirroring the small regex approach used by mr_consolidation_agent.py rather
-# than trying to share its stricter footer-only helpers (which look at commit
-# messages, not MR descriptions).
-RESOLVES_RE = re.compile(r"Resolves:\s*(RHEL-\d+)", re.IGNORECASE)
+# Matches whole `Resolves: RHEL-1, RHEL-2` lines, in commit messages or an MR
+# description; the keys are then picked out of the captured remainder.
+RESOLVES_LINE_RE = re.compile(r"^\s*Resolves:(.*)$", re.IGNORECASE | re.MULTILINE)
+JIRA_KEY_RE = re.compile(r"RHEL-\d+", re.IGNORECASE)
 
 # Matches a GitLab MR URL into (project_path, iid), same pattern gitlab.py's
 # own (private) _get_merge_request_from_url uses -- needed here because
@@ -75,6 +79,13 @@ _GATEWAY_TOOL_NAMES = [
 ]
 
 
+class MrTestingTaskData(BaseModel):
+    """Metadata of a Task on the MR testing queue."""
+
+    mr_url: str = Field(description="URL of the GitLab merge request to analyze")
+    gating: bool = Field(default=False, description="Analyze the OSCI gating pipeline instead of anewa/NEWA")
+
+
 class JiraIssueContext(BaseModel):
     issue_key: str
     cve_id: str | None = None
@@ -96,6 +107,9 @@ class InputSchema(BaseModel):
             "results discussion thread (via resolve_osci_discussion below) only when a failure is "
             "judged to be bad infrastructure or a broken test, not a real regression."
         ),
+    )
+    parsed_results_json: str = Field(
+        description="JSON-encoded output of the parse tool Python already ran on the MR's comments"
     )
 
 
@@ -197,9 +211,16 @@ class MrTestingAnalystWorkflowState(BaseModel):
     result: MrTestingAnalystResult | None = Field(default=None)
 
 
-def _extract_linked_issues(mr_description: str) -> list[str]:
-    """Extract Jira keys from ``Resolves: RHEL-XXXXX`` lines in an MR description."""
-    return sorted({key.upper() for key in RESOLVES_RE.findall(mr_description or "")})
+def _extract_linked_issues(mr_description: str, commit_messages: list[str] | None = None) -> list[str]:
+    """Extract Jira keys from ``Resolves: RHEL-XXXXX`` lines in the commit
+    messages and in the MR description. Ymir's own MRs carry these only in
+    commit messages (the description's length limit can truncate them), but
+    MRs opened by hand may carry them in the description instead."""
+    keys: set[str] = set()
+    for text in [mr_description or "", *(commit_messages or [])]:
+        for remainder in RESOLVES_LINE_RE.findall(text):
+            keys.update(key.upper() for key in JIRA_KEY_RE.findall(remainder))
+    return sorted(keys)
 
 
 def _parse_mr_url(mr_url: str) -> tuple[str, int]:
@@ -340,7 +361,7 @@ async def run_mr_testing_analyst(
         workflow = Workflow(MrTestingAnalystWorkflowState, name="MrTestingAnalystWorkflow")
 
         async def fetch_and_validate_mr(state: MrTestingAnalystWorkflowState):
-            """Fetch MR details and extract linked Jira issues from its description."""
+            """Fetch MR details and extract linked Jira issues from its commits and description."""
             logger.info("Fetching merge request details for %s", state.mr_url)
             mr_details = await run_tool(
                 "get_merge_request_details",
@@ -349,7 +370,25 @@ async def run_mr_testing_analyst(
             )
             state.mr_description = mr_details.get("description") or ""
 
-            state.linked_issue_keys = _extract_linked_issues(state.mr_description)
+            try:
+                commit_messages = await run_tool(
+                    "get_merge_request_commit_messages",
+                    available_tools=gateway_tools,
+                    merge_request_url=state.mr_url,
+                )
+            except Exception as e:
+                # Proceeding on the description alone could wrongly conclude
+                # there's nothing to analyze and label the MR as analyzed on
+                # what might just be a transient GitLab failure.
+                logger.warning("Failed to fetch commits for %s, aborting run: %s", state.mr_url, e)
+                state.result = MrTestingAnalystResult(
+                    analyzed=False,
+                    summary=f"Failed to fetch commits of {state.mr_url}: {e}. Aborting without "
+                    "posting or labeling so this can be retried once GitLab is reachable again.",
+                )
+                return Workflow.END
+
+            state.linked_issue_keys = _extract_linked_issues(state.mr_description, commit_messages)
             if not state.linked_issue_keys:
                 logger.info("No linked Jira issues found on %s, nothing to analyze", state.mr_url)
                 # This MR will never have anything for this agent to analyze,
@@ -361,7 +400,7 @@ async def run_mr_testing_analyst(
                     await _mark_mr_analyzed(state.mr_url, gateway_tools, state.dry_run)
                 state.result = MrTestingAnalystResult(
                     analyzed=False,
-                    summary=f"No `Resolves: RHEL-XXXXX` line found in {state.mr_url}'s description.",
+                    summary=f"No `Resolves: RHEL-XXXXX` line found in the commits or description of {state.mr_url}.",
                 )
                 return Workflow.END
 
@@ -519,14 +558,10 @@ async def run_mr_testing_analyst(
                 mr_description=state.mr_description or "",
                 linked_issues=state.linked_issues,
                 gating=state.gating,
+                parsed_results_json=json.dumps(state.parsed_results),
             )
 
             prompt = render_prompt(input_data)
-            prompt += (
-                "\n\nPARSED_RESULTS (JSON, already parsed by Python -- do not call "
-                "parse_mr_test_results/parse_newa_mr_comment/parse_osci_results_comment yourself, "
-                f"they are no longer available to you): {json.dumps(state.parsed_results)}"
-            )
 
             response = await agent.run(
                 prompt,
@@ -682,7 +717,21 @@ async def run_mr_testing_analyst(
         return response.state.result
 
 
+def _print_result(result: MrTestingAnalystResult) -> None:
+    state_icon = "✅" if result.analyzed else "⚠️"
+
+    separator = "=" * 60
+    print(f"\n{separator}")
+    print(f"  RESULT: {state_icon}  {'ANALYZED' if result.analyzed else 'SKIPPED'}")
+    print(separator)
+    if result.summary:
+        print(result.summary)
+    print(f"{separator}\n")
+
+
 async def main() -> None:
+    init_sentry()
+
     configure_logging(level=logging.INFO)
 
     span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
@@ -690,38 +739,109 @@ async def main() -> None:
     dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
     poc = os.getenv("POC", "false").lower() == "true"
     no_jira_comments = os.getenv("NO_JIRA_COMMENTS", "false").lower() == "true"
-    gating = os.getenv("GATING", "false").lower() == "true"
 
-    mr_url = os.getenv("MR_URL")
-    if not mr_url:
-        logger.error("MR_URL environment variable is required")
-        sys.exit(1)
-
-    logger.info(
-        "Running MR testing analysis for %s (dry_run=%s, poc=%s, no_jira_comments=%s, gating=%s)",
-        mr_url,
-        dry_run,
-        poc,
-        no_jira_comments,
-        gating,
-    )
-    with span_processor.start_transaction(mr_url, workflow="MrTestingAnalystWorkflow"):
-        result = await run_mr_testing_analyst(
+    # Direct mode: run with environment variables
+    if mr_url := os.getenv("MR_URL"):
+        gating = os.getenv("GATING", "false").lower() == "true"
+        logger.info(
+            "Running MR testing analysis for %s in direct mode (dry_run=%s, poc=%s, "
+            "no_jira_comments=%s, gating=%s)",
             mr_url,
-            dry_run=dry_run,
-            poc=poc,
-            no_jira_comments=no_jira_comments,
-            gating=gating,
+            dry_run,
+            poc,
+            no_jira_comments,
+            gating,
         )
-        state_icon = "✅" if result.analyzed else "⚠️"
+        with span_processor.start_transaction(mr_url, workflow="MrTestingAnalystWorkflow"):
+            result = await run_mr_testing_analyst(
+                mr_url,
+                dry_run=dry_run,
+                poc=poc,
+                no_jira_comments=no_jira_comments,
+                gating=gating,
+            )
+            _print_result(result)
+        return
 
-        separator = "=" * 60
-        print(f"\n{separator}")
-        print(f"  RESULT: {state_icon}  {'ANALYZED' if result.analyzed else 'SKIPPED'}")
-        print(separator)
-        if result.summary:
-            print(result.summary)
-        print(f"{separator}\n")
+    # Queue mode
+    logger.info("Starting MR testing analyst agent in queue mode")
+    max_concurrent_tasks = int(os.getenv("MAX_CONCURRENT_TASKS", 1))
+    max_retries = int(os.getenv("MAX_RETRIES", 3))
+    queue = RedisQueues.MR_TESTING_QUEUE.value
+    async with redis_client(os.environ["REDIS_URL"]) as redis:
+        redis_logger.info(f"Connected to Redis, max retries set to {max_retries}, listening to queue: {queue}")
+
+        async def push_error(details: str, task: Task | None = None) -> None:
+            error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
+            entry = ErrorListEntry(
+                error_id=error_id,
+                queue=queue if task is not None else None,
+                task=task,
+                error=ErrorData(details=details, jira_issue="unknown"),
+            )
+            await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
+
+        async def process_task(payload):
+            try:
+                task = Task.model_validate_json(payload)
+            except Exception as e:
+                logger.error(f"Failed to parse task payload, skipping: {e}")
+                await push_error(f"Malformed task payload: {e}")
+                return
+
+            try:
+                task_data = MrTestingTaskData.model_validate(task.metadata)
+            except Exception as e:
+                # Task itself parsed fine -- keep it on the error entry so it can
+                # be requeued once the metadata/schema issue is fixed.
+                logger.error(f"Failed to parse task metadata, skipping: {e}")
+                await push_error(f"Malformed task metadata: {e}", task)
+                return
+
+            logger.info(
+                "Processing MR testing analysis for %s (gating=%s, attempt: %d)",
+                task_data.mr_url,
+                task_data.gating,
+                task.attempts + 1,
+            )
+            try:
+                with span_processor.start_transaction(task_data.mr_url, workflow="MrTestingAnalystWorkflow"):
+                    result = await run_mr_testing_analyst(
+                        task_data.mr_url,
+                        dry_run=dry_run,
+                        poc=poc,
+                        no_jira_comments=no_jira_comments,
+                        gating=task_data.gating,
+                    )
+            except Exception as e:
+                task.attempts += 1
+                if task.attempts < max_retries:
+                    logger.warning(
+                        f"Task failed (attempt {task.attempts}/{max_retries}), "
+                        f"re-queuing for retry: {task_data.mr_url}: {e}"
+                    )
+                    await fix_await(redis.lpush(queue, task.model_dump_json()))
+                    return
+                logger.error(
+                    f"Task failed after {max_retries} attempts, moving to error list: {task_data.mr_url}"
+                )
+                await push_error(f"MR testing analysis of {task_data.mr_url} failed: {e}", task)
+                return
+
+            # analyzed=False is a clean outcome (testing not finished yet, nothing to
+            # analyze, or a transient fetch failure that left the MR unlabeled), not a
+            # task failure -- whatever enqueues tasks decides when to queue the MR again.
+            _print_result(result)
+
+        shutdown_event = asyncio.Event()
+        install_shutdown_handler(asyncio.get_running_loop(), shutdown_event)
+        await run_task_loop(
+            redis,
+            [queue],
+            process_task,
+            max_concurrent=max_concurrent_tasks,
+            shutdown_event=shutdown_event,
+        )
 
 
 if __name__ == "__main__":

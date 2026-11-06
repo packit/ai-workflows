@@ -1385,6 +1385,53 @@ class GetFailedPipelineJobsFromMergeRequestTool(
         return JSONToolOutput(result=failed_jobs)
 
 
+class GetMergeRequestCommitMessagesToolInput(BaseModel):
+    merge_request_url: str = Field(description="URL of the merge request")
+
+
+class GetMergeRequestCommitMessagesTool(
+    Tool[GetMergeRequestCommitMessagesToolInput, ToolRunOptions, JSONToolOutput[list[str]]]
+):
+    """Lists the full commit messages of a merge request's commits. Ymir's MRs
+    carry their ``Resolves: RHEL-XXXXX`` footers only in commit messages, not
+    in the MR description."""
+
+    name = "get_merge_request_commit_messages"
+    timeout = 120
+    description = """
+    Gets the full commit message of every commit in a merge request, in the
+    order GitLab returns them. Use this to find footers such as
+    "Resolves: RHEL-12345" that are only present in commit messages.
+    """
+    input_schema = GetMergeRequestCommitMessagesToolInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(
+            namespace=["tool", "gitlab", self.name],
+            creator=self,
+        )
+
+    async def _run(
+        self,
+        tool_input: GetMergeRequestCommitMessagesToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[list[str]]:
+        merge_request_url = tool_input.merge_request_url
+        with tool_error_context(
+            "Failed to get commits from merge request",
+            merge_request_url=merge_request_url,
+        ):
+            mr = await _get_merge_request_from_url(merge_request_url)
+
+            def get_messages() -> list[str]:
+                return [commit.message or "" for commit in mr._raw_pr.commits(get_all=True)]
+
+            messages = await asyncio.to_thread(get_messages)
+
+        return JSONToolOutput(result=messages)
+
+
 class GetMergeRequestDiscussionsToolInput(BaseModel):
     merge_request_url: str = Field(description="URL of the merge request")
 

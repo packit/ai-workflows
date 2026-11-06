@@ -18,7 +18,6 @@ from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field, ValidationError
-from specfile.utils import NEVR
 
 import ymir.agents.tasks as tasks
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
@@ -90,9 +89,10 @@ from ymir.common.utils import (
     check_build_in_buildroot,
     check_package_built_with_fixed_dependency,
     extract_text_from_adf,
+    get_epochless_nvr_string,
     get_latest_candidate_build,
     init_sentry,
-    nvr_from_nevr,
+    resolve_brew_build,
 )
 from ymir.common.version_utils import (
     construct_internal_branch_name,
@@ -1553,12 +1553,13 @@ async def run_workflow(
                 return "consolidate_rebuild_siblings"
 
             try:
-                # This parsed epoch is provisional. Dependency checks resolve the
-                # authoritative epoch from Brew before comparing build versions.
-                fixed_dep_nevr = NEVR.from_string(fixed_in_build)
+                fixed_dep_build = await resolve_brew_build(fixed_in_build)
+            except TransientInfrastructureError:
+                logger.warning("Transient Brew lookup for %s; retrying", dep_issue_key, exc_info=True)
+                raise
             except Exception as e:
                 logger.warning(
-                    f"Failed to parse 'Fixed in Build' field for dependency {dep_issue_key}: "
+                    f"Failed to resolve 'Fixed in Build' field for dependency {dep_issue_key}: "
                     f"{fixed_in_build!r} — {e}"
                 )
                 state.triage_result = OutputSchema(
@@ -1567,18 +1568,34 @@ async def run_workflow(
                         findings=(
                             f"The dependency issue {dep_issue_key} has a malformed value in the "
                             f"'Fixed in Build' field: {fixed_in_build!r}. This value cannot be parsed "
-                            f"as a valid NEVR (Name-Epoch-Version-Release) string."
+                            f"as a valid Brew build identifier."
                         ),
                         additional_info_needed=(
                             f"Please correct the 'Fixed in Build' field on {dep_issue_key} to contain "
-                            f"a valid build identifier in NEVR format (e.g., 'package-0:1.2.3-4.el9'). "
+                            f"a valid Brew NVR (e.g., 'package-1.2.3-4.el9'). "
                             f"Once corrected, re-run the triage to verify whether rebuild is still needed."
                         ),
                         jira_issue=state.jira_issue,
                     ),
                 )
                 return comment_result()
-
+            if fixed_dep_build is None:
+                logger.warning("Dependency %s Fixed in Build was not found in Brew", dep_issue_key)
+                state.triage_result = OutputSchema(
+                    resolution=Resolution.CLARIFICATION_NEEDED,
+                    data=ClarificationNeededData(
+                        findings=(
+                            f"The dependency issue {dep_issue_key} references Fixed in Build "
+                            f"{fixed_in_build}, but Brew could not resolve that build."
+                        ),
+                        additional_info_needed=(
+                            "Please correct the Fixed in Build field or confirm the dependency build "
+                            "exists in Brew, then re-run triage."
+                        ),
+                        jira_issue=state.jira_issue,
+                    ),
+                )
+                return comment_result()
             # fix_version is already normalized by run_triage_analysis (e.g. rhel-9.8 → rhel-9.8.z)
             fix_version = getattr(data, "fix_version", None) or ""
             package = getattr(data, "package", None)
@@ -1595,12 +1612,12 @@ async def run_workflow(
                         package=package,
                         fix_version=fix_version,
                         dep_component=dep_component,
-                        fixed_dep_nevr=fixed_dep_nevr,
+                        fixed_dep_build=fixed_dep_build,
                         available_tools=gateway_tools,
                         jira_issue=state.jira_issue,
                         downstream_component=state.raw_downstream_component,
                     )
-                    pkg_nvr = nvr_from_nevr(pkg_nevr) if pkg_nevr is not None else None
+                    pkg_nvr = get_epochless_nvr_string(pkg_nevr) if pkg_nevr is not None else None
                     if isinstance(reason, BuildVerificationReport):
                         verification_report = reason
                         if reason.reason is None:
@@ -1707,6 +1724,26 @@ async def run_workflow(
                                         f"If yes and the build is valid, close the issue and mark as "
                                         f"Already Fixed. If the builds are invalid or won't ship, "
                                         f"proceed with rebuild."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return comment_result()
+                        if reason and reason.startswith("unresolved_subpackage_needs_verification:"):
+                            subpkg_list = reason.split(":", 1)[1]
+                            state.triage_result = OutputSchema(
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
+                                        f"{pkg_issue_key}) contains installed packages from {dep_component} "
+                                        f"that Brew could not resolve: {subpkg_list}. The installed "
+                                        "dependency version could not be determined automatically."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please verify the installed version of {dep_component} in "
+                                        f"{subpkg_list} for build {pkg_nvr}. If it is {fixed_in_build} "
+                                        "or newer, mark as Already Fixed; otherwise proceed with rebuild."
                                     ),
                                     jira_issue=state.jira_issue,
                                 ),
@@ -1903,7 +1940,7 @@ async def run_workflow(
                 in_buildroot = await check_build_in_buildroot(
                     state.target_branch,
                     dep_component,
-                    fixed_in_build,
+                    fixed_dep_build.nevr,
                     fix_version=fix_version,
                 )
             except InvalidDependencyDataError as e:
@@ -2852,7 +2889,11 @@ async def main() -> None:
                     )
 
         def target_queue_for_delayed_payload(payload: str) -> str:
-            task = Task.model_validate_json(payload)
+            try:
+                task = Task.model_validate_json(payload)
+            except (ValidationError, ValueError):
+                logger.warning("Invalid delayed triage payload; sending it to the normal queue")
+                return RedisQueues.TRIAGE_QUEUE.value
             return (
                 RedisQueues.TRIAGE_QUEUE_TODO.value if task.user_triggered else RedisQueues.TRIAGE_QUEUE.value
             )

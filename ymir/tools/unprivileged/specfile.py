@@ -14,7 +14,7 @@ from beeai_framework.tools import (
 from pydantic import BaseModel, Field
 from specfile import Specfile
 from specfile.prep import AutopatchMacro, AutosetupMacro, PatchMacro
-from specfile.utils import EVR
+from specfile.utils import EVR, NEVR
 from specfile.value_parser import (
     EnclosedMacroSubstitution,
     MacroSubstitution,
@@ -337,12 +337,12 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
             spec.raw_release = release
 
     @staticmethod
-    def _extract_release_without_dist(evr: EVR) -> str:
-        return evr.release.rsplit(".el", maxsplit=1)[0]
+    def _extract_release_without_dist(nevr: NEVR) -> str:
+        return nevr.release.rsplit(".el", maxsplit=1)[0]
 
     @staticmethod
-    def _extract_zstream_suffix(evr: EVR) -> int:
-        parts = evr.release.rsplit(".el", maxsplit=1)
+    def _extract_zstream_suffix(nevr: NEVR) -> int:
+        parts = nevr.release.rsplit(".el", maxsplit=1)
         if len(parts) < 2:
             return 0
         after_el = parts[1]
@@ -360,7 +360,7 @@ class UpdateReleaseTool(Tool[UpdateReleaseToolInput, ToolRunOptions, StringToolO
         package: str,
         current_stream_branch: str,
         higher_stream_branch: str | None,
-    ) -> tuple[EVR | None, EVR | None]:
+    ) -> tuple[NEVR | None, NEVR | None]:
         """Determine which build's release the new Z-Stream release should be based on.
 
         Returns (base_build, latest_current_stream_build): the latter is also returned on its own

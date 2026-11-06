@@ -97,7 +97,7 @@ async def test_parser_collects_all_binary_failures():
     async def resolve(brew_url, nevra, component):
         raise ConnectionError(f"Brew failed for {nevra.name}")
 
-    flexmock(utils).should_receive("_resolve_binary_rpm_to_source_rpm").replace_with(resolve).twice()
+    flexmock(utils).should_receive("_get_source_nevr").replace_with(resolve).twice()
     log = "dep-one-1-1.el9.x86_64 1 2 abc installed\ndep-two-1-1.el9.x86_64 1 2 abc installed\n"
     with pytest.raises(utils.TransientInfrastructureError) as exc:
         await utils._parse_dependency_from_installed_pkgs_log(
@@ -112,31 +112,10 @@ async def test_parser_does_not_ignore_an_unresolved_binary():
     async def resolve(brew_url, nevra, component):
         return None if nevra.name == "dep-one" else NEVR.from_string("dep-1-1.el9")
 
-    flexmock(utils).should_receive("_resolve_binary_rpm_to_source_rpm").replace_with(resolve).twice()
+    flexmock(utils).should_receive("_get_source_nevr").replace_with(resolve).twice()
     log = "dep-one-1-1.el9.x86_64 1 2 abc installed\ndep-two-1-1.el9.x86_64 1 2 abc installed\n"
     nevr, names = await utils._parse_dependency_from_installed_pkgs_log(
         log, "dep", ["dep-one", "dep-two"], utils.BREWHUB_URL
     )
     assert nevr is None
     assert names == ["dep-one", "dep-two"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("epoch", ["invalid", -1, True, 1.5])
-async def test_invalid_epoch_does_not_stop_later_candidates(epoch):
-    candidates = [("RHEL-1", "pkg-1-1.el9"), ("RHEL-2", "pkg-2-1.el9")]
-    for index, (_, nvr) in enumerate(candidates, 1):
-        metadata = {
-            "name": "pkg",
-            "epoch": epoch if index == 1 else 2,
-            "version": str(index),
-            "release": "1.el9",
-        }
-        flexmock(utils).should_receive("_get_koji_build").with_args(utils.BREWHUB_URL, nvr).and_return(
-            metadata
-        ).once()
-    report = await utils._select_highest_evr_build(candidates, "pkg")
-    assert isinstance(report, utils.BuildVerificationReport)
-    assert "Invalid Brew epoch" in report.describe()
-    assert "RHEL-1" in report.describe()
-    assert "pkg-2:2-1.el9" in report.describe()

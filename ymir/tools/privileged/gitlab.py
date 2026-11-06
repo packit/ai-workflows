@@ -29,6 +29,7 @@ from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import BaseModel, Field
 
 from ymir.common.base_utils import run_subprocess
+from ymir.common.constants import GITLAB_MR_PAGE_SIZE
 from ymir.common.models import (
     CommentReply,
     FailedPipelineJob,
@@ -1734,6 +1735,7 @@ class ListProjectMergeRequestsToolInput(BaseModel):
         description="Order by field: 'created_at' or 'updated_at'",
     )
     sort: str = Field(default="asc", description="Sort direction: 'asc' or 'desc'")
+    page: int = Field(default=1, ge=1, description="One-based result page; increase to fetch later pages")
 
 
 class ListProjectMergeRequestsTool(
@@ -1748,8 +1750,8 @@ class ListProjectMergeRequestsTool(
     description = """
     Lists merge requests for a GitLab project with filtering by state,
     target branch, labels, and author. Returns MRs sorted by creation date
-    (ascending by default, i.e. oldest first).
-    Returns at most 100 MRs (single page, no pagination).
+    (ascending by default, i.e. oldest first). Returns up to 100 MRs per page;
+    increase the page input to fetch subsequent results.
     """
     input_schema = ListProjectMergeRequestsToolInput
 
@@ -1771,7 +1773,8 @@ class ListProjectMergeRequestsTool(
         params: dict[str, str] = {
             "order_by": tool_input.order_by,
             "sort": tool_input.sort,
-            "per_page": "100",
+            "per_page": str(GITLAB_MR_PAGE_SIZE),
+            "page": str(tool_input.page),
         }
         if tool_input.state is not None:
             params["state"] = tool_input.state

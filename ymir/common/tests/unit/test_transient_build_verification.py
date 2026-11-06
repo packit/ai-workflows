@@ -2,26 +2,26 @@
 
 import pytest
 from flexmock import flexmock
-from specfile.utils import NEVR
 
 import ymir.common.utils as utils
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["candidate", "active", "fixed", "rpms", "logs", "binary"])
+@pytest.mark.parametrize("stage", ["candidate", "active", "rpms", "logs", "binary"])
 async def test_transient_build_verification_failures_propagate(stage):
-    async def candidates(*args):
-        active = [("RHEL-2", "pkg-2-1.el9")] if stage == "active" else []
-        return [("RHEL-1", "pkg-1-1.el9")], active
+    async def search(*args, **kwargs):
+        if "status in (Closed, Done, Resolved)" in kwargs.get("jql", ""):
+            return [{"key": "RHEL-1", "fields": {"customfield_10578": "pkg-1-1.el9"}}]
+        if stage == "active":
+            return [{"key": "RHEL-2", "fields": {"customfield_10578": "pkg-2-1.el9"}}]
+        return []
 
     package = {"name": "pkg", "epoch": 0, "version": "1", "release": "1.el9", "build_id": 1}
     fixed = {"name": "dep", "epoch": 1, "version": "1", "release": "1.el9", "build_id": 2}
 
     def build(url, nvr):
-        if (stage == "candidate" and nvr.startswith("pkg-")) or (stage == "fixed" and nvr.startswith("dep-")):
+        if (stage == "candidate" and nvr.startswith("pkg-")) or (stage == "active" and nvr == "pkg-2-1.el9"):
             raise ConnectionError("test outage")
-        if stage == "active" and nvr == "pkg-2-1.el9":
-            raise utils.TransientInfrastructureError("test outage")
         return fixed if nvr.startswith("dep-") else package
 
     def rpms(buildID):
@@ -34,7 +34,7 @@ async def test_transient_build_verification_failures_propagate(stage):
             raise utils.TransientInfrastructureError("test outage")
         return [("https://brew/logs/x86_64/installed_pkgs.log", "dep-1-1.el9.x86_64 1 2 abc installed\n")]
 
-    flexmock(utils).should_receive("_find_completed_builds_jira").replace_with(candidates)
+    flexmock(utils).should_receive("run_tool").replace_with(search)
     flexmock(utils).should_receive("_get_koji_build").replace_with(build)
     flexmock(utils).should_receive("_fetch_installed_pkgs_log").replace_with(logs)
     session = flexmock()
@@ -44,7 +44,7 @@ async def test_transient_build_verification_failures_propagate(stage):
 
     with pytest.raises(utils.TransientInfrastructureError, match="test outage"):
         await utils.check_package_built_with_fixed_dependency(
-            "pkg", "rhel-9.z", "dep", NEVR.from_string("dep-1-1.el9"), []
+            "pkg", "rhel-9.z", utils.BrewBuild(fixed), []
         )
 
 
@@ -60,7 +60,10 @@ async def test_jira_service_failures_propagate(scope):
     flexmock(utils).should_receive("run_tool").replace_with(search)
     with pytest.raises(utils.TransientInfrastructureError, match="Jira query failed"):
         await utils.check_package_built_with_fixed_dependency(
-            "pkg", "rhel-9.z", "dep", NEVR.from_string("dep-1-1.el9"), []
+            "pkg",
+            "rhel-9.z",
+            utils.BrewBuild({"name": "dep", "epoch": 1, "version": "1", "release": "1.el9"}),
+            [],
         )
 
 
@@ -77,3 +80,30 @@ async def test_buildroot_transport_error_is_retryable():
     build = utils.BrewBuild({"name": "dep", "epoch": 1, "version": "1", "release": "1.el9"})
     with pytest.raises(utils.TransientInfrastructureError, match="test outage"):
         await utils.check_build_in_buildroot("rhel-9", "dep", build.nevr)
+
+
+@pytest.mark.asyncio
+async def test_koji_generic_error_during_candidate_lookup_retries():
+    """A koji.GenericError during a candidate lookup is an outage, not bad data.
+
+    Unparseable NVRs are rejected before Brew is queried, so any exception from
+    the lookup itself (including GenericError) must reach the retry handler
+    instead of producing a clarification ticket.
+    """
+    fixed = {"name": "dep", "epoch": 1, "version": "1", "release": "1.el9", "build_id": 2}
+
+    async def search(*args, **kwargs):
+        if "status in (Closed, Done, Resolved)" in kwargs.get("jql", ""):
+            return [{"key": "RHEL-1", "fields": {"customfield_10578": "pkg-1-1.el9"}}]
+        return []
+
+    def build(_url, _nvr):
+        raise utils.koji.GenericError("brew hub temporarily unavailable")
+
+    flexmock(utils).should_receive("run_tool").replace_with(search)
+    flexmock(utils).should_receive("_get_koji_build").replace_with(build)
+
+    with pytest.raises(utils.TransientInfrastructureError, match="brew hub temporarily unavailable"):
+        await utils.check_package_built_with_fixed_dependency(
+            "pkg", "rhel-9.z", utils.BrewBuild(fixed), []
+        )

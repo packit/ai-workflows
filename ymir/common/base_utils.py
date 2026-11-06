@@ -156,6 +156,7 @@ async def run_task_loop(
     poll_fn: Callable[[], Coroutine] | None = None,
     shutdown_event: asyncio.Event | None = None,
     recovery_fn: Callable[[bytes], Coroutine] | None = None,
+    idle_sleep: float | None = None,
 ) -> None:
     """Run a concurrent task loop that pops tasks from Redis queues.
 
@@ -179,6 +180,11 @@ async def run_task_loop(
     for and re-pushed too, so a task isn't silently consumed from Redis
     and dropped just because it arrived a moment after shutdown.
 
+    When a custom ``poll_fn`` returns None (idle), the loop sleeps before polling
+    again so a non-blocking poller cannot busy-spin. The sleep defaults to
+    ``poll_timeout``; pass ``idle_sleep=0`` for pollers that already block for
+    the timeout (e.g. an internal BRPOP) so idle latency is not doubled.
+
     Args:
         redis_conn: Redis connection used to pop and recover list tasks.
         queues: List keys passed to BRPOP when ``poll_fn`` is absent.
@@ -191,6 +197,7 @@ async def run_task_loop(
         shutdown_event: Optional event to stop polling and recover work.
         recovery_fn: Optional coroutine that recovers payloads consumed by
             a custom poller instead of pushing them back to a Redis list.
+        idle_sleep: Idle sleep override for non-blocking custom pollers.
 
     Raises:
         ValueError: ``max_concurrent`` is less than one, or a custom poller
@@ -262,12 +269,13 @@ async def run_task_loop(
 
         if result is None:
             sem.release()
-            if poll_fn:
+            if poll_fn and idle_sleep != 0:
+                sleep = poll_timeout if idle_sleep is None else idle_sleep
                 # Race the idle-sleep against shutdown too, so a custom
-                # poll_fn doesn't add up to poll_timeout of extra
-                # shutdown latency on top of everything else.
+                # poll_fn doesn't add extra shutdown latency on top of
+                # everything else.
                 with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(shutdown_event.wait(), timeout=poll_timeout)
+                    await asyncio.wait_for(shutdown_event.wait(), timeout=sleep)
             continue
 
         task_loop_logger.info("Received task from queue.")

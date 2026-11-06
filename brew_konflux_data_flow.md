@@ -14,8 +14,8 @@ Jira's **Fixed in Build** field supplies an NVR without an authoritative epoch.
 Triage may parse it into a provisional `NEVR` to validate its syntax, but the
 parsed epoch is not authoritative. Rebuild dependency checks resolve the build
 against Brew and replace that provisional NEVR before comparing versions.
-An explicit null epoch in Brew metadata means zero; an absent epoch field means
-the metadata is incomplete. Fixed dependency resolution and rebuilt-package
+An absent or explicitly null epoch in Brew metadata is treated as zero.
+Fixed dependency resolution and rebuilt-package
 verification use Brew.
 
 Resolved builds retain their NEVR and Brew metadata for version comparisons,
@@ -41,6 +41,31 @@ existing task retry handler. Final metadata problems and ambiguous results reque
 clarification with all issue keys, NVRs, available Brew NEVRs and build IDs, and the
 collected errors. Neither a transient failure nor an inconclusive comparison
 authorizes a new rebuild.
+
+### Release-stream verification
+
+A "Fixed in Build" reference may name a build that does not belong to the
+ticket's release stream (the field is only partly automated; humans can enter
+any build). References are verified in two layers:
+
+1. **Dist-tag pre-filter** (free, on the parsed NVR string): for a z-stream
+   fix version (`rhel-9.8.z`) the dist tag must carry the minor (`.el9_8`);
+   y-stream fix versions accept both `.el9` and `.el9_8` builds of the same
+   major. Unclassifiable inputs are kept.
+2. **Brew tag membership** (authoritative, on the resolved build): every tag
+   of the build under the stream's branch prefix (`rhel-9.8.0` for both the
+   `rhel-9.8` and `rhel-9.8.z` fix versions) proves the build is part of that
+   stream's pipeline. Tags are split into shipped-stage (the release tag and
+   `-pending`/`-z-pending` — committed to compose/errata) and in-progress
+   (`-candidate`/`-gate`/override-stage — fix being worked on).
+
+A build with no tag under the stream's prefix is not part of the stream and
+requires clarification (`build_not_tagged_in_stream`). A build with only
+in-progress tags means a fix is being worked on rather than shipped: the
+verification stops and informs the user that they may have to update the
+referencing issue or its errata once the fix ships
+(`fix_in_progress_in_stream`). The tag check fails open when it cannot be
+performed (unparseable fix version, missing build id, or a Brew failure).
 
 
 ## System Architecture

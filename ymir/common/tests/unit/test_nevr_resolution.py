@@ -48,28 +48,29 @@ async def test_parser_requires_source_resolution():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("reuse_fixed_build", [True, False])
 @pytest.mark.parametrize(
     "active_state", ["older", "newer", "missing", "outage", "incomplete", "wrong_package"]
 )
-async def test_active_candidates_reuse_metadata_and_preserve_unknown_builds(active_state, reuse_fixed_build):
+async def test_active_candidates_reuse_metadata_and_preserve_unknown_builds(active_state):
     package_metadata = {"name": "pkg", "epoch": 2, "version": "1", "release": "1.el9", "build_id": 1}
     fixed_metadata = {"name": "dep", "epoch": 2, "version": "1", "release": "1.el9", "build_id": 2}
     used_nevr = NEVR(name="dep", epoch=1, version="9", release="1.el9")
 
-    async def candidates(*args):
-        return [("RHEL-1", "pkg-1-1.el9")], [("RHEL-2", "pkg-9-1.el9")]
+    async def search(*args, **kwargs):
+        if "status in (Closed, Done, Resolved)" in kwargs.get("jql", ""):
+            return [{"key": "RHEL-1", "fields": {"customfield_10578": "pkg-1-1.el9"}}]
+        return [{"key": "RHEL-2", "fields": {"customfield_10578": "pkg-9-1.el9"}}]
 
     async def logs(*args, **kwargs):
         return [("https://brew/logs/x86_64/installed_pkgs.log", "log")]
 
     async def names(*args, **kwargs):
-        return ["dep"], 1, utils._nevr_from_build(fixed_metadata), "dep"
+        return ["dep"], 1, "dep"
 
     async def parse(*args):
         return used_nevr, ["dep"]
 
-    flexmock(utils).should_receive("_find_completed_builds_jira").replace_with(candidates)
+    flexmock(utils).should_receive("run_tool").replace_with(search)
     flexmock(utils).should_receive("_fetch_installed_pkgs_log").replace_with(logs)
     flexmock(utils).should_receive("_get_known_package_names").replace_with(names)
     flexmock(utils).should_receive("_parse_dependency_from_installed_pkgs_log").replace_with(parse)
@@ -98,46 +99,42 @@ async def test_active_candidates_reuse_metadata_and_preserve_unknown_builds(acti
     session.should_receive("listRPMs").with_args(buildID=1).and_return([{"arch": "x86_64"}])
     flexmock(utils.koji).should_receive("ClientSession").and_return(session)
     fixed_build = utils.BrewBuild(fixed_metadata)
-    if reuse_fixed_build:
-        fixed_dep_nevr = fixed_build.nevr
-    else:
-        # Jira's epochless NVR parses with epoch zero. Comparing it directly with
-        # the installed epoch-one dependency would incorrectly report already fixed.
-        fixed_dep_nevr = NEVR.from_string("dep-1-1.el9")
-        flexmock(utils).should_receive("_get_koji_build").with_args(
-            utils.BREWHUB_URL, "dep-1-1.el9"
-        ).and_return(fixed_metadata).times(0 if active_state == "outage" else 1)
     if active_state == "outage":
         with pytest.raises(utils.TransientInfrastructureError, match="Brew unavailable"):
             await utils.check_package_built_with_fixed_dependency(
                 "pkg",
                 "rhel-9.z",
-                "dep",
-                fixed_dep_nevr,
+                fixed_build,
                 [],
-                fixed_dep_build=fixed_build if reuse_fixed_build else None,
             )
         return
     result = await utils.check_package_built_with_fixed_dependency(
         "pkg",
         "rhel-9.z",
-        "dep",
-        fixed_dep_nevr,
+        fixed_build,
         [],
-        fixed_dep_build=fixed_build if reuse_fixed_build else None,
     )
 
     assert result[2] == utils._nevr_from_build(package_metadata)
-    if active_state in ("older", "wrong_package"):
+    if active_state in ("older", "wrong_package", "incomplete"):
+        # An active build that resolves to an older build must not block the
+        # verified closed-build result.
         assert result == (False, "RHEL-1", result[2], None)
     else:
+        # A newer active build, an outage, or an active build that could not be
+        # resolved in Brew ("missing") all require clarification instead of a
+        # potentially duplicate rebuild.
         assert result[:3] == (None, "RHEL-1", result[2])
         assert isinstance(result[3], utils.BuildVerificationReport)
         assert "RHEL-2" in result[3].describe()
         assert "pkg-9-1.el9" in result[3].describe()
-        assert result[3].reason == "active_builds_not_closed:RHEL-2"
-        if active_state in ("missing", "incomplete"):
+        if active_state == "missing":
+            # The active build could not be resolved in Brew; the report carries
+            # the problem instead of a resolved active-build reason.
+            assert result[3].reason is None
             assert result[3].active_problems
+        else:
+            assert result[3].reason == "active_builds_not_closed:RHEL-2"
 
 
 @pytest.mark.asyncio

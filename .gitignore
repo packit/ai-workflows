@@ -70,3 +70,6 @@ logs/
 
 # Qodo working files
 .qodo/
+
+# pi agent local notes
+.pi-notes/

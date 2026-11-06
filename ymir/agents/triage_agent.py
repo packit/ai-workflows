@@ -262,9 +262,11 @@ async def _is_rebase_sibling(state, available_tools, user_triggered: bool) -> bo
     primary that already finished is stale: an explicit ``ymir_todo`` must run
     this issue's own fix instead of deferring forever.
 
-    An unreadable link keeps the deferral on automatic runs, but fails an
-    explicit run: silently writing a triage label would consume the requested
-    fix. The error uses the task retry path like any other Jira failure.
+    An unreadable marker fails the run so the task retries: treating the issue
+    as a primary would queue the real primary as one of its siblings, leaving
+    both waiting on each other. An unreadable primary (unlike the marker) keeps the
+    deferral on automatic runs but fails an explicit one, which must not
+    silently consume the requested fix.
     """
     try:
         details = await run_tool(
@@ -273,10 +275,7 @@ async def _is_rebase_sibling(state, available_tools, user_triggered: bool) -> bo
             available_tools=available_tools,
         )
     except Exception as e:
-        if user_triggered and state.is_rebase_sibling:
-            raise RuntimeError(f"Cannot verify the sibling link of {state.jira_issue}: {e}") from e
-        logger.warning(f"Failed to read sibling marker for {state.jira_issue}: {e}")
-        details = {}
+        raise RuntimeError(f"Cannot verify the sibling link of {state.jira_issue}: {e}") from e
 
     labels = details.get("fields", {}).get("labels", [])
     primary_issue = get_rebase_primary_issue(details)
@@ -714,23 +713,18 @@ async def _record_auto_processing_policy(
     and consolidation re-queues honour it too.
     """
     if not triage_only_requested and not user_triggered:
-        try:
-            current_labels, _ = await tasks.get_jira_issue_metadata(state.jira_issue)
-        except Exception as e:
-            logger.warning(
-                "Could not read labels for %s; %s not applied: %s",
+        # The persisted marker is the only record of a per-issue triage-only
+        # request. If the labels cannot be read we cannot know whether it is
+        # there, so let the failure reach the task retry path instead of
+        # falling back to the package config, which may select full processing.
+        current_labels, _ = await tasks.get_jira_issue_metadata(state.jira_issue)
+        if JiraLabels.TRIAGE_ONLY.value in current_labels:
+            logger.info(
+                "Issue %s carries %s - keeping this run triage-only",
                 state.jira_issue,
                 JiraLabels.TRIAGE_ONLY.value,
-                e,
             )
-        else:
-            if JiraLabels.TRIAGE_ONLY.value in current_labels:
-                logger.info(
-                    "Issue %s carries %s - keeping this run triage-only",
-                    state.jira_issue,
-                    JiraLabels.TRIAGE_ONLY.value,
-                )
-                triage_only_requested = True
+            triage_only_requested = True
     config = None
     if triage_only_requested:
         state.triage_only = True

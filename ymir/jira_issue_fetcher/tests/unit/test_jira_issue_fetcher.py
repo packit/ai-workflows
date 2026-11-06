@@ -1235,9 +1235,12 @@ async def test_push_both_triggers_runs_full_pipeline(fetcher, mock_redis_context
     flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
         create_async_mock_return_value(set())
     )
-    # The winning (full-pipeline) trigger is the one whose author is verified.
+    # Each present trigger is verified independently.
     flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
         "TODO-BOTH-1", label=JiraLabels.TODO.value
+    ).and_return(True).once()
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-BOTH-1", label=JiraLabels.TODO_TRIAGE.value
     ).and_return(True).once()
 
     flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
@@ -1254,6 +1257,83 @@ async def test_push_both_triggers_runs_full_pipeline(fetcher, mock_redis_context
     result = await fetcher.push_issues_to_queue(issues)
 
     assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_push_authorized_triage_trigger_despite_unauthorized_todo(fetcher, mock_redis_context):
+    """An outsider's ymir_todo must not discard an employee's ymir_todo_triage."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "TODO-BOTH-2",
+            "fields": {"labels": [JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value]},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-BOTH-2", label=JiraLabels.TODO.value
+    ).and_return(False).once()
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-BOTH-2", label=JiraLabels.TODO_TRIAGE.value
+    ).and_return(True).once()
+
+    # Only the unauthorized trigger is removed up front.
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "TODO-BOTH-2", add=[], remove=[JiraLabels.TODO.value]
+    ).once()
+    # The authorized triage-only run consumes the remaining trigger.
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "TODO-BOTH-2",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.TRIAGE_ONLY.value],
+        remove=[JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value],
+    ).once()
+
+    expected_task = Task.from_issue("TODO-BOTH-2", user_triggered=True, triage_only=True)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE_TODO.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_skip_issue_when_no_trigger_written_by_rh_employee(fetcher, mock_redis_context):
+    """Two unauthorized triggers are both removed, and nothing is enqueued."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "TODO-BOTH-3",
+            "fields": {"labels": [JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value]},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-BOTH-3", label=JiraLabels.TODO.value
+    ).and_return(False).once()
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-BOTH-3", label=JiraLabels.TODO_TRIAGE.value
+    ).and_return(False).once()
+
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "TODO-BOTH-3",
+        add=[],
+        remove=[JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value],
+    ).once()
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0
 
 
 @pytest.mark.asyncio

@@ -559,6 +559,13 @@ class AlreadyFixedData(BaseModel):
     package_issue_key: str | None = Field(
         default=None, description="Jira issue key for the existing build with the fix (if found)"
     )
+    target_version: str | None = Field(
+        default=None,
+        description=(
+            "Target version of the rebase: the package/upstream version that contains "
+            "the fix (e.g., '2.3.4'). The already-fixed build must be at this version or newer."
+        ),
+    )
     dependency_issue_key: str | None = Field(
         default=None, description="Jira issue key for the dependency fix (null for rebases)"
     )
@@ -688,7 +695,9 @@ class TriageOutputSchema(BaseModel):
         resolution = Resolution(resolution_raw) if isinstance(resolution_raw, str) else resolution_raw
         expected_cls = _RESOLUTION_DATA_MAP.get(resolution)
         if expected_cls is not None:
-            values["data"] = expected_cls.model_validate(data_raw)
+            # Copy before replacing `data` so the caller's mapping keeps its
+            # original (JSON-serializable) contents.
+            values = {**values, "data": expected_cls.model_validate(data_raw)}
         return values
 
     def format_for_comment(self, auto_chain: bool = False, triage_only: bool = False) -> str:
@@ -871,7 +880,7 @@ class TriageOutputSchema(BaseModel):
                         "*Action Required*: Search for the existing build and add this ticket to the "
                         "appropriate Errata."
                     )
-                lines.append(f"{AUTOMATED_RESOLUTION_NOT_SUPPORTED}{TRIAGE_DISCLAIMER}")
+                lines.append(f"{AUTOMATED_RESOLUTION_NOT_SUPPORTED}{confidence_text}{TRIAGE_DISCLAIMER}")
                 return "".join(lines)
 
             case ErrorData():

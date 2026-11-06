@@ -2085,3 +2085,34 @@ async def test_process_consolidation_labels_skips_modular_next_issue(fetcher, mo
     submitted = await fetcher._process_consolidation_labels(issues)
 
     assert submitted == 0
+
+
+@pytest.mark.asyncio
+async def test_get_existing_issue_keys_includes_delayed_queues(fetcher, mock_redis_context):
+    """Delayed retry tasks must be visible to the duplicate/stale guard.
+
+    A task sitting in a delayed ZSET can still be promoted later; without
+    scanning the ZSETs, a stale in-progress label would make the fetcher
+    enqueue a duplicate while the original task is still scheduled.
+    """
+    triage_delayed_json = json.dumps({"metadata": {"issue": "RHEL-DELAYED-1"}, "attempts": 1})
+    reproducer_delayed_json = json.dumps(
+        {"metadata": {"jira_issue": "RHEL-DELAYED-REPRO", "package": "bind"}, "attempts": 1}
+    )
+
+    mock_redis, _ = mock_redis_context
+    for queue in RedisQueues.all_queues():
+        mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
+            create_async_mock_return_value([])
+        )
+    mock_redis.should_receive("zrange").with_args(RedisQueues.TRIAGE_DELAYED_QUEUE.value, 0, -1).and_return(
+        create_async_mock_return_value([triage_delayed_json])
+    )
+    mock_redis.should_receive("zrange").with_args(
+        RedisQueues.REPRODUCER_DELAYED_QUEUE.value, 0, -1
+    ).and_return(create_async_mock_return_value([reproducer_delayed_json]))
+
+    result = await fetcher._get_existing_issue_keys(mock_redis)
+
+    assert "RHEL-DELAYED-1" in result
+    assert "RHEL-DELAYED-REPRO" in result

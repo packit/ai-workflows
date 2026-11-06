@@ -236,6 +236,7 @@ async def test_error_when_blocker_has_no_components(monkeypatch):
 async def test_error_when_check_build_raises(monkeypatch):
     blocker = _make_blocker(fixed_in_build="golang-1.21.0-1.el9")
     monkeypatch.setattr("ymir.sweep.dependency.get_issue", lambda key, full=False: blocker)
+    monkeypatch.setattr("ymir.sweep.dependency.resolve_brew_build", _resolve_fixed_build)
     monkeypatch.setattr(
         "ymir.sweep.dependency.check_build_in_buildroot",
         lambda *a, **kw: _async_raise(RuntimeError("Koji unreachable")),
@@ -253,6 +254,7 @@ async def test_falls_back_to_pending_issues_when_no_blocker_reference(monkeypatc
     """Blocker key resolved from pending_issues when blocker_reference is None."""
     blocker = _make_blocker(fixed_in_build="golang-1.21.0-1.el9")
     monkeypatch.setattr("ymir.sweep.dependency.get_issue", lambda key, full=False: blocker)
+    monkeypatch.setattr("ymir.sweep.dependency.resolve_brew_build", _resolve_fixed_build)
     monkeypatch.setattr(
         "ymir.sweep.dependency.check_build_in_buildroot",
         lambda *a, **kw: _async_true(),
@@ -302,6 +304,7 @@ async def test_stale_fix_version_normalised_before_buildroot_check(monkeypatch):
         "ymir.sweep.dependency.get_issue",
         lambda key, full=False: _make_blocker(fixed_in_build="golang-1.21.0-1.el9"),
     )
+    monkeypatch.setattr("ymir.sweep.dependency.resolve_brew_build", _resolve_fixed_build)
     monkeypatch.setattr("ymir.sweep.dependency.check_build_in_buildroot", capture_buildroot_check)
 
     issue = _make_issue_with_comment()
@@ -333,6 +336,7 @@ async def test_current_y_stream_fix_version_not_normalised(monkeypatch):
         "ymir.sweep.dependency.get_issue",
         lambda key, full=False: _make_blocker(fixed_in_build="golang-1.21.0-1.el9"),
     )
+    monkeypatch.setattr("ymir.sweep.dependency.resolve_brew_build", _resolve_fixed_build)
     monkeypatch.setattr("ymir.sweep.dependency.check_build_in_buildroot", capture_buildroot_check)
 
     issue = make_issue(fix_versions=["rhel-9.9"], comments=[_make_comment()])

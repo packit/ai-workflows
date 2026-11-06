@@ -3,6 +3,7 @@ import functools
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import traceback
@@ -16,8 +17,11 @@ from beeai_framework.agents.requirement.requirements.conditional import (
 from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
+from beeai_framework.tools import ToolError
 from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field, ValidationError
+from specfile.exceptions import SpecfileException
+from specfile.utils import EVR, NEVR
 
 import ymir.agents.tasks as tasks
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
@@ -85,7 +89,9 @@ from ymir.common.utils import (
     FIXED_IN_BUILD_CUSTOM_FIELD,
     BuildVerificationReport,
     InvalidDependencyDataError,
+    PermanentValidationError,
     TransientInfrastructureError,
+    build_tags_in_stream,
     check_build_in_buildroot,
     check_package_built_with_fixed_dependency,
     extract_text_from_adf,
@@ -101,6 +107,7 @@ from ymir.common.version_utils import (
     get_maintenance_majors,
     is_modular,
     is_older_zstream,
+    nevr_matches_fix_version_stream,
     normalize_fix_version,
     parse_module_stream,
     parse_rhel_version,
@@ -180,6 +187,11 @@ async def _postponed_comment_exists(jira_issue: str, resolution: Resolution, ava
             return True
     return False
 
+
+# Jira rejects comment bodies longer than ~32k characters; leave headroom for
+# the clarification findings the report is appended to.
+_JIRA_COMMENT_MAX_CHARS = 30_000
+_JIRA_COMMENT_MIN_REPORT_CHARS = 500
 
 _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {
     Resolution.REBASE: JiraLabels.TRIAGED_REBASE,
@@ -640,6 +652,13 @@ class TriageState(BaseModel):
         default=None,
         description="Jira issue summary (title), used for modular detection.",
     )
+    ticket_fix_version: str | None = Field(
+        default=None,
+        description=(
+            "Fix version from the ticket's Jira fixVersions field (authoritative, "
+            "independent of the LLM's answer)."
+        ),
+    )
     applicability_local_clone: Path | None = Field(default=None)
     applicability_unpacked_sources: Path | None = Field(default=None)
     applicability_used_fallback: bool = Field(default=False)
@@ -932,6 +951,44 @@ def validate_triage_output(
             "postponed_pr_pending requires the upstream PR/MR URL(s) in `data.blocker_references`."
         )
 
+    # An already-fixed answer asks a human to add a build to errata; without the
+    # verified build reference that action cannot be carried out, and without
+    # the completed issue reference the claim cannot be substantiated in Jira.
+    if resolution == Resolution.ALREADY_FIXED:
+        if not validated_data.package_nvr:
+            raise ValueError(
+                "already-fixed requires the verified build NVR in `data.package_nvr` "
+                "(the Fixed in Build value of the completed issue you found). If you cannot "
+                "identify a matching completed build, use clarification-needed instead."
+            )
+        if not validated_data.package_issue_key:
+            raise ValueError(
+                "already-fixed requires the Jira issue key of the completed build in "
+                "`data.package_issue_key`, so the claim can be cross-checked against the "
+                "issue's status and Fixed in Build value. If you cannot identify the "
+                "completed issue, use clarification-needed instead."
+            )
+        if not validated_data.target_version:
+            raise ValueError(
+                "already-fixed requires the rebase target version in `data.target_version` "
+                "(the package version that contains the fix), so the named build can be "
+                "checked to be at that version or newer. If you cannot determine the target "
+                "version, use clarification-needed instead."
+            )
+
+    # For rebuilds (dependency fixes) the workflow verifies from build logs whether
+    # the package was already rebuilt with the fixed dependency; an LLM-produced
+    # already-fixed would skip that verification.
+    if resolution == Resolution.ALREADY_FIXED and (
+        validated_data.dependency_issue_key or validated_data.dependency_nvr
+    ):
+        raise ValueError(
+            "already-fixed cannot be used for rebuilds (dependency fixes): whether the "
+            "package was already rebuilt with the fixed dependency is verified "
+            "automatically from build logs. Return `rebuild` instead and let the "
+            "verification run."
+        )
+
     # `data` is an untagged union, so stray keys (e.g. `version` in a rebuild answer)
     # could make the final parse pick another resolution's model. Keep only the
     # fields of the model chosen by `resolution`.
@@ -947,6 +1004,245 @@ def validate_triage_output(
             f"{resolution.value!r} resolution."
         )
     return normalized
+
+
+def _jira_issue_not_accessible(error: Exception) -> bool:
+    """Whether a Jira lookup failed because the issue is gone or forbidden.
+
+    A nonexistent, deleted, or inaccessible issue key is a permanent data
+    problem that must clarify, not an outage that retries. The original
+    HTTP status is found on the chained exception for in-process tools, or in
+    the gateway-propagated error context (``additional_context.exception``)
+    for remote tools.
+    """
+    # In-process tools chain the original aiohttp exception.
+    for exc in (error, getattr(error, "cause", None), error.__cause__):
+        if getattr(exc, "status", None) in (403, 404, 410):
+            return True
+    # Gateway tools carry the original exception string in the error context.
+    context = getattr(error, "context", None)
+    additional = context.get("additional_context") if isinstance(context, dict) else None
+    exception_text = str(additional.get("exception", "")) if isinstance(additional, dict) else ""
+    return bool(re.search(r"ClientResponseError: (403|404|410)\b", exception_text))
+
+
+async def verify_already_fixed_build(
+    *,
+    package: str | None,
+    package_nvr: str | None,
+    package_issue_key: str | None,
+    fix_version: str,
+    target_version: str | None,
+    available_tools,
+) -> tuple[str, str] | None:
+    """Cross-check an LLM-produced already-fixed build against Brew (and Jira).
+
+    The rebase path lets the model return ``already-fixed`` pointing at the build
+    that already carries the fix. A non-empty ``package_nvr`` alone is not
+    evidence: the named build must actually exist in Brew, belong to this
+    package, be at the rebase target version or newer, and ship in the ticket's
+    own release stream, and the referenced issue must be completed and carry
+    that same build.
+
+    Returns ``None`` when the evidence holds up, or a
+    ``(findings, additional_info_needed)`` tuple describing why a clarification is
+    needed instead. Raises ``TransientInfrastructureError`` (or the underlying
+    exception) when Brew/Jira cannot be reached, so the caller can retry.
+    """
+    if not package_nvr:
+        return (
+            "An already-fixed result was produced but no build NVR was provided, so the "
+            "fix cannot be confirmed.",
+            "Please identify the completed build that already contains the fix, or confirm "
+            "a rebase/backport is required.",
+        )
+
+    # Resolve the named build against Brew. A malformed NVR is a permanent data
+    # problem (clarify); a Brew outage is transient (retry).
+    try:
+        brew_build = await resolve_brew_build(package_nvr)
+    except PermanentValidationError:
+        return (
+            f"The already-fixed build {package_nvr!r} is not a valid Brew NVR, so it cannot be verified.",
+            "Please provide the correct Fixed in Build NVR of the completed build, or "
+            "confirm a rebase/backport is required.",
+        )
+    except TransientInfrastructureError:
+        logger.warning(
+            "Transient Brew lookup for already-fixed build %s; retrying", package_nvr, exc_info=True
+        )
+        raise
+    if brew_build is None:
+        return (
+            f"The already-fixed build {package_nvr} could not be found in Brew, so it cannot "
+            f"be confirmed to contain the fix.",
+            "Please provide the NVR of a completed build that exists in Brew, or confirm a "
+            "rebase/backport is required.",
+        )
+
+    # The build must be for this package.
+    if package and brew_build.nevr.name != package:
+        return (
+            f"The already-fixed build {brew_build.nevr} is for package "
+            f"{brew_build.nevr.name!r}, not {package!r}.",
+            "Please provide the completed build for the correct package, or confirm a "
+            "rebase/backport is required.",
+        )
+
+    # The build must ship in this ticket's release stream. For a z-stream fix version
+    # this means the dist tag must carry the minor (.el9_8): the fix ships exclusively
+    # through the rhel-9.8.0 maintenance branch, so a higher-EVR .el9 build cannot
+    # prove the fix is present there.
+    if fix_version and not nevr_matches_fix_version_stream(brew_build.nevr, fix_version):
+        return (
+            f"The already-fixed build {brew_build.nevr} does not belong to the release stream "
+            f"of fix version {fix_version}.",
+            "Please provide the completed build that ships in this ticket's release stream, or "
+            "confirm a rebase/backport is required.",
+        )
+
+    # The release stream cannot be verified without a fix version; an
+    # already-fixed claim must not pass on a Brew-existence check alone.
+    if not fix_version:
+        return (
+            "An already-fixed result was produced without a fix version, so the release "
+            "stream of the named build cannot be confirmed.",
+            "Please provide the fix version of this ticket, or confirm a rebase/backport "
+            "is required.",
+        )
+
+    # The dist tag is a convention; Brew tag membership is the authoritative
+    # signal that the build is part of the fix version's stream. Only runs for
+    # z-stream fix versions; unperformable checks (None) fail open.
+    # The dist tag is a convention; Brew tag membership is the authoritative
+    # signal that the build is part of the fix version's stream. A build with
+    # only candidate/gate-stage tags is a fix in progress rather than a shipped
+    # one — tell the user instead of letting it pass as already fixed.
+    # Unperformable checks (None) fail open.
+    tags_in_stream = await build_tags_in_stream(brew_build, fix_version)
+    if tags_in_stream is not None:
+        _branch, shipped_tags, in_progress_tags = tags_in_stream
+        if not shipped_tags and not in_progress_tags:
+            return (
+                f"The already-fixed build {brew_build.nevr} carries no tag of the "
+                f"{fix_version} stream, so it is not part of it.",
+                "Please provide the completed build that is tagged into this ticket's "
+                "stream, or confirm a rebase/backport is required.",
+            )
+        if not shipped_tags:
+            return (
+                f"The already-fixed build {brew_build.nevr} is only tagged into "
+                f"{', '.join(in_progress_tags)}: the fix appears to be in progress "
+                f"in the {fix_version} stream, not shipped.",
+                "Please verify whether this ticket should wait for that build to "
+                "reach a pending/release tag; you may have to update the referencing "
+                "issue or its errata once the fix ships.",
+            )
+
+    # The named build must not predate the rebase target: a completed build of an
+    # older version cannot contain the fix the rebase is meant to introduce.
+    # Only the upstream versions are compared: the epochs are matched (an
+    # Epoch >= 1 build must not bypass the floor) and the release is ignored
+    # (a build at the target version with a low release, e.g. 0.1.rc1, is
+    # still at the target version).
+    if target_version:
+        try:
+            build_version = EVR(epoch=brew_build.nevr.epoch, version=brew_build.nevr.version, release="")
+            target_floor = EVR(epoch=brew_build.nevr.epoch, version=target_version, release="")
+        except ValueError:
+            return (
+                f"The rebase target version {target_version!r} cannot be compared with RPM "
+                f"version ordering, so the already-fixed build {brew_build.nevr} cannot be "
+                f"verified against it.",
+                "Please provide a valid target version, or confirm a rebase/backport is "
+                "required.",
+            )
+        if build_version < target_floor:
+            return (
+                f"The already-fixed build {brew_build.nevr} is older than the rebase target "
+                f"version {target_version}, so it cannot contain the fix.",
+                "Please provide the completed build at the target version or newer, or "
+                "confirm a rebase/backport is required.",
+            )
+
+    # The completed Jira issue must substantiate the claim: its status,
+    # resolution, and Fixed in Build are cross-checked before the result is
+    # accepted. A missing issue reference cannot be verified at all.
+    if not package_issue_key:
+        return (
+            "An already-fixed result was produced without the completed issue reference, "
+            "so the fix cannot be confirmed.",
+            "Please reference the completed Jira issue whose Fixed in Build carries the "
+            "fix, or confirm a rebase/backport is required.",
+        )
+    try:
+        details = await run_tool(
+            "get_jira_details",
+            available_tools=available_tools,
+            issue_key=package_issue_key,
+        )
+    except (ConnectionError, OSError, TimeoutError) as error:
+        # A Jira/gateway outage is transient: surface it as such so the task
+        # retries with infrastructure backoff instead of failing fast.
+        logger.warning("Jira lookup for %s failed; retrying: %s", package_issue_key, error)
+        raise TransientInfrastructureError(
+            f"Jira lookup for already-fixed verification of {package_issue_key} failed: {error}"
+        ) from error
+    except ToolError as error:
+        if _jira_issue_not_accessible(error):
+            # A nonexistent or inaccessible issue key is a data problem: the
+            # model's claim cannot be verified, so clarify instead of retrying
+            # until the task errors out.
+            logger.warning("Referenced issue %s is not accessible: %s", package_issue_key, error)
+            return (
+                f"The referenced issue {package_issue_key} could not be found or accessed, "
+                f"so the already-fixed claim cannot be verified.",
+                "Please provide the correct completed issue key, or confirm a "
+                "rebase/backport is required.",
+            )
+        logger.warning("Jira lookup for %s failed; retrying: %s", package_issue_key, error)
+        raise TransientInfrastructureError(
+            f"Jira lookup for already-fixed verification of {package_issue_key} failed: {error}"
+        ) from error
+    fields = details.get("fields", {}) if isinstance(details, dict) else {}
+    status = (fields.get("status") or {}).get("name")
+    resolution_name = (fields.get("resolution") or {}).get("name")
+    if status not in ("Closed", "Done", "Resolved") or resolution_name not in (
+        "Done",
+        "Done-Errata",
+    ):
+        return (
+            f"The referenced issue {package_issue_key} is not completed "
+            f"(status={status!r}, resolution={resolution_name!r}), so build {package_nvr} "
+            f"cannot be treated as an already-shipped fix.",
+            "Please reference a completed issue whose build already contains the fix, or "
+            "confirm a rebase/backport is required.",
+        )
+    fixed_in_build = fields.get(FIXED_IN_BUILD_CUSTOM_FIELD)
+
+    def _same_build(a: object, b: object) -> bool:
+        # A non-string Jira field value (e.g. a number) must fail the comparison
+        # and produce the mismatch clarification below, not escape as an
+        # exception from NEVR parsing.
+        if not isinstance(a, str) or not isinstance(b, str) or not a.strip() or not b.strip():
+            return False
+        try:
+            return get_epochless_nvr_string(NEVR.from_string(a)) == get_epochless_nvr_string(
+                NEVR.from_string(b)
+            )
+        except (SpecfileException, ValueError):
+            return a.strip() == b.strip()
+
+    if not _same_build(fixed_in_build, package_nvr):
+        return (
+            f"The referenced issue {package_issue_key} has Fixed in Build "
+            f"{fixed_in_build!r}, which does not match the already-fixed build "
+            f"{package_nvr}.",
+            "Please reference the completed issue whose Fixed in Build matches the build "
+            "that contains the fix, or confirm a rebase/backport is required.",
+        )
+
+    return None
 
 
 async def run_workflow(
@@ -1140,6 +1436,9 @@ async def run_workflow(
                     fix_version_name = fix_versions[0].get("name", "")
             except Exception as e:
                 logger.warning(f"Failed to pre-fetch Jira details for prompt selection: {e}")
+            # The ticket's fix version is authoritative over the LLM's answer;
+            # keep it on the state for the already-fixed verification.
+            state.ticket_fix_version = fix_version_name or None
 
             input_data = InputSchema(issue=state.jira_issue)
             state.is_rebase_sibling = (
@@ -1228,11 +1527,18 @@ async def run_workflow(
                 Resolution.REBUILD,
             ]:
                 return "determine_target_branch"
+            # An LLM-produced already-fixed (rebase scenario) names a build the
+            # workflow has not verified. Resolve and cross-check it against Brew
+            # before publishing, so a stray non-empty NVR cannot route a ticket to
+            # ALREADY_FIXED. (Rebuild already-fixed results are set directly by
+            # verify_rebuild_buildroot, which returns comment_result() and never
+            # reaches this router.)
+            if state.triage_result.resolution == Resolution.ALREADY_FIXED:
+                return "verify_already_fixed"
             if state.triage_result.resolution in [
                 Resolution.CLARIFICATION_NEEDED,
                 Resolution.OPEN_ENDED_ANALYSIS,
                 Resolution.NOT_AFFECTED,
-                Resolution.ALREADY_FIXED,
             ]:
                 return "comment_in_jira"
             if state.triage_result.resolution in POSTPONED_RESOLUTIONS:
@@ -1290,6 +1596,150 @@ async def run_workflow(
                 return "consolidate_rebuild_siblings"
             if state.triage_result.resolution == Resolution.REBASE:
                 return "consolidate_rebase_siblings"
+            return "comment_in_jira"
+
+        async def verify_already_fixed(state):
+            """Verify an LLM-produced already-fixed answer before publishing it.
+
+            The rebase path lets the model return ``already-fixed`` pointing at the
+            build that already carries the fix. Cross-check it against Brew (and the
+            referenced Jira issue) and downgrade to clarification-needed when the
+            evidence does not hold up, instead of asking a human to add the wrong
+            build to the errata.
+            """
+            data = state.triage_result.data
+            package = getattr(data, "package", None)
+            package_nvr = getattr(data, "package_nvr", None)
+            package_issue_key = getattr(data, "package_issue_key", None)
+            target_version = getattr(data, "target_version", None)
+            fix_version = getattr(data, "fix_version", None) or ""
+
+            # Ticket fields are authoritative over the model's claims. The
+            # ticket's fix version (already normalized for the answer below)
+            # replaces the model's value when available, and a model value that
+            # disagrees with the ticket is a data inconsistency to clarify,
+            # not to trust. When the initial prefetch left the ticket fields
+            # unset, re-fetch the ticket first instead of silently falling
+            # back to the model's values.
+            ticket_fix_version = state.ticket_fix_version
+            ticket_downstream_component = state.downstream_component
+            if ticket_fix_version is None or ticket_downstream_component is None:
+                try:
+                    details = await run_tool(
+                        "get_jira_details",
+                        available_tools=gateway_tools,
+                        issue_key=state.jira_issue,
+                    )
+                except (ConnectionError, OSError, TimeoutError, ToolError) as error:
+                    logger.warning(
+                        "Jira re-fetch for %s failed; retrying: %s", state.jira_issue, error
+                    )
+                    raise TransientInfrastructureError(
+                        f"Jira lookup for already-fixed verification of {state.jira_issue} "
+                        f"failed: {error}"
+                    ) from error
+                fields = details.get("fields", {}) if isinstance(details, dict) else {}
+                if ticket_fix_version is None:
+                    fix_versions = fields.get("fixVersions", []) or []
+                    ticket_fix_version = fix_versions[0].get("name") if fix_versions else None
+                if ticket_downstream_component is None:
+                    ticket_downstream_component = extract_downstream_package(
+                        fields.get(DOWNSTREAM_COMPONENT_CUSTOM_FIELD)
+                    )
+            if ticket_fix_version:
+                rhel_config = await load_rhel_config()
+                ticket_fix_version = normalize_fix_version(ticket_fix_version, rhel_config)
+                if fix_version and fix_version != ticket_fix_version:
+                    logger.warning(
+                        f"Model fix version {fix_version!r} disagrees with ticket fix "
+                        f"version {ticket_fix_version!r} for {state.jira_issue}"
+                    )
+                    state.triage_result = OutputSchema(
+                        confidence=state.triage_result.confidence,
+                        resolution=Resolution.CLARIFICATION_NEEDED,
+                        data=ClarificationNeededData(
+                            findings=(
+                                f"The already-fixed answer names fix version {fix_version}, "
+                                f"but this ticket's fix version is {ticket_fix_version}. "
+                                f"This inconsistency prevents automated verification."
+                            ),
+                            additional_info_needed=(
+                                "Please verify the fix version of this ticket and whether "
+                                "the named build belongs to it, or confirm a "
+                                "rebase/backport is required."
+                            ),
+                            jira_issue=state.jira_issue,
+                        ),
+                    )
+                    return "comment_in_jira"
+                fix_version = ticket_fix_version
+            else:
+                # No authoritative fix version even after the re-fetch: do not
+                # silently trust the model's value. An empty fix version makes
+                # verify_already_fixed_build request clarification (the release
+                # stream cannot be verified without it).
+                fix_version = ""
+
+            # The ticket's Downstream Component is authoritative for the package
+            # name; a disagreement with the model's claim is an inconsistency.
+            if ticket_downstream_component and package and ticket_downstream_component != package:
+                logger.warning(
+                    f"Model package {package!r} disagrees with ticket component "
+                    f"{ticket_downstream_component!r} for {state.jira_issue}"
+                )
+                state.triage_result = OutputSchema(
+                    confidence=state.triage_result.confidence,
+                    resolution=Resolution.CLARIFICATION_NEEDED,
+                    data=ClarificationNeededData(
+                        findings=(
+                            f"The already-fixed answer names package {package}, but this "
+                            f"ticket's Downstream Component is {ticket_downstream_component}. "
+                            f"This inconsistency prevents automated verification."
+                        ),
+                        additional_info_needed=(
+                            "Please verify which package this ticket tracks and whether the "
+                            "named build belongs to it, or confirm a rebase/backport "
+                            "is required."
+                        ),
+                        jira_issue=state.jira_issue,
+                    ),
+                )
+                return "comment_in_jira"
+            # The Downstream Component field is optional on tickets: when it is
+            # genuinely absent, the model's package stands, still guarded by the
+            # Brew build-name check in verify_already_fixed_build.
+            package = ticket_downstream_component or package
+
+            logger.info(
+                f"Verifying already-fixed build {package_nvr!r} for {state.jira_issue} "
+                f"(package={package}, issue={package_issue_key})"
+            )
+
+            clarification = await verify_already_fixed_build(
+                package=package,
+                package_nvr=package_nvr,
+                package_issue_key=package_issue_key,
+                fix_version=fix_version,
+                target_version=target_version,
+                available_tools=gateway_tools,
+            )
+            if clarification is not None:
+                findings, additional_info_needed = clarification
+                logger.info(
+                    f"already-fixed build {package_nvr!r} for {state.jira_issue} not verified: {findings}"
+                )
+                state.triage_result = OutputSchema(
+                    confidence=state.triage_result.confidence,
+                    resolution=Resolution.CLARIFICATION_NEEDED,
+                    data=ClarificationNeededData(
+                        findings=findings,
+                        additional_info_needed=additional_info_needed,
+                        jira_issue=state.jira_issue,
+                    ),
+                )
+                return "comment_in_jira"
+
+            logger.info(f"already-fixed build {package_nvr} verified for {state.jira_issue}")
             return "comment_in_jira"
 
         async def verify_rebase_author(state):
@@ -1531,7 +1981,22 @@ async def run_workflow(
             def comment_result():
                 data = state.triage_result.data
                 if isinstance(data, ClarificationNeededData) and verification_report is not None:
-                    data.findings += "\n\n" + verification_report.describe()
+                    # Jira rejects comment bodies beyond its size limit. Budget the
+                    # appended report against the complete formatted comment (all
+                    # fields and formatting included, not just findings), and omit
+                    # the report entirely when not even the minimum fits — the
+                    # report must never make the clarification unpublishable.
+                    base_length = len(state.triage_result.format_for_comment(auto_chain=auto_chain))
+                    remaining = _JIRA_COMMENT_MAX_CHARS - base_length - 2
+                    if remaining >= _JIRA_COMMENT_MIN_REPORT_CHARS:
+                        data.findings += "\n\n" + verification_report.describe(max_chars=remaining)
+                    else:
+                        logger.warning(
+                            "Build verification report omitted from the clarification for %s: "
+                            "only %d characters remain in the Jira comment budget",
+                            state.jira_issue,
+                            remaining,
+                        )
                 return "comment_in_jira"
 
             data = state.triage_result.data
@@ -1542,11 +2007,38 @@ async def run_workflow(
                 logger.info("Missing dependency info or target branch — skipping buildroot check")
                 return "consolidate_rebuild_siblings"
 
-            dep_details = await run_tool(
-                "get_jira_details",
-                available_tools=gateway_tools,
-                issue_key=dep_issue_key,
-            )
+            try:
+                dep_details = await run_tool(
+                    "get_jira_details",
+                    available_tools=gateway_tools,
+                    issue_key=dep_issue_key,
+                )
+            except (ConnectionError, OSError, TimeoutError, ToolError) as error:
+                if _jira_issue_not_accessible(error):
+                    # A wrong dependency issue key is a data problem: clarify
+                    # instead of retrying until the task errors out.
+                    logger.warning("Dependency issue %s is not accessible: %s", dep_issue_key, error)
+                    state.triage_result = OutputSchema(
+                        confidence=state.triage_result.confidence,
+                        resolution=Resolution.CLARIFICATION_NEEDED,
+                        data=ClarificationNeededData(
+                            findings=(
+                                f"The dependency issue {dep_issue_key} could not be found or "
+                                f"accessed in Jira, so its Fixed in Build cannot be verified."
+                            ),
+                            additional_info_needed=(
+                                "Please verify the dependency issue key for this ticket and "
+                                "correct it, then re-run triage."
+                            ),
+                            jira_issue=state.jira_issue,
+                        ),
+                    )
+                    return comment_result()
+                # A Jira/gateway outage is transient: retry with backoff.
+                logger.warning("Jira lookup for %s failed; retrying: %s", dep_issue_key, error)
+                raise TransientInfrastructureError(
+                    f"Jira lookup for dependency {dep_issue_key} failed: {error}"
+                ) from error
             fixed_in_build = dep_details.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
             if not fixed_in_build:
                 logger.warning(f"Dependency {dep_issue_key} has no Fixed in Build — skipping buildroot check")
@@ -1563,6 +2055,7 @@ async def run_workflow(
                     f"{fixed_in_build!r} — {e}"
                 )
                 state.triage_result = OutputSchema(
+                    confidence=state.triage_result.confidence,
                     resolution=Resolution.CLARIFICATION_NEEDED,
                     data=ClarificationNeededData(
                         findings=(
@@ -1582,6 +2075,7 @@ async def run_workflow(
             if fixed_dep_build is None:
                 logger.warning("Dependency %s Fixed in Build was not found in Brew", dep_issue_key)
                 state.triage_result = OutputSchema(
+                    confidence=state.triage_result.confidence,
                     resolution=Resolution.CLARIFICATION_NEEDED,
                     data=ClarificationNeededData(
                         findings=(
@@ -1591,6 +2085,39 @@ async def run_workflow(
                         additional_info_needed=(
                             "Please correct the Fixed in Build field or confirm the dependency build "
                             "exists in Brew, then re-run triage."
+                        ),
+                        jira_issue=state.jira_issue,
+                    ),
+                )
+                return comment_result()
+            # Cross-validate the LLM-provided dependency component against the
+            # authoritative Brew build name right where both are first available:
+            # a mismatch means a hallucinated or corrupted dependency record, and
+            # no further verification should run on it.
+            if fixed_dep_build.nevr.name != dep_component:
+                logger.warning(
+                    f"Invalid dependency data: {dep_component} resolves to "
+                    f"{fixed_dep_build.nevr.name}. Requesting clarification."
+                )
+                state.triage_result = OutputSchema(
+                    confidence=state.triage_result.confidence,
+                    resolution=Resolution.CLARIFICATION_NEEDED,
+                    data=ClarificationNeededData(
+                        findings=(
+                            f"The dependency component {dep_component} (from issue "
+                            f"{dep_issue_key}, Fixed in Build: {fixed_in_build}) resolves "
+                            f"to a different package name in Brew "
+                            f"({fixed_dep_build.nevr.name}). This inconsistency between the Jira "
+                            f"dependency information and the actual Brew package data prevents "
+                            f"automated verification of whether the package was rebuilt with "
+                            f"the fixed dependency."
+                        ),
+                        additional_info_needed=(
+                            f"Please verify the dependency information for {dep_component}. "
+                            f"If the dependency component name in Jira is incorrect, update the "
+                            f"dependency link. If the Brew package name mapping is correct but "
+                            f"unexpected, please manually verify whether the package needs to be "
+                            f"rebuilt with the fixed dependency."
                         ),
                         jira_issue=state.jira_issue,
                     ),
@@ -1611,7 +2138,6 @@ async def run_workflow(
                     ) = await check_package_built_with_fixed_dependency(
                         package=package,
                         fix_version=fix_version,
-                        dep_component=dep_component,
                         fixed_dep_build=fixed_dep_build,
                         available_tools=gateway_tools,
                         jira_issue=state.jira_issue,
@@ -1622,6 +2148,7 @@ async def run_workflow(
                         verification_report = reason
                         if reason.reason is None:
                             state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
                                 resolution=Resolution.CLARIFICATION_NEEDED,
                                 data=ClarificationNeededData(
                                     findings=(
@@ -1652,6 +2179,7 @@ async def run_workflow(
                         cve_text = " and ".join(cve_list) if cve_list else "the vulnerability"
 
                         state.triage_result = OutputSchema(
+                            confidence=state.triage_result.confidence,
                             resolution=Resolution.ALREADY_FIXED,
                             data=AlreadyFixedData(
                                 explanation=(
@@ -1673,6 +2201,37 @@ async def run_workflow(
                     if already_fixed is None:
                         cve_id = getattr(data, "cve_id", None) or ""
 
+                        if reason == "timestamp_comparison_failed":
+                            # Completion metadata is missing on an otherwise
+                            # resolved build — a permanent data gap, not an
+                            # outage: request manual verification instead of
+                            # retrying forever.
+                            logger.warning(
+                                f"Completion timestamps unavailable for {package} ({pkg_nvr}) "
+                                f"vs {dep_component}; requesting manual verification"
+                            )
+                            state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"The completion timestamps of the latest build of {package} "
+                                        f"(Fixed in Build: {pkg_nvr} from {pkg_issue_key}) or of the "
+                                        f"fixed {dep_component} build (Fixed in Build: "
+                                        f"{fixed_in_build}) are missing in Brew, and the "
+                                        f"installed_pkgs.log is unavailable, so the build order "
+                                        f"cannot be determined automatically."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please verify manually whether build {pkg_nvr} was created "
+                                        f"with {dep_component} {fixed_in_build} or newer. If it was, "
+                                        f"use that build for errata processing; otherwise confirm a "
+                                        f"rebuild is required."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return comment_result()
                         if reason == "built_after_fix_no_installed_pkgs_log":
                             # Package built after fix but no installed_pkgs.log - needs manual verification
                             logger.info(
@@ -1680,6 +2239,7 @@ async def run_workflow(
                                 "but installed_pkgs.log is unavailable. Requesting manual verification."
                             )
                             state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
                                 resolution=Resolution.CLARIFICATION_NEEDED,
                                 data=ClarificationNeededData(
                                     findings=(
@@ -1710,6 +2270,7 @@ async def run_workflow(
                                 f"Requesting clarification."
                             )
                             state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
                                 resolution=Resolution.CLARIFICATION_NEEDED,
                                 data=ClarificationNeededData(
                                     findings=(
@@ -1732,6 +2293,7 @@ async def run_workflow(
                         if reason and reason.startswith("unresolved_subpackage_needs_verification:"):
                             subpkg_list = reason.split(":", 1)[1]
                             state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
                                 resolution=Resolution.CLARIFICATION_NEEDED,
                                 data=ClarificationNeededData(
                                     findings=(
@@ -1757,6 +2319,7 @@ async def run_workflow(
                                 f"Requesting manual verification."
                             )
                             state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
                                 resolution=Resolution.CLARIFICATION_NEEDED,
                                 data=ClarificationNeededData(
                                     findings=(
@@ -1787,6 +2350,7 @@ async def run_workflow(
                                 f"Dependency missing from some arch logs."
                             )
                             state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
                                 resolution=Resolution.CLARIFICATION_NEEDED,
                                 data=ClarificationNeededData(
                                     findings=(
@@ -1813,6 +2377,7 @@ async def run_workflow(
                                 f"Different buildroots used."
                             )
                             state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
                                 resolution=Resolution.CLARIFICATION_NEEDED,
                                 data=ClarificationNeededData(
                                     findings=(
@@ -1838,6 +2403,7 @@ async def run_workflow(
                                 f"All builds belonged to other packages after filtering."
                             )
                             state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
                                 resolution=Resolution.CLARIFICATION_NEEDED,
                                 data=ClarificationNeededData(
                                     findings=(
@@ -1863,6 +2429,7 @@ async def run_workflow(
                                 f"package names in Brew: {rejected_issues}"
                             )
                             state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
                                 resolution=Resolution.CLARIFICATION_NEEDED,
                                 data=ClarificationNeededData(
                                     findings=(
@@ -1881,45 +2448,127 @@ async def run_workflow(
                                 ),
                             )
                             return comment_result()
-                        if reason and reason.startswith("invalid_dependency_record:"):
-                            # Dependency component resolves to different package in Brew
-                            dep_details = reason.split(":", 1)[1]
+                        if reason and reason.startswith("build_not_tagged_in_stream:"):
+                            # The referenced build carries no tag of the fix
+                            # version's stream — a Jira data problem.
+                            branch = reason.split(":", 1)[1]
                             logger.warning(
-                                f"Dependency component {dep_component} resolves to a different "
-                                f"package in Brew: {dep_details}"
+                                f"Already-fixed build for {package} carries no tag of the "
+                                f"{branch} stream; requesting clarification"
                             )
                             state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
                                 resolution=Resolution.CLARIFICATION_NEEDED,
                                 data=ClarificationNeededData(
                                     findings=(
-                                        f"The dependency component {dep_component} (from issue "
-                                        f"{dep_issue_key}, Fixed in Build: {fixed_in_build}) resolves "
-                                        f"to a different package name in Brew ({dep_details}). This "
-                                        f"inconsistency between the Jira dependency information and the "
-                                        f"actual Brew package data prevents automated verification of "
-                                        f"whether {package} was rebuilt with the fixed dependency."
+                                        f"The latest completed build of {package} in {fix_version} "
+                                        f"carries no tag of the {branch} Brew stream, so it "
+                                        f"is not part of that stream and cannot prove the fix "
+                                        f"shipped there."
                                     ),
                                     additional_info_needed=(
-                                        f"Please verify the dependency information for {dep_component}. "
-                                        f"If the dependency component name in Jira is incorrect, update "
-                                        f"the dependency link. If the Brew package name mapping is "
-                                        f"correct but unexpected, please manually verify whether "
-                                        f"{package} needs to be rebuilt with the fixed dependency."
+                                        f"Please verify the Fixed in Build references for "
+                                        f"{package} in {fix_version} and provide a build "
+                                        f"tagged into the {branch} stream, or confirm a "
+                                        f"rebuild is required."
                                     ),
                                     jira_issue=state.jira_issue,
                                 ),
                             )
                             return comment_result()
-                        # Verification failures now carry the complete candidate report.
-                        # Unknown reason - should not happen but handle gracefully
+                        if reason and reason.startswith("fix_in_progress_in_stream:"):
+                            # The referenced build is only in candidate/gate-stage
+                            # tags: a fix is being worked on in this stream — stop
+                            # and tell the user instead of verifying it as shipped.
+                            tags = reason.split(":", 1)[1]
+                            logger.info(
+                                f"Fix for {package} appears in progress in {fix_version} "
+                                f"({tags}); requesting clarification"
+                            )
+                            state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"The latest completed build of {package} in {fix_version} "
+                                        f"is only tagged into {tags}: the fix appears to be "
+                                        f"in progress in that stream, not shipped."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please verify whether {package} should wait for that "
+                                        f"build to reach a pending/release tag; you may have "
+                                        f"to update the referencing issue or its errata once "
+                                        f"the fix ships."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return comment_result()
+                        if reason == "renamed_binary_lookup_failed":
+                            # Brew could not enumerate the renamed binary RPMs of
+                            # the dependency, so binary RPM name coverage was
+                            # incomplete — no rebuild conclusion may be drawn.
+                            logger.warning(
+                                f"Renamed binary RPM lookup failed for {dep_component} while "
+                                f"verifying {package}; requesting clarification"
+                            )
+                            state.triage_result = OutputSchema(
+                                confidence=state.triage_result.confidence,
+                                resolution=Resolution.CLARIFICATION_NEEDED,
+                                data=ClarificationNeededData(
+                                    findings=(
+                                        f"Brew could not list the binary RPMs of newer "
+                                        f"{dep_component} builds while verifying whether {package} "
+                                        f"in {fix_version} was rebuilt with the fixed dependency "
+                                        f"(issue {dep_issue_key}, Fixed in Build: {fixed_in_build}). "
+                                        f"The dependency was not found under the fixed build's "
+                                        f"binary RPM names in "
+                                        f"{pkg_nvr or 'the package build'}'s installed_pkgs.log, "
+                                        f"but a renamed binary RPM cannot be ruled out."
+                                    ),
+                                    additional_info_needed=(
+                                        f"Please check the installed_pkgs.log of "
+                                        f"{pkg_nvr or 'the package build'} for any {dep_component} "
+                                        f"binary RPM (the name may have changed between builds) and "
+                                        f"confirm whether its version is {fixed_in_build} or newer. "
+                                        f"If it is, use that build for errata processing; otherwise "
+                                        f"confirm a rebuild is required."
+                                    ),
+                                    jira_issue=state.jira_issue,
+                                ),
+                            )
+                            return comment_result()
+                        # Any other None result carries a reason we do not
+                        # specifically handle. Never default to a rebuild
+                        # verdict from an unhandled outcome.
                         logger.error(f"Unexpected None result with reason={reason} for {package}")
-                        # Fall through to standard rebuild check below
+                        state.triage_result = OutputSchema(
+                            confidence=state.triage_result.confidence,
+                            resolution=Resolution.CLARIFICATION_NEEDED,
+                            data=ClarificationNeededData(
+                                findings=(
+                                    f"Verification of whether {package} in {fix_version} was "
+                                    f"already rebuilt with the fixed {dep_component} dependency "
+                                    f"(issue {dep_issue_key}, Fixed in Build: {fixed_in_build}) "
+                                    f"returned an unhandled outcome: {reason}."
+                                ),
+                                additional_info_needed=(
+                                    f"Please verify the existing builds of {package} in "
+                                    f"{fix_version} and whether any already contains "
+                                    f"{dep_component} {fixed_in_build} or newer before "
+                                    f"proceeding with another rebuild."
+                                ),
+                                jira_issue=state.jira_issue,
+                            ),
+                        )
+                        return comment_result()
                 except TransientInfrastructureError:
                     logger.warning("Transient rebuild verification failure for %s; retrying", package)
                     raise
                 except Exception as e:
                     logger.exception("Cannot verify whether %s has already been rebuilt", package)
                     state.triage_result = OutputSchema(
+                        confidence=state.triage_result.confidence,
                         resolution=Resolution.CLARIFICATION_NEEDED,
                         data=ClarificationNeededData(
                             findings=(
@@ -1946,6 +2595,7 @@ async def run_workflow(
             except InvalidDependencyDataError as e:
                 logger.warning(f"Mismatched dependency metadata for {dep_component}: {e}")
                 state.triage_result = OutputSchema(
+                    confidence=state.triage_result.confidence,
                     resolution=Resolution.CLARIFICATION_NEEDED,
                     data=ClarificationNeededData(
                         findings=(f"Buildroot check for {dep_component} found mismatched metadata: {e}"),
@@ -1963,6 +2613,7 @@ async def run_workflow(
             except Exception as e:
                 logger.exception("Brew buildroot check failed for %s (%s)", dep_component, fixed_in_build)
                 state.triage_result = OutputSchema(
+                    confidence=state.triage_result.confidence,
                     resolution=Resolution.CLARIFICATION_NEEDED,
                     data=ClarificationNeededData(
                         findings=(
@@ -2156,6 +2807,7 @@ async def run_workflow(
 
         workflow.add_step("check_cve_eligibility", check_cve_eligibility)
         workflow.add_step("run_triage_analysis", run_triage_analysis)
+        workflow.add_step("verify_already_fixed", verify_already_fixed)
         workflow.add_step("verify_rebase_author", verify_rebase_author)
         workflow.add_step("determine_target_branch", determine_target_branch_step)
         workflow.add_step("check_cve_applicability", check_cve_applicability)
@@ -2915,6 +3567,10 @@ async def main() -> None:
             max_concurrent=max_concurrent_tasks,
             shutdown_event=shutdown_event,
             poll_fn=poll_triage,
+            # poll_triage already blocks for up to 5s in BRPOP; sleeping again
+            # would delay newly pushed tasks (including ymir_todo priority
+            # tasks) by up to another poll timeout while idle.
+            idle_sleep=0,
         )
 
 

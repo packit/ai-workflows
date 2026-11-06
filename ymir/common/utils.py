@@ -37,6 +37,7 @@ from ymir.common.version_utils import (
     construct_internal_branch_name,
     get_fix_version_variants,
     get_maintenance_majors,
+    nevr_matches_fix_version_stream,
     parse_rhel_version,
 )
 
@@ -228,9 +229,18 @@ def _nevr_from_build(build: dict) -> NEVR:
         for field_name in ("name", "version", "release"):
             if not isinstance(build[field_name], str) or not build[field_name]:
                 raise ValueError(f"Invalid Brew {field_name}: {build[field_name]!r}")
+        raw_epoch = build.get("epoch")
+        if raw_epoch is None:
+            epoch = 0
+        elif isinstance(raw_epoch, bool) or not isinstance(raw_epoch, int):
+            # int() would silently accept booleans and truncate floats,
+            # letting fabricated epochs influence build ordering.
+            raise ValueError(f"Invalid Brew epoch: {raw_epoch!r}")
+        else:
+            epoch = raw_epoch
         return NEVR(
             name=build["name"],
-            epoch=int(build.get("epoch") or 0),
+            epoch=epoch,
             version=build["version"],
             release=build["release"],
         )
@@ -267,30 +277,125 @@ class BuildVerificationReport:
     selected_nevr: NEVR | None = None
     reason: str | None = None
 
-    def describe(self) -> str:
-        lines = ["Referenced builds:"]
-        if not self.candidates:
-            lines.append("No build references could be retrieved from Jira.")
-        for issue_key, nvr, status in self.candidates:
-            build = self.resolved_builds.get(nvr)
-            details = "Brew metadata could not be resolved"
-            if build is not None:
-                details = f"Brew NEVR {build.nevr}"
-                if (build_id := build.metadata.get("build_id")) is not None:
-                    details += f", build ID {build_id}"
-                if (completed := build.metadata.get("completion_time")) is not None:
-                    details += f", completed {completed}"
-            lines.append(f"- {issue_key} ({status}), Fixed in Build: {nvr}; {details}")
-        if self.problems or self.active_problems:
-            lines.append("Verification problems:")
-            lines.extend(f"- {problem}" for problem in self.problems + self.active_problems)
-        return "\n".join(lines)
+    def describe(self, max_chars: int | None = None) -> str:
+        """Render the report as human-readable text.
+
+        Args:
+            max_chars: Optional cap on the rendered length. Jira rejects comment
+                bodies beyond its size limit (~32k characters); when the full
+                candidate list does not fit, the candidates that fit are kept and
+                the remainder is summarized in a single line so a clarification
+                comment can always be posted.
+        """
+
+        def candidate_lines() -> list[str]:
+            lines = []
+            for issue_key, nvr, status in self.candidates:
+                build = self.resolved_builds.get(nvr)
+                details = "Brew metadata could not be resolved"
+                if build is not None:
+                    details = f"Brew NEVR {build.nevr}"
+                    if (build_id := build.metadata.get("build_id")) is not None:
+                        details += f", build ID {build_id}"
+                    if (completed := build.metadata.get("completion_time")) is not None:
+                        details += f", completed {completed}"
+                lines.append(f"- {issue_key} ({status}), Fixed in Build: {nvr}; {details}")
+            return lines
+
+        def render(lines: list[str]) -> str:
+            text = ["Referenced builds:"]
+            if not self.candidates:
+                text.append("No build references could be retrieved from Jira.")
+            text.extend(lines)
+            if self.problems or self.active_problems:
+                text.append("Verification problems:")
+                text.extend(f"- {problem}" for problem in self.problems + self.active_problems)
+            return "\n".join(text)
+
+        all_lines = candidate_lines()
+        text = render(all_lines)
+        if max_chars is None or len(text) <= max_chars:
+            return text
+
+        omitted = "({remaining} more build reference(s) omitted to stay within the comment size limit)"
+        kept: list[str] = []
+        for line in all_lines:
+            remaining = len(all_lines) - len(kept) - 1
+            if len(render([*kept, line, omitted.format(remaining=remaining)])) > max_chars:
+                break
+            kept.append(line)
+        remaining = len(all_lines) - len(kept)
+        if remaining > 0:
+            kept.append(omitted.format(remaining=remaining))
+        text = render(kept)
+        # Last resort (e.g., the problems list alone exceeds the cap): hard-truncate.
+        return text[:max_chars]
+
+
+async def build_tags_in_stream(
+    build: BrewBuild, fix_version: str
+) -> tuple[str, list[str], list[str]] | None:
+    """Return the build's tags that belong to the fix version's stream.
+
+    The dist tag is a convention; tag membership is the authoritative signal.
+    This answers "is this build part of the stream's pipeline at all": any tag
+    under the stream's branch prefix proves membership — a build carrying none
+    of them is a scratch/side-tag build or belongs to another stream. Y-stream
+    and z-stream fix versions of the same release share the branch, so both are
+    covered by the same prefix.
+
+    Returns ``(branch, shipped_tags, in_progress_tags)``, where shipped tags are
+    the release tag and the pending-stage tags (committed to compose/errata)
+    and in-progress tags are candidate/gate/override-stage tags (fix being
+    worked on, not yet committed). Both lists empty means the build is not part
+    of the stream. Returns ``None`` when the check cannot be performed
+    (unparseable fix version, missing build id, or a Brew failure) — callers
+    must fail open on ``None``.
+    """
+    parsed = parse_rhel_version(fix_version)
+    if not parsed:
+        return None
+    major, minor, _is_zstream = parsed
+    branch = construct_internal_branch_name(major, minor)
+    build_id = build.metadata.get("build_id")
+    if not build_id:
+        return None
+    try:
+        tags = await asyncio.to_thread(lambda: koji.ClientSession(BREWHUB_URL).listTags(build=build_id))
+    except Exception as error:
+        logger.warning("Could not list tags of build %s: %s", build.nevr, error)
+        return None
+    names = [tag.get("name") for tag in tags or [] if isinstance(tag.get("name"), str)]
+    matched = sorted(name for name in names if name == branch or name.startswith(f"{branch}-"))
+    shipped = sorted(
+        name
+        for name in matched
+        if name == branch or name.endswith(("-pending", "-z-pending"))
+    )
+    in_progress = [name for name in matched if name not in shipped]
+    return branch, shipped, in_progress
 
 
 async def resolve_brew_build(nvr: str) -> BrewBuild | None:
-    """Resolve an epochless NVR against Brew before comparing build versions."""
+    """Resolve a Jira Fixed in Build NVR against Brew before comparing versions.
+
+    Epoch-bearing values are looked up by their epochless form (koji's getBuild
+    does not match epoch-bearing strings); the returned BrewBuild carries the
+    authoritative epoch from Brew metadata.
+
+    Raises PermanentValidationError when the value cannot be a Brew NVR at all
+    (free text, typos), so callers can request a correction instead of retrying.
+    """
     try:
-        metadata = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, nvr)
+        nevr = NEVR.from_string(nvr)
+    except (SpecfileException, ValueError) as error:
+        raise PermanentValidationError(
+            f"Not a valid Brew NVR: {nvr!r} ({error})"
+        ) from error
+    try:
+        metadata = await asyncio.to_thread(
+            _get_koji_build, BREWHUB_URL, get_epochless_nvr_string(nevr)
+        )
     except (koji.GenericError, httpx.HTTPError, ConnectionError, OSError, TimeoutError) as error:
         raise TransientInfrastructureError(f"Brew build lookup failed for {nvr}: {error}") from error
     if metadata is None:
@@ -669,10 +774,16 @@ async def _find_completed_builds_jira(
             continue
         if not isinstance(nvr_raw, str):
             logger.warning(f"Issue {issue_key} has non-string Fixed in Build: {type(nvr_raw).__name__}")
+            if report is not None:
+                report.problems.append(
+                    f"{issue_key}: Fixed in Build is not a string ({type(nvr_raw).__name__})"
+                )
             continue
 
         if not (nvr := nvr_raw.strip()):
             logger.warning(f"Issue {issue_key} has empty Fixed in Build")
+            if report is not None:
+                report.problems.append(f"{issue_key}: Fixed in Build is empty")
             continue
 
         closed_candidates.append((issue_key, nvr))
@@ -691,11 +802,19 @@ async def _find_completed_builds_jira(
             if not issue_key:
                 continue
             if not isinstance(nvr_raw, str):
-                logger.warning(f"Active issue {issue_key} (status: {status}) has non-string Fixed in Build")
+                logger.warning(
+                    f"Active issue {issue_key} (status: {status}) has non-string Fixed in Build"
+                )
+                if report is not None:
+                    report.active_problems.append(
+                        f"{issue_key}: Fixed in Build is not a string ({type(nvr_raw).__name__})"
+                    )
                 continue
 
             if not (nvr := nvr_raw.strip()):
                 logger.warning(f"Active issue {issue_key} (status: {status}) has empty Fixed in Build")
+                if report is not None:
+                    report.active_problems.append(f"{issue_key}: Fixed in Build is empty")
                 continue
 
             active_candidates.append((issue_key, nvr))
@@ -709,37 +828,87 @@ async def _find_completed_builds_jira(
     async def resolve_candidates(candidates: list[tuple[str, str]], status: str) -> list[tuple[str, NEVR]]:
         if not candidates:
             return []
+        # Brew lookups need the epochless NVR: Jira Fixed in Build values may
+        # carry an epoch prefix that koji's getBuild does not match, which
+        # would report an existing build as missing. The raw Jira value is
+        # kept for the report; unparseable values skip the lookup entirely and
+        # are recorded as data problems below.
+        lookup_nvrs: list[str | None] = []
+        for _, nvr in candidates:
+            try:
+                lookup_nvrs.append(get_epochless_nvr_string(NEVR.from_string(nvr)))
+            except (SpecfileException, ValueError):
+                lookup_nvrs.append(None)
+
+        async def _lookup(nvr_or_none: str | None) -> dict | None:
+            if nvr_or_none is None:
+                return None
+            return await asyncio.to_thread(_get_koji_build, BREWHUB_URL, nvr_or_none)
+
         builds = await asyncio.gather(
-            *(asyncio.to_thread(_get_koji_build, BREWHUB_URL, nvr) for _, nvr in candidates),
+            *(_lookup(lookup_nvr) for lookup_nvr in lookup_nvrs),
             return_exceptions=True,
         )
         resolved = []
         lookup_failures = []
         for (issue_key, nvr), metadata in zip(candidates, builds, strict=True):
+            try:
+                NEVR.from_string(nvr)
+            except (SpecfileException, ValueError):
+                # A value that cannot be an NVR at all is a permanent data
+                # problem — clarify instead of retrying a lookup that can
+                # never succeed.
+                problem = f"{issue_key} ({nvr}): not a valid Brew NVR"
+                logger.warning("Brew lookup skipped: %s", problem)
+                if report is not None:
+                    if status == "active":
+                        report.active_problems.append(problem)
+                    else:
+                        report.problems.append(problem)
+                continue
             if isinstance(metadata, Exception):
                 failure = metadata
                 problem = f"{issue_key} ({nvr}): {failure}"
                 logger.warning("Brew lookup failed: %s", problem)
+                # Unparseable values were rejected above, so any failure here is
+                # an infrastructure problem (including koji.GenericError) —
+                # retry the whole verification so the candidate set is never
+                # incomplete.
                 lookup_failures.append(problem)
                 continue
             if metadata is None:
                 problem = f"{issue_key} ({nvr}): build not found in Brew"
                 logger.warning("Brew lookup failed: %s", problem)
-                if status == "closed":
-                    lookup_failures.append(problem)
-                elif report is not None:
-                    report.problems.append(problem)
+                if report is not None:
+                    if status == "active":
+                        # An active build that is not yet in Brew is common (build in
+                        # progress); record it for the report without blocking the
+                        # verification of the closed builds.
+                        report.active_problems.append(problem)
+                    else:
+                        # A closed build missing from Brew is a data inconsistency,
+                        # not an outage — clarify instead of retrying.
+                        report.problems.append(problem)
                 continue
             try:
                 build = BrewBuild(metadata)
                 if report is not None:
                     report.resolved_builds[nvr] = build
+                    canonical_nvr = get_epochless_nvr_string(build.nevr)
+                    if canonical_nvr != nvr:
+                        # Also index under the canonical epochless NVR so later
+                        # lookups rebuilt from Brew metadata succeed even when
+                        # the Jira value carries an epoch prefix.
+                        report.resolved_builds[canonical_nvr] = build
                 resolved.append((issue_key, build.nevr))
             except Exception as error:
                 problem = f"{issue_key} ({nvr}): Brew metadata cannot be compared: {error}"
                 logger.warning(problem, exc_info=True)
                 if report is not None:
-                    report.problems.append(problem)
+                    if status == "active":
+                        report.active_problems.append(problem)
+                    else:
+                        report.problems.append(problem)
         if lookup_failures:
             message = f"Brew lookup failed for {len(lookup_failures)} candidate(s): " + "; ".join(
                 lookup_failures
@@ -904,7 +1073,7 @@ async def _fetch_installed_pkgs_log(
 async def _get_known_package_names(
     fixed_dep_build: BrewBuild,
 ) -> tuple[list[str], int, str] | None:
-    """Get binary package names for the fixed dependency build.
+    """Get the binary RPM names produced by the fixed dependency build.
 
     Args:
         fixed_dep_build: Authoritative Brew build metadata and NEVR.
@@ -915,7 +1084,11 @@ async def _get_known_package_names(
         known_names: search terms for _parse_dependency_from_installed_pkgs_log.
             Always includes the dependency component name (e.g., "python-foobar") even
             when the build only produces differently-named binary RPMs (e.g., "python3-foobar").
-        real_binary_rpm_count: distinct installable binary RPMs from the build (excluding
+            Binary RPM names introduced by newer builds are deliberately NOT included here;
+            they are looked up lazily by _get_renamed_binary_rpm_names only when the fixed
+            build's names match nothing in installed_pkgs.log. Duplicate names (the
+            same binary RPM built for several architectures) are collapsed.
+        real_binary_rpm_count: distinct installable binary RPMs from the fixed build (excluding
             debuginfo, debugsource, src). Used to decide ambiguity: 1 means the fix
             is unambiguously in that binary RPM (already_fixed); >1 means we can't tell
             which binary RPMs carry the fix (clarification needed). Computed before the
@@ -929,7 +1102,7 @@ async def _get_known_package_names(
         logger.error(f"No build_id for {fixed_dep_nvr}")
         return None
 
-    # Get list of binary package names produced by this source RPM
+    # Get the list of binary RPM names produced by this source RPM
     try:
         session = koji.ClientSession(BREWHUB_URL)
         rpms = await asyncio.to_thread(session.listRPMs, buildID=build_id)
@@ -945,7 +1118,9 @@ async def _get_known_package_names(
             and not rpm.get("name", "").endswith("-debugsource")
         ]
         real_binary_rpm_count = len({rpm.get("name") for rpm in non_debug_rpms if rpm.get("arch") != "src"})
-        known_names = [rpm.get("name") for rpm in non_debug_rpms]
+        # Collapse duplicate names (the same binary RPM built for several
+        # architectures) so the log parser does not resolve them repeatedly.
+        known_names = list(dict.fromkeys(rpm.get("name") for rpm in non_debug_rpms))
     except Exception as e:
         logger.error(f"Failed to fetch RPM list for {fixed_dep_nvr}: {e}")
         return None
@@ -957,6 +1132,96 @@ async def _get_known_package_names(
 
     logger.debug(f"Known package names for {build_name}: {known_names[:5]}...")
     return known_names, real_binary_rpm_count, build_name
+
+
+async def _get_renamed_binary_rpm_names(
+    fixed_dep_build: BrewBuild, known_names: set[str]
+) -> list[str] | None:
+    """Find binary RPM names that newer builds of the component produce but the fixed build does not.
+
+    Called only when the fixed build's binary RPM names matched nothing in
+    installed_pkgs.log. A newer build of the dependency may have renamed one of
+    its binary RPMs while keeping the source RPM (component) name — renaming
+    components during a RHEL major version lifetime is forbidden, so a renamed
+    binary RPM still ships under the unchanged SRPM name, and installed_pkgs.log
+    then shows only the new binary RPM name. Walks the completed builds
+    newer than the fixed one in bounded-concurrency batches, retaining coverage
+    for binary RPMs that were introduced in an earlier build and dropped again
+    later.
+
+    Returns the collected names (possibly an empty list) when the build history
+    was fully covered, or ``None`` when coverage is incomplete (missing build
+    metadata or a failed Brew lookup). Callers must not treat ``None`` as
+    evidence that no renames exist.
+    """
+    package_id = fixed_dep_build.metadata.get("package_id")
+    completion_time = fixed_dep_build.metadata.get("completion_time")
+    if not package_id or not completion_time:
+        # Without build metadata we cannot enumerate newer builds, so binary
+        # RPM name coverage is incomplete.
+        logger.warning(
+            "Missing package_id or completion_time for %s; cannot check renamed binary RPMs",
+            fixed_dep_build.nevr.name,
+        )
+        return None
+    try:
+        session = koji.ClientSession(BREWHUB_URL)
+        newer_builds = await asyncio.to_thread(
+            session.listBuilds, packageID=package_id, state=1, completeAfter=completion_time
+        )
+        if not isinstance(newer_builds, list):
+            logger.warning("Invalid build list response from Brew for package %s", package_id)
+            return None
+        newer_build_ids = []
+        for candidate in newer_builds:
+            try:
+                if _nevr_from_build(candidate) > fixed_dep_build.nevr:
+                    newer_build_ids.append(candidate["build_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+        newer_build_ids = sorted(newer_build_ids, reverse=True)
+    except Exception as e:
+        logger.warning("Failed to list newer builds of %s: %s", fixed_dep_build.nevr.name, e)
+        return None
+
+    def _fetch_build_rpms(build_id: int) -> list:
+        # A fresh session per call: a koji ClientSession is not safe to share
+        # across concurrent calls.
+        return koji.ClientSession(BREWHUB_URL).listRPMs(buildID=build_id)
+
+    renamed: list[str] = []
+    batch_size = 8
+    for start in range(0, len(newer_build_ids), batch_size):
+        batch = newer_build_ids[start : start + batch_size]
+        rpm_lists = await asyncio.gather(
+            *(asyncio.to_thread(_fetch_build_rpms, build_id) for build_id in batch),
+            return_exceptions=True,
+        )
+        for build_id, rpms in zip(batch, rpm_lists, strict=True):
+            if isinstance(rpms, BaseException):
+                # A failed RPM-list lookup leaves binary RPM name coverage
+                # incomplete for that build; signal it rather than pretend the
+                # search was exhaustive.
+                logger.warning("Failed to fetch RPM list for build %s: %s", build_id, rpms)
+                return None
+            if not isinstance(rpms, list):
+                logger.warning("Invalid RPM list response from Brew for build %s", build_id)
+                return None
+            for rpm in rpms:
+                name = rpm.get("name") if isinstance(rpm, dict) else None
+                if (
+                    name
+                    and not name.endswith("-debuginfo")
+                    and not name.endswith("-debugsource")
+                    and name not in known_names
+                    and name not in renamed
+                ):
+                    renamed.append(name)
+    if renamed:
+        logger.info(
+            "Binary RPM names introduced by newer builds of %s: %s", fixed_dep_build.nevr.name, renamed
+        )
+    return renamed
 
 
 async def _get_source_nevr(brew_url: str, binary_rpm_nevra: NEVRA, dep_component: str) -> NEVR | None:
@@ -990,6 +1255,12 @@ async def _get_source_nevr(brew_url: str, binary_rpm_nevra: NEVRA, dep_component
                 },
                 multi=True,
             )
+            for record in rpm_records or []:
+                # The epoch field must be present and a valid integer (or None);
+                # silently coercing booleans or floats would skew the comparison.
+                epoch = record.get("epoch", "<missing>")
+                if isinstance(epoch, bool) or not isinstance(epoch, (int, type(None))):
+                    raise ValueError(f"invalid epoch {epoch!r} in RPM record for {binary_rpm_nevra}")
             matching_rpms = [
                 record
                 for record in rpm_records or []
@@ -1056,7 +1327,11 @@ async def _get_source_nevr(brew_url: str, binary_rpm_nevra: NEVRA, dep_component
 
 
 async def _parse_dependency_from_installed_pkgs_log(
-    installed_pkgs_log: str, dep_component: str, known_names: list[str], brew_url: str
+    installed_pkgs_log: str,
+    dep_component: str,
+    known_names: list[str],
+    brew_url: str,
+    source_resolution_cache: dict[str, NEVR | None] | None = None,
 ) -> tuple[NEVR | None, list[str] | None]:
     """Parse installed_pkgs.log to find which version of dependency was installed.
 
@@ -1069,6 +1344,9 @@ async def _parse_dependency_from_installed_pkgs_log(
         known_names: List of known binary RPM names to search for
         brew_url: Brew hub URL for resolving binary RPMs to source packages.
             Binary fields alone cannot establish the source version or epoch.
+        source_resolution_cache: Optional mapping of NEVRA string to resolved
+            source NEVR shared across architecture logs, so the same installed
+            RPM is resolved through Brew only once per verification.
 
     Returns:
         Tuple of (used_dep_nevr, matched_pkg_names) where:
@@ -1105,8 +1383,14 @@ async def _parse_dependency_from_installed_pkgs_log(
 
         pkg_name = nevra.name
 
+        cache_key = str(nevra)
         try:
-            used_nevr = await _get_source_nevr(brew_url, nevra, dep_component)
+            if source_resolution_cache is not None and cache_key in source_resolution_cache:
+                used_nevr = source_resolution_cache[cache_key]
+            else:
+                used_nevr = await _get_source_nevr(brew_url, nevra, dep_component)
+                if source_resolution_cache is not None:
+                    source_resolution_cache[cache_key] = used_nevr
         except Exception as error:
             problem = f"{nevra}: {error}"
             logger.warning("Brew resolution failed for %s", problem, exc_info=True)
@@ -1152,73 +1436,68 @@ async def _parse_dependency_from_installed_pkgs_log(
 
 
 async def _compare_build_timestamps(
-    package: str,
-    package_nevr: NEVR,
-    dep_component: str,
-    fixed_dep_nevr: NEVR,
-    package_build: dict | None = None,
-    fixed_build: dict | None = None,
+    fixed_dep_build: BrewBuild,
+    package_build: NEVR | BrewBuild,
 ) -> bool | None:
-    """Compare build timestamps as fallback when installed_pkgs.log is unavailable.
+    """Compare completion timestamps as a fallback when installed_pkgs.log is unavailable.
+
+    The package build is assumed to contain the fixed dependency when it
+    completed at or after the fixed dependency build.
 
     Args:
-        package: Package name (e.g., "go-fdo-client")
-        package_nevr: Package NEVR to check
-        dep_component: Dependency component name (e.g., "golang")
-        fixed_dep_nevr: Fixed dependency NEVR object
+        fixed_dep_build: The fixed dependency's Brew build.
+        package_build: The package's build identity — either the resolved
+            BrewBuild, or a NEVR that is looked up in Brew.
 
     Returns:
-        True if package was built after dependency fix,
-        False if built before fix,
-        None if metadata unavailable or validation failed
+        True if the package build completed at or after the dependency fix,
+        False if it completed before,
+        None if build metadata is unavailable.
     """
-    if package_build is None:
-        package_build = await asyncio.to_thread(
-            _get_koji_build, BREWHUB_URL, get_epochless_nvr_string(package_nevr)
-        )
-    if fixed_build is None:
-        fixed_build = await asyncio.to_thread(
-            _get_koji_build, BREWHUB_URL, get_epochless_nvr_string(fixed_dep_nevr)
-        )
+    if isinstance(package_build, NEVR):
+        requested_nevr = package_build
+        try:
+            raw_build = await asyncio.to_thread(
+                _get_koji_build, BREWHUB_URL, get_epochless_nvr_string(requested_nevr)
+            )
+        except (koji.GenericError, httpx.HTTPError, ConnectionError, OSError, TimeoutError) as error:
+            # A failed service lookup is transient: retry with backoff.
+            raise TransientInfrastructureError(
+                f"Brew build lookup failed for {requested_nevr}: {error}"
+            ) from error
+        if raw_build is None:
+            logger.warning("Could not fetch build metadata for timestamp comparison")
+            return None
+        package_build = BrewBuild(raw_build)
+        # Sanity check: the Brew-resolved build must be for the requested package.
+        if package_build.nevr.name != requested_nevr.name:
+            logger.error(
+                f"Package build {requested_nevr} has name '{package_build.nevr.name}', "
+                f"expected '{requested_nevr.name}'. Possible data error."
+            )
+            return None
 
-    if not package_build or not fixed_build:
-        logger.warning("Could not fetch build metadata for timestamp comparison")
-        return None
-
-    # Validate package build is for expected package
-    if package_build.get("name") != package:
-        logger.error(
-            f"Package build {package_nevr} has name '{package_build.get('name')}', "
-            f"expected '{package}'. Possible data error."
-        )
-        return None
-
-    if fixed_build.get("name") != dep_component:
-        logger.error(
-            f"Fixed dependency {fixed_dep_nevr} has name '{fixed_build.get('name')}', "
-            f"expected '{dep_component}'. Possible data error."
-        )
-        return None
-
-    package_completion = package_build.get("completion_time")
-    fixed_completion = fixed_build.get("completion_time")
+    package_nevr = package_build.nevr
+    package_completion = package_build.metadata.get("completion_time")
+    fixed_completion = fixed_dep_build.metadata.get("completion_time")
 
     if not package_completion or not fixed_completion:
         logger.warning("Missing completion_time for timestamp comparison")
         return None
 
+    dep_name = fixed_dep_build.nevr.name
     # If package was built after dependency fix, it likely has the fix
     if package_completion >= fixed_completion:
         logger.info(
-            f"{package} ({package_nevr}) completed at {package_completion}, "
-            f"which is >= {dep_component} fix completion at {fixed_completion}. "
+            f"{package_nevr.name} ({package_nevr}) completed at {package_completion}, "
+            f"which is >= {dep_name} fix completion at {fixed_completion}. "
             f"Assuming fixed dependency was used."
         )
         return True
 
     logger.info(
-        f"{package} ({package_nevr}) completed at {package_completion}, "
-        f"which is < {dep_component} fix completion at {fixed_completion}. "
+        f"{package_nevr.name} ({package_nevr}) completed at {package_completion}, "
+        f"which is < {dep_name} fix completion at {fixed_completion}. "
         f"Package was built before fix."
     )
     return False
@@ -1227,7 +1506,6 @@ async def _compare_build_timestamps(
 async def check_package_built_with_fixed_dependency(
     package: str,
     fix_version: str,
-    dep_component: str,
     fixed_dep_build: BrewBuild,
     available_tools: list[Tool],
     jira_issue: str | None = None,
@@ -1245,7 +1523,6 @@ async def check_package_built_with_fixed_dependency(
         result = await _check_package_built_with_fixed_dependency(
             package,
             fix_version,
-            dep_component,
             fixed_dep_build,
             available_tools,
             report,
@@ -1280,7 +1557,6 @@ async def check_package_built_with_fixed_dependency(
 async def _check_package_built_with_fixed_dependency(
     package: str,
     fix_version: str,
-    dep_component: str,
     fixed_dep_build: BrewBuild,
     available_tools: list[Tool],
     report: BuildVerificationReport,
@@ -1296,10 +1572,11 @@ async def _check_package_built_with_fixed_dependency(
     Args:
         package: Package name (e.g., "go-fdo-client")
         fix_version: RHEL fix version (e.g., "rhel-10.2.z")
-        dep_component: Dependency component name (e.g., "golang"). This is a cross-validation
-            input from the triage LLM, independent of fixed_dep_build.nevr.name, used to detect data
-            corruption or LLM hallucination.
         fixed_dep_build: Authoritative Brew build containing the dependency NEVR and metadata.
+            Callers must have cross-validated the dependency component name against
+            fixed_dep_build.nevr.name (the triage agent does this when the LLM-provided
+            component is first resolved); the component name used throughout this
+            function is the authoritative fixed_dep_build.nevr.name.
         available_tools: List of available tools for Jira queries
         jira_issue: Jira issue key to exclude from search (the ticket being triaged)
 
@@ -1312,10 +1589,14 @@ async def _check_package_built_with_fixed_dependency(
         - package_nevr: Resolved NEVR of the existing build (if found)
         - reason: When already_fixed is None, explains why. Possible reasons:
                  "built_after_fix_no_installed_pkgs_log" - installed_pkgs.log unavailable (Brew retention)
+                 "timestamp_comparison_failed" - completion timestamps missing in Brew metadata,
+                      so the fallback build-order comparison cannot run
                  "architecture_dependency_conflict" - different dependency versions per arch
                  "partial_architecture_coverage" - dependency missing from some arch logs
                  "active_builds_not_closed" - builds in progress (might be rejected)
                  "no_builds_found" - no builds found after filtering (all belonged to other packages)
+                 "renamed_binary_lookup_failed" - Brew lookup for renamed binary RPMs failed, so
+                      binary-name coverage was incomplete when the dependency was not found
                  "subpackage_match_needs_verification" - dependency matched via subpackage(s),
                       not the component name directly; cannot confirm which subpackage carries
                       the fix. Format: "subpackage_match_needs_verification:<subpkg1>, <subpkg2>"
@@ -1326,11 +1607,57 @@ async def _check_package_built_with_fixed_dependency(
     """
     try:
         fixed_dep_nevr = fixed_dep_build.nevr
+        # Authoritative dependency component name; the triage agent cross-validated
+        # the LLM-provided component against this before calling.
+        dep_component = fixed_dep_nevr.name
         # Step 1: Find builds in Jira
         closed_candidates, active_candidates = await _find_completed_builds_jira(
             package, fix_version, available_tools, jira_issue, report, downstream_component
         )
 
+        # Jira matches both the Y-stream (rhel-9.8) and Z-stream (rhel-9.8.z) forms of a
+        # fix version (see get_fix_version_variants). For a Z-stream fix version only
+        # builds with the minor in the dist tag (.el9_8) prove the fix — a z-stream fix
+        # ships exclusively through the rhel-9.8.0 maintenance branch, so a plain .el9
+        # (CentOS Stream / Y-stream) build cannot contain it, and accepting a higher-EVR
+        # cross-stream build could mask a missing Z-stream build and skip a needed
+        # rebuild. Y-stream fix versions accept both .el9 and .el9_8 builds (see
+        # nevr_matches_fix_version_stream).
+        def _nvr_is_out_of_stream(nvr: str, version: str) -> bool:
+            try:
+                return not nevr_matches_fix_version_stream(NEVR.from_string(nvr), version)
+            except (SpecfileException, ValueError):
+                return False
+
+        def _in_target_stream(candidates: list[tuple[str, str]]) -> list[tuple[str, str]]:
+            kept = []
+            for key, nvr in candidates:
+                if isinstance(nvr, NEVR):
+                    nevr = nvr
+                else:
+                    try:
+                        nevr = NEVR.from_string(nvr)
+                    except (SpecfileException, ValueError):
+                        # Keep unparseable NVRs so the existing Brew resolution path reports them.
+                        kept.append((key, nvr))
+                        continue
+                if nevr_matches_fix_version_stream(nevr, fix_version):
+                    kept.append((key, nvr))
+                else:
+                    logger.info(
+                        "Ignoring %s (%s): build stream does not match fix version %s",
+                        key,
+                        nvr,
+                        fix_version,
+                    )
+            return kept
+
+        closed_candidates = _in_target_stream(closed_candidates)
+        if active_candidates is not None:
+            active_candidates = _in_target_stream(active_candidates)
+
+        # report.candidates already holds every raw Jira reference (including
+        # unresolvable ones) collected by _find_completed_builds_jira.
         # Handle case where active query failed
         if active_candidates is None:
             logger.warning("Active-build Jira query failed for %s in %s", package, fix_version)
@@ -1340,6 +1667,10 @@ async def _check_package_built_with_fixed_dependency(
 
         if not closed_candidates and not active_candidates:
             if report.problems:
+                return None, None, None, report
+            if report.active_problems:
+                # Active builds exist but none could be resolved in Brew — a
+                # rebuild might duplicate an in-progress one.
                 return None, None, None, report
             logger.info(f"No builds found for {package} in {fix_version}")
             return False, None, None, None
@@ -1361,8 +1692,26 @@ async def _check_package_built_with_fixed_dependency(
                 filtered_active.append((active_key, active_nevr))
             active_candidates = filtered_active
 
-        if report.problems:
-            return None, report.selected_issue_key, report.selected_nevr, report
+        # Candidates whose Jira-recorded NVR belongs to another release stream
+        # would have been ignored by the stream filter anyway; drop the lookup
+        # problems recorded for them, so a broken build from another stream
+        # cannot turn a rebuild decision into a clarification.
+        out_of_stream_keys = {
+            key
+            for key, nvr, _status in report.candidates
+            if _nvr_is_out_of_stream(nvr, fix_version)
+        }
+        if out_of_stream_keys:
+            report.problems = [
+                problem
+                for problem in report.problems
+                if not any(problem.startswith(f"{key} (") for key in out_of_stream_keys)
+            ]
+            report.active_problems = [
+                problem
+                for problem in report.active_problems
+                if not any(problem.startswith(f"{key} (") for key in out_of_stream_keys)
+            ]
 
         # If only active (not closed) builds exist, request clarification
         # These might be rejected/abandoned, so we can't trust them yet
@@ -1395,6 +1744,9 @@ async def _check_package_built_with_fixed_dependency(
             report.selected_nevr = selected_nevr
         else:
             logger.warning(f"No valid closed builds found in Brew for {package} in {fix_version}")
+            if report.problems:
+                # Closed builds that could not be resolved are reported for clarification.
+                return None, None, None, report
             # If active builds exist, request clarification on those instead of rebuilding
             if active_candidates:
                 logger.info(
@@ -1421,19 +1773,49 @@ async def _check_package_built_with_fixed_dependency(
         package_nvr = get_epochless_nvr_string(latest_nevr)
         logger.info(f"Found latest build for {package}: {latest_nevr} (issue: {package_issue_key})")
 
+        # Closed-build data problems (missing from Brew, unparseable NVRs) do not
+        # prevent selecting the highest resolvable build, but they do prevent
+        # trusting its verification result — surface them as a clarification.
+        if report.problems:
+            return None, package_issue_key, latest_nevr, report
+
         # Only resolved active builds can be ordered. Unresolved builds still require clarification.
         active_candidates = [
             (key, active_nevr) for key, active_nevr in active_candidates if active_nevr > latest_nevr
         ]
 
         package_build = report.resolved_builds[package_nvr].metadata
-        if fixed_dep_nevr.name != dep_component:
-            return (
-                None,
-                package_issue_key,
-                latest_nevr,
-                f"invalid_dependency_record:{dep_component}_resolves_to_{fixed_dep_nevr.name}",
-            )
+
+        # The dist-tag filter is a convention; tag membership is the
+        # authoritative signal that the selected build is part of the fix
+        # version's stream. A build with only candidate/gate-stage tags is a
+        # fix in progress, not a shipped one — stop and tell the user instead
+        # of verifying it as already fixed. Unperformable checks fail open.
+        tags_in_stream = await build_tags_in_stream(report.resolved_builds[package_nvr], fix_version)
+        if tags_in_stream is not None:
+            branch, shipped_tags, in_progress_tags = tags_in_stream
+            if not shipped_tags and not in_progress_tags:
+                logger.warning(
+                    "Selected build %s carries no tag of the %s stream", latest_nevr, branch
+                )
+                return (
+                    None,
+                    package_issue_key,
+                    latest_nevr,
+                    f"build_not_tagged_in_stream:{branch}",
+                )
+            if not shipped_tags:
+                logger.info(
+                    "Selected build %s is still in progress (%s)",
+                    latest_nevr,
+                    ", ".join(in_progress_tags),
+                )
+                return (
+                    None,
+                    package_issue_key,
+                    latest_nevr,
+                    f"fix_in_progress_in_stream:{','.join(in_progress_tags)}",
+                )
 
         # Get list of architectures from RPMs
         build_id = package_build.get("build_id")
@@ -1522,12 +1904,7 @@ async def _check_package_built_with_fixed_dependency(
                 "checking timestamps to determine next action"
             )
             built_after_fix = await _compare_build_timestamps(
-                package,
-                latest_nevr,
-                dep_component,
-                fixed_dep_nevr,
-                package_build=package_build,
-                fixed_build=fixed_dep_build.metadata,
+                fixed_dep_build, report.resolved_builds[package_nvr]
             )
 
             if built_after_fix is True:
@@ -1547,12 +1924,20 @@ async def _check_package_built_with_fixed_dependency(
                     )
                     active_issues = ", ".join(key for key, _ in active_candidates)
                     return None, package_issue_key, latest_nevr, f"active_builds_not_closed:{active_issues}"
+                if report.active_problems:
+                    # An in-progress build could not be resolved in Brew — a
+                    # rebuild might duplicate it.
+                    return None, package_issue_key, latest_nevr, report
                 return False, package_issue_key, latest_nevr, None
+            # Indeterminate comparison (missing completion metadata on an
+            # otherwise resolved build): a permanent data gap, not an outage —
+            # request manual verification instead of retrying forever.
             fixed_dep_nevr_str = get_epochless_nvr_string(fixed_dep_nevr)
-            raise TransientInfrastructureError(
-                f"Brew metadata unavailable for timestamp comparison: {package} ({package_nvr}) "
-                f"vs {dep_component} ({fixed_dep_nevr_str})"
+            logger.warning(
+                f"Completion timestamps unavailable for {package} ({package_nvr}) vs "
+                f"{dep_component} ({fixed_dep_nevr_str}); requesting manual verification"
             )
+            return None, package_issue_key, latest_nevr, "timestamp_comparison_failed"
 
         # Step 4: Get known package names and validated NEVR for the fixed dependency
         known_names_result = await _get_known_package_names(fixed_dep_build)
@@ -1562,69 +1947,103 @@ async def _check_package_built_with_fixed_dependency(
                 f"Brew metadata unavailable: could not fetch subpackage list for "
                 f"{dep_component} ({fixed_dep_nevr_str})"
             )
-        known_names, real_binary_rpm_count, build_name = known_names_result
-
-        # Cross-validate: the build's actual component name must match what the
-        # triage LLM reported.  A mismatch indicates data corruption or hallucination.
-        if build_name != dep_component:
-            logger.warning(
-                f"Invalid dependency data: {dep_component} resolves to {build_name}. "
-                f"Requesting clarification."
-            )
-            return (
-                None,
-                package_issue_key,
-                latest_nevr,
-                f"invalid_dependency_record:{dep_component}_resolves_to_{build_name}",
-            )
+        known_names, real_binary_rpm_count, _build_name = known_names_result
 
         # Step 5: Parse dependency from all architecture installed_pkgs.logs and verify consistency
-        # Parse all architectures concurrently
-        async def _parse_arch(arch_url, log_content):
-            arch_name = arch_url.split("/")[-2]
-            return arch_name, await _parse_dependency_from_installed_pkgs_log(
-                log_content, dep_component, known_names, BREWHUB_URL
-            )
+        # Parse all architectures concurrently; share one Brew resolution cache so the
+        # same installed RPM is resolved only once across architecture checks.
+        source_resolution_cache: dict[str, NEVR | None] = {}
 
-        parse_tasks = [_parse_arch(arch_url, log_content) for arch_url, log_content in installed_pkgs_logs]
-        parse_results = await asyncio.gather(*parse_tasks, return_exceptions=True)
+        async def _parse_all_logs(names: list[str]) -> tuple[dict, dict, list, bool, set]:
+            """Parse every architecture log against ``names`` and aggregate the results.
 
-        dep_nevrs = {}  # arch -> NEVR
-        matched_pkg_names = {}  # arch -> list of pkg names
-        missing_archs = list(
-            missing_archs_from_error
-        )  # Start with architectures missing from BuildLogMissingError
-        unresolved_subpackage_match = False  # Track if we found subpackage but couldn't resolve
-        unresolved_subpkg_names = set()  # Collect all unresolved subpackage names
+            Returns (dep_nevrs, matched_pkg_names, missing_archs,
+            unresolved_subpackage_match, unresolved_subpkg_names). May append data
+            problems to ``report`` and raises TransientInfrastructureError on
+            transient parse failures.
+            """
 
-        transient_parse_failures = []
-        for (arch_url, _), result in zip(installed_pkgs_logs, parse_results, strict=True):
-            if isinstance(result, Exception):
-                arch = arch_url.split("/")[-2]
-                problem = f"{package_issue_key} ({package_nvr}), {arch}: {result}"
-                logger.warning("Dependency verification failed: %s", problem)
-                if isinstance(result, (PermanentValidationError, KeyError, TypeError, ValueError)):
-                    report.problems.append(problem)
-                else:
-                    transient_parse_failures.append(problem)
-                continue
+            async def _parse_arch(arch_url, log_content):
+                arch_name = arch_url.split("/")[-2]
+                return arch_name, await _parse_dependency_from_installed_pkgs_log(
+                    log_content, dep_component, names, BREWHUB_URL, source_resolution_cache
+                )
 
-            arch_name, (used_dep_nevr, matched_pkg_names_list) = result
-            if used_dep_nevr is not None:
-                dep_nevrs[arch_name] = used_dep_nevr
-                matched_pkg_names[arch_name] = matched_pkg_names_list
-            elif matched_pkg_names_list:
-                # Package found in log but couldn't be resolved via Brew (unresolved subpackage)
-                unresolved_subpackage_match = True
-                unresolved_subpkg_names.update(matched_pkg_names_list)
-                missing_archs.append(arch_name)
+            parse_tasks = [
+                _parse_arch(arch_url, log_content) for arch_url, log_content in installed_pkgs_logs
+            ]
+            parse_results = await asyncio.gather(*parse_tasks, return_exceptions=True)
 
-        if transient_parse_failures:
-            raise TransientInfrastructureError(
-                "Dependency verification failed: " + "; ".join(transient_parse_failures)
-            )
+            dep_nevrs = {}  # arch -> NEVR
+            matched = {}  # arch -> list of pkg names
+            missing = list(
+                missing_archs_from_error
+            )  # Start with architectures missing from BuildLogMissingError
+            unresolved_subpackage = False  # Found a subpackage but couldn't resolve it
+            unresolved_names = set()
+
+            transient_parse_failures = []
+            for (arch_url, _), result in zip(installed_pkgs_logs, parse_results, strict=True):
+                if isinstance(result, Exception):
+                    arch = arch_url.split("/")[-2]
+                    problem = f"{package_issue_key} ({package_nvr}), {arch}: {result}"
+                    logger.warning("Dependency verification failed: %s", problem)
+                    if isinstance(result, (PermanentValidationError, KeyError, TypeError, ValueError)):
+                        report.problems.append(problem)
+                    else:
+                        transient_parse_failures.append(problem)
+                    continue
+
+                arch_name, (used_dep_nevr, matched_pkg_names_list) = result
+                if used_dep_nevr is not None:
+                    dep_nevrs[arch_name] = used_dep_nevr
+                    matched[arch_name] = matched_pkg_names_list
+                elif matched_pkg_names_list:
+                    # Package found in log but couldn't be resolved via Brew (unresolved subpackage)
+                    unresolved_subpackage = True
+                    unresolved_names.update(matched_pkg_names_list)
+                    missing.append(arch_name)
+
+            if transient_parse_failures:
+                raise TransientInfrastructureError(
+                    "Dependency verification failed: " + "; ".join(transient_parse_failures)
+                )
+            return dep_nevrs, matched, missing, unresolved_subpackage, unresolved_names
+
+        dep_nevrs, matched_pkg_names, missing_archs, unresolved_subpackage_match, unresolved_subpkg_names = (
+            await _parse_all_logs(known_names)
+        )
         if report.problems:
             return None, package_issue_key, latest_nevr, report
+
+        if not dep_nevrs and not matched_pkg_names and not unresolved_subpackage_match:
+            # The fixed build's binary RPM names matched nothing at all. Before
+            # concluding a rebuild is needed, check whether a newer build of the
+            # dependency renamed one of its binary RPMs and re-parse with those
+            # names. (Lazy and bounded: this only runs on the no-match path.)
+            renamed_names = await _get_renamed_binary_rpm_names(fixed_dep_build, set(known_names))
+            if renamed_names is None:
+                # Incomplete binary RPM name coverage: a failed Brew lookup (or
+                # missing build metadata) means we cannot rule out that a
+                # newer build renamed a binary RPM. Do not conclude a
+                # rebuild is needed from a partial search.
+                logger.warning(
+                    f"Could not enumerate renamed binary RPMs for {dep_component} "
+                    f"while checking {package_nvr}; binary RPM name coverage incomplete. "
+                    f"Needs manual verification."
+                )
+                return None, package_issue_key, latest_nevr, "renamed_binary_lookup_failed"
+            if renamed_names:
+                logger.info(
+                    f"Re-parsing installed_pkgs.log for {package_nvr} with renamed "
+                    f"binary RPM names from newer {dep_component} builds: {renamed_names}"
+                )
+                known_names = known_names + renamed_names
+                dep_nevrs, matched_pkg_names, missing_archs, unresolved_subpackage_match, (
+                    unresolved_subpkg_names
+                ) = await _parse_all_logs(known_names)
+                if report.problems:
+                    return None, package_issue_key, latest_nevr, report
 
         if not dep_nevrs:
             # No dependency found in any architecture log
@@ -1655,6 +2074,10 @@ async def _check_package_built_with_fixed_dependency(
                 )
                 active_issues = ", ".join(key for key, _ in active_candidates)
                 return None, package_issue_key, latest_nevr, f"active_builds_not_closed:{active_issues}"
+            if report.active_problems:
+                # An in-progress build could not be resolved in Brew — a
+                # rebuild might duplicate it.
+                return None, package_issue_key, latest_nevr, report
             # Check if we have incomplete architecture coverage
             if missing_archs:
                 logger.warning(
@@ -1738,6 +2161,10 @@ async def _check_package_built_with_fixed_dependency(
             )
             active_issues = ", ".join(key for key, _ in active_candidates)
             return None, package_issue_key, latest_nevr, f"active_builds_not_closed:{active_issues}"
+        if report.active_problems:
+            # An in-progress build could not be resolved in Brew — a
+            # rebuild might duplicate it.
+            return None, package_issue_key, latest_nevr, report
         return False, package_issue_key, latest_nevr, None
 
     except TransientInfrastructureError:

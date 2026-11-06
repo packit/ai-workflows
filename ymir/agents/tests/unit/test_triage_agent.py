@@ -1302,6 +1302,13 @@ async def test_branch_creation_notice_uses_final_resolution(
     monkeypatch.setattr(agent_tasks, "mcp_tools", _mock_mcp_tools)
     flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
     flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_rules)
+    monkeypatch.setattr(
+        t_agent,
+        "resolve_brew_build",
+        _async_return(
+            common_utils.BrewBuild({"name": "openssl", "epoch": 0, "version": "3.0", "release": "1.el10"})
+        ),
+    )
 
     # Mock run_tool in common_utils for check_package_built_with_fixed_dependency
     async def _mock_common_utils_run_tool(name, **kwargs):
@@ -1697,6 +1704,9 @@ def test_validate_triage_output_accepts_already_fixed():
         "data": {
             "explanation": "Build foo-1.0-2.el9 already contains the fix.",
             "package": "foo",
+            "package_nvr": "foo-1.0-2.el9",
+            "package_issue_key": "RHEL-2",
+            "target_version": "1.0",
         },
     }
 
@@ -1707,6 +1717,812 @@ def test_validate_triage_output_accepts_already_fixed():
     assert isinstance(output.data, AlreadyFixedData)
     assert output.data.jira_issue == "RHEL-1"
     assert output.data.package == "foo"
+    assert output.data.package_nvr == "foo-1.0-2.el9"
+
+
+def test_validate_triage_output_rejects_already_fixed_without_build():
+    """An already-fixed answer without a build reference cannot drive the errata action."""
+    answer = {
+        "resolution": "already-fixed",
+        "data": {
+            "explanation": "Build foo-1.0-2.el9 already contains the fix.",
+            "package": "foo",
+        },
+    }
+
+    with pytest.raises(ValueError, match="package_nvr"):
+        validate_triage_output(json.dumps(answer), jira_issue="RHEL-1")
+
+
+def test_validate_triage_output_rejects_already_fixed_without_issue():
+    """An already-fixed answer without the completed issue reference cannot be
+    substantiated in Jira, so the claim must not be accepted."""
+    answer = {
+        "resolution": "already-fixed",
+        "data": {
+            "explanation": "Build foo-1.0-2.el9 already contains the fix.",
+            "package": "foo",
+            "package_nvr": "foo-1.0-2.el9",
+        },
+    }
+
+    with pytest.raises(ValueError, match="package_issue_key"):
+        validate_triage_output(json.dumps(answer), jira_issue="RHEL-1")
+
+
+def _brew_build(nvr: str):
+    from specfile.utils import NEVR
+
+    nevr = NEVR.from_string(nvr)
+    return common_utils.BrewBuild(
+        {
+            "name": nevr.name,
+            "epoch": int(nevr.epoch),
+            "version": nevr.version,
+            "release": nevr.release,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_missing_issue_reference():
+    """A valid build without the completed issue reference cannot be substantiated."""
+
+    async def _resolve(nvr):
+        return _brew_build("foo-1.0-2.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return "rhel-9.8.0", ["rhel-9.8.0-z-pending"], []
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+    # The Jira lookup must never run: there is no issue to check.
+    flexmock(t_agent).should_receive("run_tool").never()
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9_8",
+        package_issue_key=None,
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+
+    assert result is not None
+    findings, _additional = result
+    assert "without the completed issue reference" in findings
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_accepts_matching_build():
+    """A build that resolves in Brew, matches the package and stream passes verification."""
+
+    async def _resolve(nvr):
+        assert nvr == "foo-1.0-2.el9_8"
+        return _brew_build("foo-1.0-2.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return "rhel-9.8.0", ["rhel-9.8.0-z-pending"], []
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+
+    async def _run_tool(name, **kwargs):
+        assert name == "get_jira_details"
+        return {
+            "fields": {
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done-Errata"},
+                FIXED_IN_BUILD_CUSTOM_FIELD: "foo-1.0-2.el9_8",
+            }
+        }
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_run_tool)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9_8",
+        package_issue_key="RHEL-2",
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_missing_build():
+    """A non-empty NVR that Brew cannot resolve must not publish already-fixed."""
+
+    async def _resolve(_nvr):
+        return None
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9_8",
+        package_issue_key=None,
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "could not be found in Brew" in result[0]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_wrong_package():
+    """A build for a different package cannot prove this package already ships the fix."""
+
+    async def _resolve(_nvr):
+        return _brew_build("bar-1.0-2.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="bar-1.0-2.el9_8",
+        package_issue_key=None,
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "is for package" in result[0]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_older_epoch_build():
+    """An Epoch >= 1 build older than the target must not bypass the version floor."""
+
+    async def _resolve(_nvr):
+        return common_utils.BrewBuild(
+            {"name": "foo", "epoch": 1, "version": "1.0", "release": "2.el9_8", "build_id": 7}
+        )
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return "rhel-9.8.0", ["rhel-9.8.0-z-pending"], []
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="1:foo-1.0-2.el9_8",
+        package_issue_key=None,
+        fix_version="rhel-9.8.z",
+        target_version="2.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "older than the rebase target" in result[0]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_accepts_low_release_at_target_version():
+    """A build at the target version with a release sorting below 1 is still at the target."""
+
+    async def _resolve(_nvr):
+        return _brew_build("foo-2.0-0.1.rc1.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return "rhel-9.8.0", ["rhel-9.8.0-z-pending"], []
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-2.0-0.1.rc1.el9_8",
+        package_issue_key=None,
+        fix_version="rhel-9.8.z",
+        target_version="2.0",
+        available_tools=[],
+    )
+    # No "older than the rebase target" rejection: the version matches the target.
+    assert result is None or "older than the rebase target" not in result[0]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_older_build():
+    """A completed build older than the rebase target cannot contain the fix."""
+
+    async def _resolve(_nvr):
+        return _brew_build("foo-1.0-2.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return "rhel-9.8.0", ["rhel-9.8.0-z-pending"], []
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9_8",
+        package_issue_key=None,
+        fix_version="rhel-9.8.z",
+        target_version="2.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "older than the rebase target" in result[0]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_accepts_newer_build():
+    """A build at or above the rebase target passes the version floor (1.10 > 1.9)."""
+
+    async def _resolve(_nvr):
+        return _brew_build("foo-1.10-2.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return "rhel-9.8.0", ["rhel-9.8.0-z-pending"], []
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+
+    async def _run_tool(name, **kwargs):
+        return {
+            "fields": {
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done-Errata"},
+                FIXED_IN_BUILD_CUSTOM_FIELD: "foo-1.10-2.el9_8",
+            }
+        }
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_run_tool)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.10-2.el9_8",
+        package_issue_key="RHEL-2",
+        fix_version="rhel-9.8.z",
+        target_version="1.9",
+        available_tools=[],
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_missing_fix_version():
+    """Without a fix version the release stream cannot be verified at all."""
+
+    async def _resolve(_nvr):
+        return _brew_build("foo-1.0-2.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9_8",
+        package_issue_key=None,
+        fix_version="",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "without a fix version" in result[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        # Gateway-propagated error: the original exception string rides in the
+        # error context.
+        t_agent.ToolError(
+            "Error executing tool get_jira_details: Failed to get details about issue RHEL-2",
+            context={"additional_context": {"exception": "ClientResponseError: 404, message='Not Found'"}},
+        ),
+        # In-process tool: the original aiohttp exception is chained.
+        t_agent.ToolError(
+            "Failed to get details about issue RHEL-2",
+            cause=type("ClientResponseError", (Exception,), {"status": 410})("gone"),
+        ),
+    ],
+    ids=["gateway-context", "chained-cause"],
+)
+async def test_verify_already_fixed_build_rejects_inaccessible_issue(error):
+    """A nonexistent or forbidden issue key clarifies instead of retrying."""
+
+    async def _resolve(_nvr):
+        return _brew_build("foo-1.0-2.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return "rhel-9.8.0", ["rhel-9.8.0-z-pending"], []
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+
+    async def _run_tool(name, **kwargs):
+        raise error
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_run_tool)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9_8",
+        package_issue_key="RHEL-2",
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "could not be found or accessed" in result[0]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_translates_jira_outage():
+    """A Jira outage during the issue lookup retries with backoff, not fast-fail."""
+
+    async def _resolve(_nvr):
+        return _brew_build("foo-1.0-2.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _run_tool(name, **kwargs):
+        raise ConnectionError("jira gateway down")
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_run_tool)
+
+    with pytest.raises(t_agent.TransientInfrastructureError, match="jira gateway down"):
+        await t_agent.verify_already_fixed_build(
+            package="foo",
+            package_nvr="foo-1.0-2.el9_8",
+            package_issue_key="RHEL-2",
+            fix_version="rhel-9.8.z",
+            target_version="1.0",
+            available_tools=[],
+        )
+
+
+def test_validate_triage_output_rejects_already_fixed_without_target_version():
+    """Without the rebase target version the build cannot be age-checked."""
+    answer = {
+        "resolution": "already-fixed",
+        "data": {
+            "explanation": "Build foo-1.0-2.el9 already contains the fix.",
+            "package": "foo",
+            "package_nvr": "foo-1.0-2.el9",
+            "package_issue_key": "RHEL-2",
+        },
+    }
+
+    with pytest.raises(ValueError, match="target_version"):
+        validate_triage_output(json.dumps(answer), jira_issue="RHEL-1")
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_retries_ticket_prefetch_outage(monkeypatch, tmp_path):
+    """A Jira outage during the ticket re-fetch retries with backoff."""
+
+    async def run_verification(workflow, state):
+        state.ticket_fix_version = None
+        state.downstream_component = None
+        state.triage_result = t_agent.OutputSchema(
+            resolution=t_agent.Resolution.ALREADY_FIXED,
+            data=AlreadyFixedData(
+                explanation="Build foo-1.0-2.el9_8 already contains the fix.",
+                jira_issue=state.jira_issue,
+                package="foo",
+                package_nvr="foo-1.0-2.el9_8",
+                package_issue_key="RHEL-2",
+                target_version="1.0",
+                fix_version="rhel-9.8.z",
+            ),
+        )
+        with pytest.raises(t_agent.TransientInfrastructureError, match="jira gateway down"):
+            await workflow.steps["verify_already_fixed"].handler(state)
+        return flexmock(state=state)
+
+    @asynccontextmanager
+    async def tools(*args, **kwargs):
+        yield []
+
+    async def details(name, **kwargs):
+        raise ConnectionError("jira gateway down")
+
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(tools)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(t_agent).should_receive("run_tool").replace_with(details)
+    flexmock(t_agent).should_receive("verify_already_fixed_build").never()
+    monkeypatch.setattr(t_agent.Workflow, "run", run_verification)
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+
+    await run_workflow("RHEL-ALREADY", True, lambda *_: flexmock())
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_rejects_model_ticket_fix_version_mismatch(monkeypatch, tmp_path):
+    """A model fix version that disagrees with the ticket is clarified, not trusted."""
+
+    async def run_verification(workflow, state):
+        state.ticket_fix_version = "rhel-9.9.z"
+        state.downstream_component = None
+        state.triage_result = t_agent.OutputSchema(
+            resolution=t_agent.Resolution.ALREADY_FIXED,
+            data=AlreadyFixedData(
+                explanation="Build foo-1.0-2.el9_8 already contains the fix.",
+                jira_issue=state.jira_issue,
+                package="foo",
+                package_nvr="foo-1.0-2.el9_8",
+                package_issue_key="RHEL-2",
+                target_version="1.0",
+                fix_version="rhel-9.8.z",
+            ),
+        )
+        next_step = await workflow.steps["verify_already_fixed"].handler(state)
+        assert next_step == "comment_in_jira"
+        return flexmock(state=state)
+
+    @asynccontextmanager
+    async def tools(*args, **kwargs):
+        yield []
+
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(tools)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+
+    async def details(name, **kwargs):
+        # The re-fetch (downstream_component is unset on the state) returns the
+        # ticket's own fields, consistent with the state's fix version.
+        assert name == "get_jira_details"
+        return {
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.9.z"}],
+                t_agent.DOWNSTREAM_COMPONENT_CUSTOM_FIELD: "foo",
+            }
+        }
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(details)
+
+    async def _config():
+        return {}
+
+    flexmock(t_agent).should_receive("load_rhel_config").replace_with(_config)
+    flexmock(t_agent).should_receive("normalize_fix_version").replace_with(
+        lambda version, _config: version
+    )
+    # The build verification must never run on inconsistent input.
+    flexmock(t_agent).should_receive("verify_already_fixed_build").never()
+    monkeypatch.setattr(t_agent.Workflow, "run", run_verification)
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+
+    state = await run_workflow("RHEL-ALREADY", True, lambda *_: flexmock())
+
+    assert state.triage_result.resolution == t_agent.Resolution.CLARIFICATION_NEEDED
+    assert "but this ticket's fix version is rhel-9.9.z" in state.triage_result.data.findings
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_rejects_model_package_mismatch(monkeypatch, tmp_path):
+    """A model package that disagrees with the ticket's component is clarified."""
+
+    async def run_verification(workflow, state):
+        state.ticket_fix_version = None
+        state.downstream_component = "bar"
+        state.triage_result = t_agent.OutputSchema(
+            resolution=t_agent.Resolution.ALREADY_FIXED,
+            data=AlreadyFixedData(
+                explanation="Build foo-1.0-2.el9_8 already contains the fix.",
+                jira_issue=state.jira_issue,
+                package="foo",
+                package_nvr="foo-1.0-2.el9_8",
+                package_issue_key="RHEL-2",
+                target_version="1.0",
+                fix_version="rhel-9.8.z",
+            ),
+        )
+        next_step = await workflow.steps["verify_already_fixed"].handler(state)
+        assert next_step == "comment_in_jira"
+        return flexmock(state=state)
+
+    @asynccontextmanager
+    async def tools(*args, **kwargs):
+        yield []
+
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(tools)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+
+    async def details(name, **kwargs):
+        # The re-fetch (ticket_fix_version is unset on the state) returns a fix
+        # version matching the model's claim, so only the package mismatches.
+        assert name == "get_jira_details"
+        return {
+            "fields": {
+                "fixVersions": [{"name": "rhel-9.8.z"}],
+                t_agent.DOWNSTREAM_COMPONENT_CUSTOM_FIELD: "bar",
+            }
+        }
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(details)
+
+    async def _config():
+        return {}
+
+    flexmock(t_agent).should_receive("load_rhel_config").replace_with(_config)
+    flexmock(t_agent).should_receive("normalize_fix_version").replace_with(
+        lambda version, _config: version
+    )
+    flexmock(t_agent).should_receive("verify_already_fixed_build").never()
+    monkeypatch.setattr(t_agent.Workflow, "run", run_verification)
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+
+    state = await run_workflow("RHEL-ALREADY", True, lambda *_: flexmock())
+
+    assert state.triage_result.resolution == t_agent.Resolution.CLARIFICATION_NEEDED
+    assert "Downstream Component" in state.triage_result.data.findings
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_build_not_tagged_in_stream():
+    """Tag membership is authoritative: an untagged build is not in the stream."""
+
+    async def _resolve(_nvr):
+        return common_utils.BrewBuild(
+            {"name": "foo", "epoch": 0, "version": "1.0", "release": "2.el9_8", "build_id": 7}
+        )
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return "rhel-9.8.0", [], []
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9_8",
+        package_issue_key=None,
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "carries no tag of the rhel-9.8.z stream" in result[0]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_fix_in_progress():
+    """A build only in candidate/gate tags is a fix in progress, not shipped."""
+
+    async def _resolve(_nvr):
+        return common_utils.BrewBuild(
+            {"name": "foo", "epoch": 0, "version": "1.0", "release": "2.el9_8", "build_id": 7}
+        )
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return "rhel-9.8.0", [], ["rhel-9.8.0-candidate", "rhel-9.8.0-gate"]
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9_8",
+        package_issue_key=None,
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "fix appears to be in progress" in result[0]
+    assert "rhel-9.8.0-candidate" in result[0]
+    assert "may have to update the referencing issue" in result[1]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_fails_open_when_tag_check_unavailable():
+    """An unperformable tag check must not reject the build."""
+
+    async def _resolve(_nvr):
+        return _brew_build("foo-1.0-2.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return None
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+
+    async def _run_tool(name, **kwargs):
+        return {
+            "fields": {
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done-Errata"},
+                FIXED_IN_BUILD_CUSTOM_FIELD: "foo-1.0-2.el9_8",
+            }
+        }
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_run_tool)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9_8",
+        package_issue_key="RHEL-2",
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_cross_stream_build():
+    """A Y-stream build does not prove a Z-stream ticket is already fixed."""
+
+    async def _resolve(_nvr):
+        return _brew_build("foo-1.0-2.el9")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9",
+        package_issue_key=None,
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "release stream" in result[0]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_incomplete_issue():
+    """A referenced issue that is not completed cannot anchor an already-fixed result."""
+
+    async def _resolve(_nvr):
+        return _brew_build("foo-1.0-2.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return "rhel-9.8.0", ["rhel-9.8.0-z-pending"], []
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+
+    async def _run_tool(name, **kwargs):
+        return {
+            "fields": {
+                "status": {"name": "In Progress"},
+                "resolution": None,
+                FIXED_IN_BUILD_CUSTOM_FIELD: "foo-1.0-2.el9_8",
+            }
+        }
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_run_tool)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9_8",
+        package_issue_key="RHEL-2",
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "not completed" in result[0]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_issue_build_mismatch():
+    """The referenced issue's Fixed in Build must match the already-fixed build."""
+
+    async def _resolve(_nvr):
+        return _brew_build("foo-1.0-2.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return "rhel-9.8.0", ["rhel-9.8.0-z-pending"], []
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+
+    async def _run_tool(name, **kwargs):
+        return {
+            "fields": {
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done"},
+                FIXED_IN_BUILD_CUSTOM_FIELD: "foo-0.9-1.el9_8",
+            }
+        }
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_run_tool)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9_8",
+        package_issue_key="RHEL-2",
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "does not match" in result[0]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_non_string_fixed_in_build():
+    """A non-string Fixed in Build value must clarify, not raise."""
+
+    async def _resolve(_nvr):
+        return _brew_build("foo-1.0-2.el9_8")
+
+    flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, _fix_version):
+        return "rhel-9.8.0", ["rhel-9.8.0-z-pending"], []
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
+
+    async def _run_tool(name, **kwargs):
+        return {
+            "fields": {
+                "status": {"name": "Closed"},
+                "resolution": {"name": "Done"},
+                FIXED_IN_BUILD_CUSTOM_FIELD: 12345,
+            }
+        }
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(_run_tool)
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="foo-1.0-2.el9_8",
+        package_issue_key="RHEL-2",
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "does not match" in result[0]
+    assert "12345" in result[0]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_rejects_malformed_nvr():
+    """A malformed NVR is a permanent data problem that requests clarification."""
+    flexmock(t_agent).should_receive("resolve_brew_build").and_raise(
+        common_utils.PermanentValidationError("bad nvr")
+    )
+
+    result = await t_agent.verify_already_fixed_build(
+        package="foo",
+        package_nvr="not an nvr",
+        package_issue_key=None,
+        fix_version="rhel-9.8.z",
+        target_version="1.0",
+        available_tools=[],
+    )
+    assert result is not None
+    assert "not a valid Brew NVR" in result[0]
+
+
+@pytest.mark.asyncio
+async def test_verify_already_fixed_build_reraises_transient():
+    """A Brew outage must bubble up so the task retries instead of clarifying."""
+    flexmock(t_agent).should_receive("resolve_brew_build").and_raise(
+        common_utils.TransientInfrastructureError("Brew down")
+    )
+
+    with pytest.raises(common_utils.TransientInfrastructureError):
+        await t_agent.verify_already_fixed_build(
+            package="foo",
+            package_nvr="foo-1.0-2.el9_8",
+            package_issue_key=None,
+            fix_version="rhel-9.8.z",
+            target_version="1.0",
+            available_tools=[],
+        )
 
 
 def test_triage_resolution_models_match_shared_schema():
@@ -2056,6 +2872,11 @@ async def test_rebuild_verification_distinguishes_transient_and_final_errors(mon
     flexmock(t_agent).should_receive("run_tool").replace_with(details)
     flexmock(t_agent).should_receive("check_package_built_with_fixed_dependency").replace_with(check)
 
+    async def resolve(_nvr):
+        return common_utils.BrewBuild({"name": "dep", "epoch": 0, "version": "1", "release": "1.el9"})
+
+    monkeypatch.setattr(t_agent, "resolve_brew_build", resolve)
+
     async def buildroot(*args, **kwargs):
         raise common_utils.TransientInfrastructureError("Brew test outage")
 
@@ -2075,6 +2896,222 @@ async def test_rebuild_verification_distinguishes_transient_and_final_errors(mon
     assert state.triage_result.resolution == Resolution.CLARIFICATION_NEEDED
     findings = state.triage_result.data.findings
     for text in ("RHEL-1", "RHEL-2", "pkg-1-1.el9", "pkg-2-1.el9", "epoch missing", "Invalid Brew epoch"):
+        assert text in findings
+    assert "RHEL-DEP" in findings
+    assert "dep-1-1.el9" in findings
+
+
+@pytest.mark.asyncio
+async def test_rebuild_verification_rejects_mismatched_dependency_component(monkeypatch, tmp_path):
+    """The LLM-provided component is cross-validated against the Brew build name
+    at the boundary, before any build verification runs."""
+
+    @asynccontextmanager
+    async def tools(*args, **kwargs):
+        yield []
+
+    async def details(*args, **kwargs):
+        return {"fields": {FIXED_IN_BUILD_CUSTOM_FIELD: "actual-dep-1-1.el9"}}
+
+    async def run_verification(workflow, state):
+        state.raw_downstream_component = None
+        state.target_branch = "rhel-9.8"
+        state.triage_result = TriageOutputSchema(
+            resolution=Resolution.REBUILD,
+            data=RebuildData(
+                jira_issue=state.jira_issue,
+                package="pkg",
+                fix_version="rhel-9.8.z",
+                dependency_issue="RHEL-DEP",
+                dependency_component="dep",
+            ),
+        )
+        next_step = await workflow.steps["verify_rebuild_buildroot"].handler(state)
+        assert next_step == "comment_in_jira"
+        return flexmock(state=state)
+
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(tools)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(t_agent).should_receive("run_tool").replace_with(details)
+    # The mismatch must be caught before any build verification fan-out.
+    flexmock(t_agent).should_receive("check_package_built_with_fixed_dependency").never()
+    flexmock(t_agent).should_receive("check_build_in_buildroot").never()
+
+    async def resolve(_nvr):
+        # Resolves to a different package name than the LLM-reported component.
+        return common_utils.BrewBuild(
+            {"name": "actual-dep", "epoch": 0, "version": "1", "release": "1.el9"}
+        )
+
+    monkeypatch.setattr(t_agent, "resolve_brew_build", resolve)
+    monkeypatch.setattr(t_agent.Workflow, "run", run_verification)
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+
+    state = await run_workflow("RHEL-REBUILD", True, lambda *_: flexmock())
+
+    assert state.triage_result.resolution == Resolution.CLARIFICATION_NEEDED
+    findings = state.triage_result.data.findings
+    for text in ("dep", "actual-dep", "RHEL-DEP", "actual-dep-1-1.el9"):
+        assert text in findings
+
+
+@pytest.mark.asyncio
+async def test_rebuild_verification_fix_in_progress_requests_clarification(monkeypatch, tmp_path):
+    """A fix in progress in the stream stops the rebuild and informs the user."""
+
+    @asynccontextmanager
+    async def tools(*args, **kwargs):
+        yield []
+
+    async def details(*args, **kwargs):
+        return {"fields": {FIXED_IN_BUILD_CUSTOM_FIELD: "dep-1-1.el9"}}
+
+    async def check(*args, **kwargs):
+        return None, "RHEL-1", None, "fix_in_progress_in_stream:rhel-9.8.0-candidate"
+
+    async def run_verification(workflow, state):
+        state.raw_downstream_component = None
+        state.target_branch = "rhel-9.8"
+        state.triage_result = TriageOutputSchema(
+            resolution=Resolution.REBUILD,
+            data=RebuildData(
+                jira_issue=state.jira_issue,
+                package="pkg",
+                fix_version="rhel-9.8.z",
+                dependency_issue="RHEL-DEP",
+                dependency_component="dep",
+            ),
+        )
+        next_step = await workflow.steps["verify_rebuild_buildroot"].handler(state)
+        assert next_step == "comment_in_jira"
+        return flexmock(state=state)
+
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(tools)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(t_agent).should_receive("run_tool").replace_with(details)
+    flexmock(t_agent).should_receive("check_package_built_with_fixed_dependency").replace_with(check)
+    flexmock(t_agent).should_receive("check_build_in_buildroot").never()
+
+    async def resolve(_nvr):
+        return common_utils.BrewBuild({"name": "dep", "epoch": 0, "version": "1", "release": "1.el9"})
+
+    monkeypatch.setattr(t_agent, "resolve_brew_build", resolve)
+    monkeypatch.setattr(t_agent.Workflow, "run", run_verification)
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+
+    state = await run_workflow("RHEL-REBUILD", True, lambda *_: flexmock())
+
+    assert state.triage_result.resolution == Resolution.CLARIFICATION_NEEDED
+    findings = state.triage_result.data.findings
+    assert "rhel-9.8.0-candidate" in findings
+    assert "fix appears to be in progress" in findings
+    assert "may have to update the referencing issue" in state.triage_result.data.additional_info_needed
+
+
+@pytest.mark.asyncio
+async def test_rebuild_verification_build_not_tagged_requests_clarification(monkeypatch, tmp_path):
+    """A build outside the fix version's tags clarifies, never rebuilds."""
+
+    @asynccontextmanager
+    async def tools(*args, **kwargs):
+        yield []
+
+    async def details(*args, **kwargs):
+        return {"fields": {FIXED_IN_BUILD_CUSTOM_FIELD: "dep-1-1.el9"}}
+
+    async def check(*args, **kwargs):
+        return None, "RHEL-1", None, "build_not_tagged_in_stream:rhel-9.8.0"
+
+    async def run_verification(workflow, state):
+        state.raw_downstream_component = None
+        state.target_branch = "rhel-9.8"
+        state.triage_result = TriageOutputSchema(
+            resolution=Resolution.REBUILD,
+            data=RebuildData(
+                jira_issue=state.jira_issue,
+                package="pkg",
+                fix_version="rhel-9.8.z",
+                dependency_issue="RHEL-DEP",
+                dependency_component="dep",
+            ),
+        )
+        next_step = await workflow.steps["verify_rebuild_buildroot"].handler(state)
+        assert next_step == "comment_in_jira"
+        return flexmock(state=state)
+
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(tools)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(t_agent).should_receive("run_tool").replace_with(details)
+    flexmock(t_agent).should_receive("check_package_built_with_fixed_dependency").replace_with(check)
+    flexmock(t_agent).should_receive("check_build_in_buildroot").never()
+
+    async def resolve(_nvr):
+        return common_utils.BrewBuild({"name": "dep", "epoch": 0, "version": "1", "release": "1.el9"})
+
+    monkeypatch.setattr(t_agent, "resolve_brew_build", resolve)
+    monkeypatch.setattr(t_agent.Workflow, "run", run_verification)
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+
+    state = await run_workflow("RHEL-REBUILD", True, lambda *_: flexmock())
+
+    assert state.triage_result.resolution == Resolution.CLARIFICATION_NEEDED
+    findings = state.triage_result.data.findings
+    assert "rhel-9.8.0" in findings
+    assert "no tag of the rhel-9.8.0 Brew stream" in findings
+
+
+@pytest.mark.asyncio
+async def test_rebuild_verification_renamed_binary_rpm_lookup_failure_requests_clarification(
+    monkeypatch, tmp_path
+):
+    """An incomplete renamed-binary-RPM lookup must clarify, never rebuild."""
+
+    @asynccontextmanager
+    async def tools(*args, **kwargs):
+        yield []
+
+    async def details(*args, **kwargs):
+        return {"fields": {FIXED_IN_BUILD_CUSTOM_FIELD: "dep-1-1.el9"}}
+
+    async def check(*args, **kwargs):
+        return None, "RHEL-1", None, "renamed_binary_lookup_failed"
+
+    async def run_verification(workflow, state):
+        state.raw_downstream_component = None
+        state.target_branch = "rhel-9.8"
+        state.triage_result = TriageOutputSchema(
+            resolution=Resolution.REBUILD,
+            data=RebuildData(
+                jira_issue=state.jira_issue,
+                package="pkg",
+                fix_version="rhel-9.8.z",
+                dependency_issue="RHEL-DEP",
+                dependency_component="dep",
+            ),
+        )
+        next_step = await workflow.steps["verify_rebuild_buildroot"].handler(state)
+        assert next_step == "comment_in_jira"
+        return flexmock(state=state)
+
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(tools)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(t_agent).should_receive("run_tool").replace_with(details)
+    flexmock(t_agent).should_receive("check_package_built_with_fixed_dependency").replace_with(check)
+    # The buildroot check must never run: no rebuild conclusion may be drawn.
+    flexmock(t_agent).should_receive("check_build_in_buildroot").never()
+
+    async def resolve(_nvr):
+        return common_utils.BrewBuild({"name": "dep", "epoch": 0, "version": "1", "release": "1.el9"})
+
+    monkeypatch.setattr(t_agent, "resolve_brew_build", resolve)
+    monkeypatch.setattr(t_agent.Workflow, "run", run_verification)
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+
+    state = await run_workflow("RHEL-REBUILD", True, lambda *_: flexmock())
+
+    assert state.triage_result.resolution == Resolution.CLARIFICATION_NEEDED
+    findings = state.triage_result.data.findings
+    for text in ("dep", "renamed binary RPM", "installed_pkgs.log"):
         assert text in findings
     assert "RHEL-DEP" in findings
     assert "dep-1-1.el9" in findings
@@ -2105,3 +3142,22 @@ async def test_triage_poller_promotes_due_retries_before_dequeue(_mock_env_vars_
     process = await _capture_process_task(main, client)
     assert await process.poll_fn() == (b"triage_queue", payload.encode())
     assert events == ["promote", "dequeue"]
+
+
+def test_validate_triage_output_rejects_already_fixed_for_rebuilds():
+    """Rebuild verification (build logs) is the workflow's job, not the LLM's."""
+    answer = {
+        "resolution": "already-fixed",
+        "data": {
+            "explanation": "A completed rebuild issue exists.",
+            "package": "foo",
+            "package_nvr": "foo-1.0-2.el9",
+            "package_issue_key": "RHEL-3",
+            "target_version": "1.0",
+            "dependency_issue_key": "RHEL-2",
+            "dependency_nvr": "golang-1.26.4-1.el9",
+        },
+    }
+
+    with pytest.raises(ValueError, match="rebuild"):
+        validate_triage_output(json.dumps(answer), jira_issue="RHEL-1")

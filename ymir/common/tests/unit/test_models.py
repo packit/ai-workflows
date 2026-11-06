@@ -1,3 +1,5 @@
+import json
+
 from ymir.common.models import (
     AUTOMATED_RESOLUTION_NOT_SUPPORTED,
     POSTPONEMENT_NOTE,
@@ -6,6 +8,7 @@ from ymir.common.models import (
     ApplicabilityResult,
     BackportData,
     ClarificationNeededData,
+    ConfidenceAssessment,
     ConsolidatedIssue,
     ErrorData,
     ErrorListEntry,
@@ -909,3 +912,43 @@ def test_already_fixed_sparse_payload_parsing():
     assert output.data.explanation == "Package contains the fix"
     assert output.data.jira_issue == "RHEL-99999"
     assert output.data.package == "testpkg"
+
+
+def test_already_fixed_formatting_includes_confidence():
+    """The already-fixed comment must carry the applicability confidence assessment."""
+    data = AlreadyFixedData(
+        explanation="Build logs confirm the fixed dependency was used.",
+        jira_issue="RHEL-12345",
+        package="readline",
+        package_nvr="readline-8.0-5.el10",
+        package_issue_key="RHEL-99999",
+    )
+    result = TriageOutputSchema(
+        resolution=Resolution.ALREADY_FIXED,
+        confidence=ConfidenceAssessment(level="high", reason="Verified via installed_pkgs.log"),
+        data=data,
+    )
+
+    comment = result.format_for_comment()
+    assert "*Resolution*: already-fixed" in comment
+    assert "*Confidence*: high" in comment
+    assert "*Confidence Reason*: Verified via installed_pkgs.log" in comment
+
+
+def test_select_data_model_does_not_mutate_caller_payload():
+    """Validating must not replace the caller's plain `data` mapping with a model."""
+    payload = {
+        "resolution": "backport",
+        "data": {
+            "patch_urls": ["https://example.com/patch.patch"],
+            "justification": "Fixes the bug in bind.c",
+            "jira_issue": "RHEL-12345",
+            "package": "readline",
+        },
+    }
+
+    TriageOutputSchema.model_validate(payload)
+
+    # The caller's dict must stay JSON-serializable with its original contents.
+    assert isinstance(payload["data"], dict)
+    assert json.loads(json.dumps(payload))["data"]["jira_issue"] == "RHEL-12345"

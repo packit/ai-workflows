@@ -24,6 +24,36 @@ from ymir.tools.unprivileged.specfile import (
 from ymir.tools.unprivileged.text import StrReplaceTool, StrReplaceToolInput
 
 
+def _rpm_allows_dist_autorelease() -> bool:
+    """Whether the local rpm accepts ``%{?dist}.%{autorelease -n}`` release values.
+
+    rpm 6 with rpmautospec macros installed expands ``%{autorelease}`` at parse
+    time, which makes the Release tag multi-token and unparseable. The project's
+    test containers ship an rpm where the macro stays unexpanded.
+    """
+    try:
+        specfile.Specfile(
+            content=dedent(
+                """
+                Name:           test
+                Version:        0.1
+                Release:        5%{?dist}.%{autorelease -n}
+                Summary:        Test package
+                License:        MIT
+
+                %description
+                Test package
+                """
+            ).lstrip()
+        )
+        return True
+    except Exception:
+        return False
+
+
+_AUTORELEASE_COMPATIBLE = _rpm_allows_dist_autorelease()
+
+
 @pytest.fixture
 def autorelease_spec(tmp_path):
     spec = tmp_path / "autorelease.spec"
@@ -474,6 +504,8 @@ async def test_update_release(
     tool = UpdateReleaseTool()
 
     async def run_and_check(spec, expected_release, error=False):
+        if spec is autorelease_spec and not _AUTORELEASE_COMPATIBLE:
+            pytest.skip("local rpm expands %{autorelease} and rejects the resulting Release tag")
         with pytest.raises(ToolError) if error else contextlib.nullcontext() as e:
             output = await tool.run(
                 input=UpdateReleaseToolInput(

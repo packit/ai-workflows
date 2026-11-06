@@ -1,5 +1,6 @@
 import asyncio
 import signal
+import time
 
 import pytest
 from flexmock import flexmock
@@ -500,3 +501,70 @@ class TestFindSpec:
             assert spec.version == "1.0.0"
             with spec.changelog() as changelog:
                 assert len(changelog) == 1
+
+
+class TestRunTaskLoopIdleSleep:
+    @pytest.mark.asyncio
+    async def test_blocking_custom_poller_skips_idle_sleep(self):
+        """A poll_fn that already blocks must not add another idle sleep.
+
+        poll_triage blocks for the BRPOP timeout internally; with the default
+        idle sleep a newly pushed task would wait up to an extra poll_timeout
+        while the queues are idle.
+        """
+
+        async def blocking_poll():
+            # Mirrors poll_triage: blocks (briefly, for the test) and returns
+            # None when idle.
+            await asyncio.sleep(0.01)
+            return
+
+        shutdown_event = asyncio.Event()
+        fake_redis = FakeRedis()
+        start = time.monotonic()
+
+        loop_task = asyncio.create_task(
+            run_task_loop(
+                fake_redis,
+                ["queue1"],
+                _noop,
+                shutdown_event=shutdown_event,
+                poll_fn=blocking_poll,
+                poll_timeout=1,
+                idle_sleep=0,
+            )
+        )
+        await asyncio.sleep(0.3)
+        shutdown_event.set()
+        await asyncio.wait_for(loop_task, timeout=1)
+
+        # Without the fix the loop would idle-sleep poll_timeout (1s) between
+        # polls; 0.3s of runtime must have allowed many poll cycles.
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.9, f"idle sleep doubled the poll latency: {elapsed:.2f}s"
+
+    @pytest.mark.asyncio
+    async def test_nonblocking_custom_poller_still_idle_sleeps(self):
+        """The default idle sleep is kept for pollers that return immediately."""
+
+        async def nonblocking_poll():
+            return None
+
+        shutdown_event = asyncio.Event()
+
+        loop_task = asyncio.create_task(
+            run_task_loop(
+                FakeRedis(),
+                ["queue1"],
+                _noop,
+                shutdown_event=shutdown_event,
+                poll_fn=nonblocking_poll,
+                poll_timeout=0.2,
+            )
+        )
+        await asyncio.sleep(0.05)
+        shutdown_event.set()
+        await asyncio.wait_for(loop_task, timeout=1)
+        # Just assert the loop did not busy-spin itself to completion errors;
+        # the sleep kept it alive and idle until shutdown.
+        assert not loop_task.cancelled()

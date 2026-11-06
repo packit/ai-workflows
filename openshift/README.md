@@ -1,5 +1,27 @@
 # OpenShift Deployment
 
+## Retrying failed tasks
+
+Run `make show-error-list`, then `make requeue-error ERROR_ID=42` from this
+directory. Requeueing removes all `ymir_*` labels from the issue through the
+MCP gateway before putting the saved task on its priority queue with attempts
+reset to zero. Other Jira labels are preserved. Cleanup failure leaves the
+entry in `error_list` without enqueueing it. If enqueueing fails after cleanup,
+the labels have already been cleared; retry the command using the same error ID.
+This resets Jira workflow labels and the retry budget; the saved task metadata
+is retained.
+
+Successful workflows automatically clear matching failures from the newest
+1,000 entries in `error_list`, matching the issue, workflow queue, and target
+branch. Consolidated rebase and rebuild workflows scan once for the whole group.
+Older entries remain available for inspection and manual requeueing. Dry runs
+do not read or modify the production error list.
+
+Maintainer acknowledgement and result comments remain opt-in with
+`USER_TRIGGERED=true`. To preview without changing Jira or Valkey, run
+`python3 scripts/requeue_error.py 42 --dry-run`. The script needs `oc` access
+to both the Valkey and MCP gateway deployments, but no local Jira credentials.
+
 ## Agent container startup
 
 The c9s and c10s agent images use catatonit as PID 1 to forward signals and reap
@@ -249,12 +271,15 @@ When `BUILD_BACKEND=konflux`, the MCP gateway authenticates to Konflux as the
 is bound and **expires every 24h**, so it is rotated automatically by a CronJob
 (`konflux-token-rotation`) that lives in the Konflux tenant tree
 (`konflux-release-data`, synced by Argo) -- NOT in this repo. See that tenant's
-`cronjobs/README.md` for the mint side.
+`cronjobs/konflux-token-rotation-cronjob.yaml` for the mint side.
 
 The CronJob mints a fresh token on `kflux-rhel-p01` and **pushes it into this
 project** as the Opaque Secret `konflux-bot-0-token` (key `token`). The gateway
 mounts that Secret at `KONFLUX_TOKEN_FILE` and reads it fresh per build, so
 rotation needs no gateway restart.
+The `ymir-tenant` rotation pod must reach the gateway cluster API on port
+6443. Confirm this network path when moving the gateway to another cluster;
+updating the push kubeconfig alone does not establish connectivity.
 
 > `konflux-bot-0-token` is created and kept up to date by the CronJob -- do not
 > create it by hand. `deploy-oc.sh` is apply-only (no `delete`, no `--prune`),
@@ -320,7 +345,7 @@ where the CronJob mounts it:
 
 ```bash
 # Still logged in to the gateway cluster:
-SERVER=https://api.gpc.ocp-hub.prod.psi.redhat.com:6443
+SERVER=https://api.prod-scale-spoke1-dc-rdu3.prod-scale-mgmthub1-dc-rdu3.itup.redhat.com:6443
 NS=jotnar-ymir--jotnar-ymir
 TOKEN=$(oc -n "$NS" get secret konflux-token-writer-token -o jsonpath='{.data.token}' | base64 -d)
 CA=$(oc -n "$NS" get secret konflux-token-writer-token -o jsonpath='{.data.ca\.crt}')  # already base64
@@ -357,13 +382,12 @@ oc -n ymir-tenant logs job/rotate-test     # expect "Rotation complete."
 oc -n jotnar-ymir--jotnar-ymir get secret konflux-bot-0-token
 ```
 
-### Gateway wiring (pending)
+### Gateway wiring
 
-To actually use the rotated token the gateway Deployment must mount
-`konflux-bot-0-token` and set `BUILD_BACKEND=konflux` +
-`KONFLUX_TOKEN_FILE=/home/mcp/konflux-token` (plus `KONFLUX_API_URL`,
-`KUBEARCHIVE_API_URL`, `KONFLUX_PIPELINE_URL`). Until that lands the gateway
-stays on the Copr backend and the Secret is simply kept fresh.
+`deployment-mcp-gateway.yml` mounts `konflux-bot-0-token` as a directory and
+sets `KONFLUX_TOKEN_FILE=/home/mcp/konflux/token`, together with
+`KONFLUX_API_URL`, `KUBEARCHIVE_API_URL`, and `KONFLUX_PIPELINE_URL`. The
+gateway stays on Copr until `BUILD_BACKEND=konflux` is selected separately.
 
 ## API Authentication (OIDC)
 

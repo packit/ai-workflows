@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from ymir.common.utils import get_absolute_path
 from ymir.common.validators import NonEmptyString
 from ymir.tools.base import CloneableTool as Tool
+from ymir.tools.base import file_lock
 
 
 class CreateToolInput(BaseModel):
@@ -39,7 +40,8 @@ class CreateTool(Tool[CreateToolInput, ToolRunOptions, StringToolOutput]):
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:
-            await asyncio.to_thread(file_path.write_text, tool_input.content)
+            async with file_lock(file_path):
+                await asyncio.to_thread(file_path.write_text, tool_input.content)
         except Exception as e:
             raise ToolError(f"Failed to create file: {e}") from e
         return StringToolOutput(result=f"Successfully created {file_path} with the specified text")
@@ -88,7 +90,8 @@ class ViewTool(Tool[ViewToolInput, ToolRunOptions, StringToolOutput]):
         path = get_absolute_path(tool_input.path, self)
         try:
             if path.is_file():
-                content = await asyncio.to_thread(path.read_text)
+                async with file_lock(path):
+                    content = await asyncio.to_thread(path.read_text)
                 lines = content.splitlines(keepends=True)
                 start = tool_input.offset
                 end = None
@@ -126,9 +129,10 @@ class InsertTool(Tool[InsertToolInput, ToolRunOptions, StringToolOutput]):
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:
-            lines = (await asyncio.to_thread(file_path.read_text)).splitlines(keepends=True)
-            lines.insert(tool_input.line, tool_input.new_string + "\n")
-            await asyncio.to_thread(file_path.write_text, "".join(lines))
+            async with file_lock(file_path):
+                lines = (await asyncio.to_thread(file_path.read_text)).splitlines(keepends=True)
+                lines.insert(tool_input.line, tool_input.new_string + "\n")
+                await asyncio.to_thread(file_path.write_text, "".join(lines))
         except Exception as e:
             raise ToolError(f"Failed to insert text: {e}") from e
         return StringToolOutput(result=f"Successfully inserted the specified text into {file_path}")
@@ -164,17 +168,18 @@ class InsertAfterSubstringTool(Tool[InsertAfterSubstringToolInput, ToolRunOption
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:
-            content = await asyncio.to_thread(file_path.read_text)
-            if tool_input.insert_after_substring not in content:
-                raise ToolError("No insertion was done because the specified substring wasn't present")
-            await asyncio.to_thread(
-                file_path.write_text,
-                content.replace(
-                    tool_input.insert_after_substring,
-                    tool_input.insert_after_substring + "\n" + tool_input.new_string,
-                    1,  # Replace only the first occurrence, 'count' kw introduced in Python 3.13
-                ),
-            )
+            async with file_lock(file_path):
+                content = await asyncio.to_thread(file_path.read_text)
+                if tool_input.insert_after_substring not in content:
+                    raise ToolError("No insertion was done because the specified substring wasn't present")
+                await asyncio.to_thread(
+                    file_path.write_text,
+                    content.replace(
+                        tool_input.insert_after_substring,
+                        tool_input.insert_after_substring + "\n" + tool_input.new_string,
+                        1,  # Replace only the first occurrence, 'count' kw introduced in Python 3.13
+                    ),
+                )
         except ToolError:
             raise
         except Exception as e:
@@ -214,20 +219,21 @@ class StrReplaceTool(Tool[StrReplaceToolInput, ToolRunOptions, StringToolOutput]
     ) -> StringToolOutput:
         file_path = get_absolute_path(tool_input.file, self)
         try:
-            content = await asyncio.to_thread(file_path.read_text)
-            if (count := content.count(tool_input.old_string)) == 0:
-                raise ToolError(
-                    "No replacement was done because the specified text to replace wasn't present"
+            async with file_lock(file_path):
+                content = await asyncio.to_thread(file_path.read_text)
+                if (count := content.count(tool_input.old_string)) == 0:
+                    raise ToolError(
+                        "No replacement was done because the specified text to replace wasn't present"
+                    )
+                if count > 1:
+                    raise ToolError(
+                        "No replacement was done because the specified text is not unique."
+                        "Please provide more context!"
+                    )
+                await asyncio.to_thread(
+                    file_path.write_text,
+                    content.replace(tool_input.old_string, tool_input.new_string),
                 )
-            if count > 1:
-                raise ToolError(
-                    "No replacement was done because the specified text is not unique."
-                    "Please provide more context!"
-                )
-            await asyncio.to_thread(
-                file_path.write_text,
-                content.replace(tool_input.old_string, tool_input.new_string),
-            )
         except ToolError:
             raise
         except Exception as e:
@@ -264,7 +270,8 @@ class SearchTextTool(Tool[SearchTextToolInput, ToolRunOptions, StringToolOutput]
         file_path = get_absolute_path(tool_input.file, self)
         try:
             pattern = re.compile(tool_input.pattern)
-            content = await asyncio.to_thread(file_path.read_text)
+            async with file_lock(file_path):
+                content = await asyncio.to_thread(file_path.read_text)
             result = [
                 f"{num + 1}:{line}"
                 for num, line in enumerate(content.splitlines(keepends=True))

@@ -1,4 +1,6 @@
 import asyncio
+import functools
+import json
 import logging
 import os
 import shutil
@@ -16,7 +18,7 @@ from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 import ymir.agents.tasks as tasks
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_applicability_agent
@@ -44,12 +46,15 @@ from ymir.agents.utils import (
 from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels, RedisQueues
+from ymir.common.cve import extract_cve_ids
+from ymir.common.error_list import clear_resolved_errors
 from ymir.common.issue_lock import issue_lock
 from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     POSTPONED_RESOLUTIONS,
     AssessedApplicabilityResult,
+    BackportData,
     ClarificationNeededData,
     ConfidenceAssessment,
     CVEEligibilityResult,
@@ -59,6 +64,8 @@ from ymir.common.models import (
     NotAffectedData,
     OpenEndedAnalysisData,
     PostponedData,
+    RebaseData,
+    RebuildData,
     ReproducerInputSchema,
     Resolution,
     Task,
@@ -192,6 +199,7 @@ def _terminal_ymir_labels(labels: list[str]) -> list[str]:
         JiraLabels.REBASE_SIBLING.value,
         JiraLabels.WAITING_FOR_SIBLINGS.value,
         JiraLabels.TODO.value,
+        JiraLabels.MR_CLOSED.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
@@ -680,6 +688,107 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
     )
 
 
+_RESOLUTION_DATA_MODELS: dict[Resolution, type[BaseModel]] = {
+    Resolution.REBASE: RebaseData,
+    Resolution.BACKPORT: BackportData,
+    Resolution.REBUILD: RebuildData,
+    Resolution.CLARIFICATION_NEEDED: ClarificationNeededData,
+    Resolution.OPEN_ENDED_ANALYSIS: OpenEndedAnalysisData,
+    Resolution.NOT_AFFECTED: NotAffectedData,
+    Resolution.ERROR: ErrorData,
+    Resolution.POSTPONED_DEPENDENCY: PostponedData,
+    Resolution.POSTPONED_NO_PATCH: PostponedData,
+    Resolution.POSTPONED_PR_PENDING: PostponedData,
+}
+
+
+def _format_validation_error(error: ValidationError) -> str:
+    return "\n".join(
+        f"- data.{'.'.join(str(part) for part in err['loc'])}: {err['msg']}" for err in error.errors()
+    )
+
+
+def validate_triage_output(
+    final_answer: str,
+    *,
+    jira_issue: str,
+    fix_version: str | None = None,
+    jira_summary: str | None = None,
+) -> str:
+    """Validate the triage agent's final answer and fill in fields known to the workflow.
+
+    ``final_answer`` is the JSON text the agent passed to the final_answer tool.
+    Missing ``jira_issue``, ``fix_version`` and ``cve_id`` are taken from the Jira
+    issue being triaged, and keys that the chosen resolution does not define are
+    dropped. Returns the normalized JSON text. Any remaining problem raises
+    ``ValueError`` with a message meant for the model, so it can correct the answer
+    and call final_answer again.
+    """
+    try:
+        payload = json.loads(final_answer)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"The answer is not valid JSON: {e}") from e
+    if not isinstance(payload, dict):
+        raise ValueError("The answer must be a JSON object with `resolution` and `data` keys.")
+
+    try:
+        resolution = Resolution(payload.get("resolution"))
+    except ValueError:
+        allowed = ", ".join(r.value for r in _RESOLUTION_DATA_MODELS)
+        raise ValueError(
+            f"Unknown resolution {payload.get('resolution')!r}. Use one of: {allowed}."
+        ) from None
+    if resolution == Resolution.POSTPONED_Y_STREAM:
+        raise ValueError(
+            "postponed_y_stream is set by the eligibility check, not by triage. If you believe "
+            "this issue is waiting on a Z-stream clone, use open-ended-analysis and explain why."
+        )
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("`data` must be a JSON object, not a string or any other type.")
+
+    data_model = _RESOLUTION_DATA_MODELS[resolution]
+    known_values = {
+        "jira_issue": jira_issue,
+        "fix_version": fix_version,
+        "cve_id": extract_cve_ids(jira_summary),
+    }
+    for key, value in known_values.items():
+        if value and key in data_model.model_fields and not data.get(key):
+            data[key] = value
+
+    try:
+        validated_data = data_model.model_validate(data)
+    except ValidationError as e:
+        raise ValueError(
+            f"`data` does not match the schema for the {resolution.value!r} resolution:\n"
+            f"{_format_validation_error(e)}"
+        ) from e
+
+    # PRPendingSweep needs a PR/MR URL to poll, otherwise the issue would never be re-triaged.
+    if resolution == Resolution.POSTPONED_PR_PENDING and not data.get("blocker_references"):
+        raise ValueError(
+            "postponed_pr_pending requires the upstream PR/MR URL(s) in `data.blocker_references`."
+        )
+
+    # `data` is an untagged union, so stray keys (e.g. `version` in a rebuild answer)
+    # could make the final parse pick another resolution's model. Keep only the
+    # fields of the model chosen by `resolution`.
+    payload["data"] = validated_data.model_dump(mode="json", exclude_unset=True)
+    normalized = json.dumps(payload)
+    try:
+        output = OutputSchema.model_validate_json(normalized)
+    except ValidationError as e:
+        raise ValueError(f"The answer does not match the expected format:\n{e}") from e
+    if not isinstance(output.data, data_model):
+        raise ValueError(
+            f"`data` was parsed as {type(output.data).__name__}, which does not match the "
+            f"{resolution.value!r} resolution."
+        )
+    return normalized
+
+
 async def run_workflow(
     jira_issue,
     dry_run,
@@ -893,6 +1002,12 @@ async def run_workflow(
                     downstream_component=state.downstream_component,
                 ),
                 expected_output=render_template("triage/output_format.j2"),
+                validate_output=functools.partial(
+                    validate_triage_output,
+                    jira_issue=state.jira_issue,
+                    fix_version=fix_version_name,
+                    jira_summary=state.jira_summary,
+                ),
                 **get_agent_execution_config(),
             )
             state.triage_result = OutputSchema.model_validate_json(response.last_message.text)
@@ -2155,6 +2270,11 @@ async def main() -> None:
                             "TRIAGE_ENQUEUE_REPRODUCER disabled, skipping reproducer queue for %s",
                             input.issue,
                         )
+
+                if output.resolution != Resolution.ERROR:
+                    await clear_resolved_errors(
+                        redis, input.issue, RedisQueues.TRIAGE_QUEUE.value, dry_run=dry_run
+                    )
 
         shutdown_event = asyncio.Event()
         install_shutdown_handler(asyncio.get_running_loop(), shutdown_event)

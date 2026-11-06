@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import datetime
 from textwrap import dedent
@@ -10,6 +11,7 @@ from specfile import specfile
 from specfile.utils import EVR
 
 from ymir.common.utils import NoBuildFoundError
+from ymir.tools.base import file_lock
 from ymir.tools.unprivileged import specfile as specfile_tools
 from ymir.tools.unprivileged.specfile import (
     AddChangelogEntryTool,
@@ -19,6 +21,7 @@ from ymir.tools.unprivileged.specfile import (
     UpdateReleaseTool,
     UpdateReleaseToolInput,
 )
+from ymir.tools.unprivileged.text import StrReplaceTool, StrReplaceToolInput
 
 
 @pytest.fixture
@@ -303,6 +306,41 @@ async def test_add_changelog_entry(minimal_spec):
         "  second line",
         "",
     ]
+
+
+@pytest.mark.asyncio
+async def test_add_changelog_entry_parallel_with_text_edit(minimal_spec):
+    # A text edit running in parallel must not overwrite the changelog entry.
+    flexmock(specfile).should_receive("guess_packager").and_return("RHEL Packaging Agent <jotnar@redhat.com>")
+    middleware = GlobalTrajectoryMiddleware(pretty=True)
+    outputs = await asyncio.gather(
+        StrReplaceTool()
+        .run(input=StrReplaceToolInput(file=minimal_spec, old_string="MIT", new_string="GPL"))
+        .middleware(middleware),
+        AddChangelogEntryTool()
+        .run(input=AddChangelogEntryToolInput(spec=minimal_spec, content=["- some change"]))
+        .middleware(middleware),
+    )
+    assert all(output.result.startswith("Successfully") for output in outputs)
+    content = minimal_spec.read_text()
+    assert "License:        GPL" in content
+    assert "- some change" in content
+
+
+@pytest.mark.asyncio
+async def test_get_package_info_waits_for_file_lock(minimal_spec):
+    # Specfile saves on exit, so reading package info rewrites the spec and must
+    # not run while another tool is editing it.
+    async with file_lock(minimal_spec):
+        task = asyncio.ensure_future(
+            GetPackageInfoTool()
+            .run(input=GetPackageInfoToolInput(spec=minimal_spec))
+            .middleware(GlobalTrajectoryMiddleware(pretty=True))
+        )
+        await asyncio.sleep(0.1)
+        assert not task.done()
+    output = await task
+    assert output.to_json_safe().version == "0.1"
 
 
 @pytest.mark.parametrize(

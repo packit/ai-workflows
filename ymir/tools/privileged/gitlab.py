@@ -12,6 +12,7 @@ from urllib.parse import quote, urlparse
 
 import aiohttp
 import gitlab
+import requests
 from beeai_framework.context import RunContext
 from beeai_framework.emitter import Emitter
 from beeai_framework.tools import (
@@ -117,7 +118,11 @@ def _fork_api_project(fork: GitlabProject):
     return fork.service.gitlab_instance.projects.get(f"{fork.namespace}/{fork.repo}")
 
 
-def _wait_for_fork_ready(fork: GitlabProject) -> None:
+def _wait_for_fork_ready(
+    fork: GitlabProject,
+    *,
+    allow_not_found: bool = False,
+) -> None:
     """Block until GitLab finishes provisioning a fork's git repository.
 
     Fork creation is asynchronous: the API returns before the repository
@@ -125,33 +130,51 @@ def _wait_for_fork_ready(fork: GitlabProject) -> None:
     """
     fork_path = f"{fork.namespace}/{fork.repo}"
     deadline = time.monotonic() + _FORK_READY_TIMEOUT_SEC
-    while True:
-        try:
-            repo = _fork_api_project(fork)
-            repo.refresh()
-        except gitlab.GitlabError as exc:
-            raise ToolError(f"Failed to query fork project {fork_path}") from exc
+    transient_status_codes = {408, 409, 425, 429, 500, 502, 503, 504}
+    if allow_not_found:
+        # A newly created fork can briefly return 404 while GitLab provisions it.
+        transient_status_codes.add(404)
 
-        status = repo.attributes.get("import_status", "none")
+    def check_status(repo: Any) -> bool:
+        status = repo.attributes.get("import_status")
         if status in _FORK_READY_IMPORT_STATUSES:
             logger.info("Fork %s is ready (import_status=%s)", fork_path, status)
-            return
+            return True
         if status == "failed":
             import_error = repo.attributes.get("import_error") or "unknown error"
             raise ToolError(f"Fork {fork_path} failed to import: {import_error}")
+        return False
+
+    while True:
         if time.monotonic() >= deadline:
-            raise ToolError(
-                f"Fork {fork_path} did not become ready within {_FORK_READY_TIMEOUT_SEC}s "
-                f"(import_status={status})"
+            raise ToolError(f"Fork {fork_path} did not become ready within {_FORK_READY_TIMEOUT_SEC}s")
+        try:
+            repo = _fork_api_project(fork)
+            if check_status(repo):
+                return
+        except (gitlab.GitlabError, requests.RequestException) as exc:
+            if isinstance(exc, gitlab.GitlabError):
+                status_code = exc.response_code
+            else:
+                status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            is_transient = status_code is None or status_code in transient_status_codes
+            if not is_transient:
+                raise ToolError(f"Failed to query fork project {fork_path}") from exc
+            logger.warning(
+                "Transient GitLab error while checking fork %s (status=%s); retrying",
+                fork_path,
+                status_code,
             )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ToolError(f"Fork {fork_path} did not become ready within {_FORK_READY_TIMEOUT_SEC}s")
 
         logger.info(
-            "Fork %s not ready yet (import_status=%s), waiting %.0fs",
+            "Fork %s not ready yet, waiting %.0fs",
             fork_path,
-            status,
-            _FORK_READY_POLL_INTERVAL_SEC,
+            min(_FORK_READY_POLL_INTERVAL_SEC, remaining),
         )
-        time.sleep(_FORK_READY_POLL_INTERVAL_SEC)
+        time.sleep(min(_FORK_READY_POLL_INTERVAL_SEC, remaining))
 
 
 _GITLAB_COMMIT_RE = re.compile(r"^/(.+?)/-/commit/([0-9a-f]+)\.(?:patch|diff)$", re.IGNORECASE)
@@ -427,6 +450,9 @@ class ForkRepositoryTool(Tool[ForkRepositoryToolInput, ToolRunOptions, StringToo
                 return None
 
             if fork := await asyncio.to_thread(get_fork):
+                # An existing GitLab project may still be an incomplete or failed
+                # fork. Validate repository provisioning before returning its URL.
+                await asyncio.to_thread(_wait_for_fork_ready, fork)
                 return StringToolOutput(result=fork.get_git_urls()["git"])
 
             def create_fork():
@@ -454,7 +480,7 @@ class ForkRepositoryTool(Tool[ForkRepositoryToolInput, ToolRunOptions, StringToo
             fork = await asyncio.to_thread(create_fork)
             if not fork:
                 raise ToolError("Failed to fork the specified repository")
-            await asyncio.to_thread(_wait_for_fork_ready, fork)
+            await asyncio.to_thread(_wait_for_fork_ready, fork, allow_not_found=True)
             return StringToolOutput(result=fork.get_git_urls()["git"])
 
 

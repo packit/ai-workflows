@@ -1,4 +1,7 @@
+import json
+import re
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 from flexmock import flexmock
@@ -22,6 +25,7 @@ from ymir.agents.triage_agent import (
     main,
     render_prompt,
     run_workflow,
+    validate_triage_output,
 )
 from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels
 from ymir.common.models import (
@@ -83,6 +87,10 @@ def test_terminal_labels_still_block_duplicate_triage():
         JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
     ]
     assert _terminal_ymir_labels(labels) == [JiraLabels.TRIAGED_REBASE.value]
+
+
+def test_closed_mr_label_is_not_terminal():
+    assert _terminal_ymir_labels([JiraLabels.MR_CLOSED.value]) == []
 
 
 @pytest.mark.parametrize(
@@ -1307,3 +1315,219 @@ def test_jira_comment_template_output_unchanged():
     """Rebuilding JIRA_COMMENT_TEMPLATE from the shared marker keeps output identical."""
     rendered = JIRA_COMMENT_TEMPLATE.substitute(AGENT_TYPE="Triage", JIRA_COMMENT="hello")
     assert rendered.startswith("Output from Ymir Triage Agent: \n\nhello\n\n")
+
+
+_CVE_SUMMARY = "CVE-2026-115905 keylime-agent-rust: zip: parser differential [rhel-10.4]"
+
+
+def _backport_answer(**data_overrides) -> dict:
+    """Backport answer shaped like the one in trace aceb8197 (RHEL-300091)."""
+    data = {
+        "package": "keylime-agent-rust",
+        "patch_urls": [
+            "https://github.com/zip-rs/zip2/commit/8068ab480ccf8daa7411424e365fcdbe6d09443e.patch"
+        ],
+        "justification": "Adds LFH/CDFH header consistency validation.",
+        "triage_summary": "Vendored zip 0.6.6 needs a patch.",
+    }
+    data.update(data_overrides)
+    return {"resolution": "backport", "data": data}
+
+
+def test_validate_triage_output_fills_fields_known_to_workflow():
+    normalized = validate_triage_output(
+        json.dumps(_backport_answer()),
+        jira_issue="RHEL-300091",
+        fix_version="rhel-10.4",
+        jira_summary=_CVE_SUMMARY,
+    )
+
+    output = TriageOutputSchema.model_validate_json(normalized)
+    assert output.resolution == Resolution.BACKPORT
+    assert isinstance(output.data, BackportData)
+    assert output.data.jira_issue == "RHEL-300091"
+    assert output.data.fix_version == "rhel-10.4"
+    assert output.data.cve_id == "CVE-2026-115905"
+
+
+def test_validate_triage_output_keeps_values_from_model():
+    answer = _backport_answer(jira_issue="RHEL-1", fix_version="rhel-10.3", cve_id="CVE-2026-1 CVE-2026-2")
+
+    normalized = validate_triage_output(
+        json.dumps(answer), jira_issue="RHEL-300091", fix_version="rhel-10.4", jira_summary=_CVE_SUMMARY
+    )
+
+    data = json.loads(normalized)["data"]
+    assert data["jira_issue"] == "RHEL-1"
+    assert data["fix_version"] == "rhel-10.3"
+    assert data["cve_id"] == "CVE-2026-1 CVE-2026-2"
+
+
+def test_validate_triage_output_only_fills_fields_the_resolution_has():
+    answer = {"resolution": "error", "data": {"details": "Package not found."}}
+
+    normalized = validate_triage_output(
+        json.dumps(answer), jira_issue="RHEL-1", fix_version="rhel-10.4", jira_summary=_CVE_SUMMARY
+    )
+
+    assert json.loads(normalized)["data"] == {"details": "Package not found.", "jira_issue": "RHEL-1"}
+
+
+def test_validate_triage_output_no_cve_in_summary():
+    normalized = validate_triage_output(
+        json.dumps(_backport_answer()), jira_issue="RHEL-1", jira_summary="Fix crash in foo"
+    )
+
+    data = json.loads(normalized)["data"]
+    assert "cve_id" not in data
+    assert "fix_version" not in data
+
+
+def test_validate_triage_output_reports_missing_field_for_chosen_resolution():
+    answer = _backport_answer()
+    del answer["data"]["patch_urls"]
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_triage_output(json.dumps(answer), jira_issue="RHEL-1")
+
+    message = str(excinfo.value)
+    assert "'backport'" in message
+    assert "data.patch_urls: Field required" in message
+    # Only the chosen resolution's schema is reported, not every union member.
+    assert "RebaseData" not in message
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("not json", "not valid JSON"),
+        ("[1, 2]", "must be a JSON object"),
+        ('{"resolution": "fix-it", "data": {}}', "Unknown resolution 'fix-it'"),
+        ('{"resolution": "backport", "data": "{\\"package\\": \\"x\\"}"}', "`data` must be a JSON object"),
+    ],
+)
+def test_validate_triage_output_rejects_malformed_answers(text, expected):
+    with pytest.raises(ValueError, match=expected):
+        validate_triage_output(text, jira_issue="RHEL-1")
+
+
+def test_validate_triage_output_keeps_resolution_model_despite_extra_keys():
+    """A stray `version` must not turn a rebuild answer into RebaseData."""
+    answer = {
+        "resolution": "rebuild",
+        "data": {"package": "foo", "version": "1.0", "fix_version": "rhel-9.8"},
+    }
+
+    normalized = validate_triage_output(json.dumps(answer), jira_issue="RHEL-1")
+
+    output = TriageOutputSchema.model_validate_json(normalized)
+    assert isinstance(output.data, RebuildData)
+    assert output.data.jira_issue == "RHEL-1"
+    assert "version" not in json.loads(normalized)["data"]
+
+
+def _output_format_examples() -> list[dict]:
+    template = Path(t_agent.__file__).parent / "prompts" / "triage" / "output_format.j2"
+    return [json.loads(block) for block in re.findall(r"```json\n(.*?)```", template.read_text(), re.DOTALL)]
+
+
+@pytest.mark.parametrize("example", _output_format_examples(), ids=lambda example: example["resolution"])
+def test_validate_triage_output_accepts_prompt_examples(example):
+    expected_model = t_agent._RESOLUTION_DATA_MODELS[Resolution(example["resolution"])]
+
+    normalized = validate_triage_output(json.dumps(example), jira_issue=example["data"]["jira_issue"])
+
+    assert type(TriageOutputSchema.model_validate_json(normalized).data) is expected_model
+
+
+def test_validate_triage_output_rejects_postponed_y_stream():
+    answer = {
+        "resolution": "postponed_y_stream",
+        "data": {"summary": "Waiting for Z-stream", "pending_issues": ["RHEL-2"]},
+    }
+
+    with pytest.raises(ValueError, match=r"set by the eligibility check.*use open-ended-analysis"):
+        validate_triage_output(json.dumps(answer), jira_issue="RHEL-1")
+
+
+def test_validate_triage_output_pr_pending_requires_blocker_references():
+    data = {"summary": "Fix pending in upstream PR", "pending_issues": ["RHEL-1"]}
+    answer = {"resolution": "postponed_pr_pending", "data": data}
+
+    with pytest.raises(ValueError, match=r"data\.blocker_references"):
+        validate_triage_output(json.dumps(answer), jira_issue="RHEL-1")
+
+    data["blocker_references"] = ["https://github.com/org/repo/pull/42"]
+    normalized = validate_triage_output(json.dumps(answer), jira_issue="RHEL-1")
+    assert (
+        TriageOutputSchema.model_validate_json(normalized).data.blocker_references
+        == data["blocker_references"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_validates_final_answer_with_issue_context(_mock_env_vars):
+    """run_workflow passes a validator bound to the triaged issue to the agent, so an
+    answer missing jira_issue (trace aceb8197) is completed instead of crashing."""
+    eligibility_result = CVEEligibilityResult(
+        is_cve=True,
+        eligibility=TriageEligibility.IMMEDIATELY,
+        reason="Eligible for immediate triage",
+    )
+    jira_fields = {"summary": _CVE_SUMMARY, "fixVersions": [{"name": "rhel-10.4"}]}
+
+    async def _mock_agent_run(*_args, **kwargs):
+        # Stand in for the runner: the validator's return value becomes the answer.
+        text = kwargs["validate_output"](json.dumps(_backport_answer()))
+        return flexmock(last_message=flexmock(text=text))
+
+    agent = flexmock()
+    agent.should_receive("run").replace_with(_mock_agent_run)
+
+    @asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    async def _mock_run_tool(name, **_kwargs):
+        if name == "get_jira_details":
+            return {"fields": jira_fields}
+        return eligibility_result.model_dump()
+
+    async def _mock_prompt(*_args, **_kwargs):
+        return "prompt"
+
+    async def _mock_rhel_config(*_args, **_kwargs):
+        return {}
+
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(t_agent).should_receive("render_template").and_return("output format")
+    flexmock(t_agent).should_receive("get_agent_execution_config").and_return({})
+    flexmock(t_agent).should_receive("render_prompt").replace_with(_mock_prompt)
+    flexmock(t_agent).should_receive("load_rhel_config").replace_with(_mock_rhel_config)
+
+    triage_data = []
+
+    async def _stop_at_target_branch(**kwargs):
+        # The triage step is done once the workflow routes here; stop to keep the test focused.
+        triage_data.append(kwargs["triage_data"])
+        raise RuntimeError("stop")
+
+    flexmock(t_agent).should_receive("determine_target_branch").replace_with(_stop_at_target_branch)
+    flexmock(t_agent).should_receive("normalize_fix_version").replace_with(lambda version, _config: version)
+
+    with pytest.raises(Exception) as excinfo:
+        await run_workflow("RHEL-300091", dry_run=True, triage_agent_factory=lambda *_a, **_k: agent)
+
+    chain = []
+    err = excinfo.value
+    while err is not None:
+        chain.append(err)
+        err = err.__cause__
+    assert any(isinstance(e, RuntimeError) and str(e) == "stop" for e in chain), chain
+    assert len(triage_data) == 1
+    assert isinstance(triage_data[0], BackportData)
+    assert triage_data[0].jira_issue == "RHEL-300091"
+    assert triage_data[0].fix_version == "rhel-10.4"
+    assert triage_data[0].cve_id == "CVE-2026-115905"

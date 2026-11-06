@@ -12,6 +12,6 @@ spec:
   - ReadWriteMany
   resources:
     requests:
-      storage: 150Gi
+      storage: 200Gi
   storageClassName: rh-restricted-nfs
   volumeMode: Filesystem

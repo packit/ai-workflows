@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Self
 
 from beeai_framework.agents import AgentError, AgentExecutionConfig
@@ -34,7 +34,7 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.memory.utils import TEMP_MESSAGE_META_KEY, delete_messages_by_meta_key
 from beeai_framework.middleware.stream_tool_call import StreamToolCallMiddleware
-from beeai_framework.tools import AnyTool, StringToolOutput, Tool, ToolRunOptions
+from beeai_framework.tools import AnyTool, StringToolOutput, Tool, ToolError, ToolRunOptions
 from beeai_framework.utils.counter import RetryCounter
 from beeai_framework.utils.lists import ensure_strictly_increasing, find_last_index
 from beeai_framework.utils.strings import find_first_pair, generate_random_string, to_json, to_safe_word
@@ -73,10 +73,16 @@ class FinalAnswerTool(Tool[BaseModel, ToolRunOptions, StringToolOutput]):
     name = "final_answer"
     description = "Sends the final answer to the user"
 
-    def __init__(self, expected_output: str | type[BaseModel] | None, state: ReasoningAgentRunState) -> None:
+    def __init__(
+        self,
+        expected_output: str | type[BaseModel] | None,
+        state: ReasoningAgentRunState,
+        validate_output: Callable[[str], str] | None = None,
+    ) -> None:
         super().__init__()
         self._expected_output = expected_output
         self._state = state
+        self._validate_output = validate_output
         self.instructions = expected_output if isinstance(expected_output, str) else None
         self.custom_schema = isinstance(expected_output, type)
 
@@ -102,16 +108,39 @@ class FinalAnswerTool(Tool[BaseModel, ToolRunOptions, StringToolOutput]):
     async def _run(
         self, input: BaseModel, options: ToolRunOptions | None, context: RunContext
     ) -> StringToolOutput:
+        answer = (
+            input.model_dump_json() if self.input_schema is self._expected_output else input.response  # type: ignore
+        )
+
+        # Reject the answer while the agent loop is still running so the model
+        # gets the error back and can call final_answer again with a fix.
+        if self._validate_output is not None:
+            try:
+                answer = self._validate_output(answer)
+            except Exception as e:
+                raise ToolError(
+                    f"The final answer was rejected: {e}\n"
+                    f"Fix the listed problems and call '{self.name}' again with the complete answer.",
+                    cause=e,
+                ) from e
+            # Keep the structured result in sync with the normalized answer.
+            input = (
+                self.input_schema.model_validate_json(answer)
+                if self.input_schema is self._expected_output
+                else input.model_copy(update={"response": answer})
+            )
+
         self._state.result = input
-        if self.input_schema is self._expected_output:
-            self._state.answer = AssistantMessage(input.model_dump_json())
-        else:
-            self._state.answer = AssistantMessage(input.response)  # type: ignore
+        self._state.answer = AssistantMessage(answer)
 
         return StringToolOutput("Message has been sent")
 
     async def clone(self) -> Self:
-        tool = self.__class__(expected_output=self._expected_output, state=self._state.model_copy())
+        tool = self.__class__(
+            expected_output=self._expected_output,
+            state=self._state.model_copy(),
+            validate_output=self._validate_output,
+        )
         tool.name = self.name
         tool.description = self.description
         tool._cache = await self.cache.clone()
@@ -135,6 +164,7 @@ class ReasoningAgentRunner:
         unconstrained: bool = False,
         enable_context_management: bool = False,
         context_protected_tool_names: Sequence[str] = (),
+        validate_output: Callable[[str], str] | None = None,
     ) -> None:
         self._ctx = run_context
         self._llm = llm
@@ -143,7 +173,10 @@ class ReasoningAgentRunner:
         self._state = ReasoningAgentRunState(
             answer=None, result=None, memory=UnconstrainedMemory(), steps=[], iteration=0
         )
-        self._final_answer = FinalAnswerTool(expected_output, state=self._state)
+        self._validate_output = validate_output
+        self._final_answer = FinalAnswerTool(
+            expected_output, state=self._state, validate_output=validate_output
+        )
         self._tools = tools
         self._context_protected_tool_names = tuple(context_protected_tool_names)
         self._all_tools: list[AnyTool] = [*tools]
@@ -634,7 +667,7 @@ class ReasoningAgentRunner:
                 await stream.add(ChatModelOutput(output=[final_answer_tool_call]))
                 response.output_structured = None
                 response.output = [final_answer_tool_call]
-            elif not self._force_final_answer_as_tool:
+            elif not self._force_final_answer_as_tool and self._validate_output is None:
                 self._state.answer = AssistantMessage(text or "")
                 self._state.result = text
                 await self._state.memory.add_many(response.output)

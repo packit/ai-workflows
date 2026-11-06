@@ -20,14 +20,11 @@ from pathlib import Path
 
 REPO_URL = "https://raw.githubusercontent.com/packit/ai-workflows/main/agents_as_skills"
 SKILLS = [
-    "backport",
-    "rebase",
-    "triage",
-    "rebuild",
     "preliminary-testing",
     "issue-verification",
     "errata-workflow",
     "mr-testing-analyst",
+    "reproducer",
 ]
 
 VENV_PATH = Path.home() / ".local" / "share" / "ymir-venv"
@@ -311,7 +308,7 @@ def main():
         print("  1. Run 'kinit <your-kerberos-id>@IPA.REDHAT.COM'")
     print(f"  2. Restart your {client} client")
     print("  3. Verify MCP servers are connected (in Cursor: check MCP panel)")
-    print("  4. Try: 'Use the triage skill with jira_issue=RHEL-12345'")
+    print("  4. Try: 'Use the preliminary-testing skill with jira_issue=RHEL-12345'")
 
 
 if __name__ == "__main__":

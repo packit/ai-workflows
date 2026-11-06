@@ -30,6 +30,7 @@ from ymir.common.utils import (
 )
 from ymir.common.version_utils import get_maintenance_rhel_branch
 from ymir.tools.base import CloneableTool as Tool
+from ymir.tools.base import file_lock
 
 logger = logging.getLogger(__name__)
 
@@ -119,21 +120,22 @@ class GetPackageInfoTool(Tool[GetPackageInfoToolInput, ToolRunOptions, GetPackag
         spec_path = get_absolute_path(tool_input.spec, self)
 
         try:
-            with Specfile(spec_path) as spec:
-                version = spec.version
-                valid_patches = [p for p in get_all_patches(spec) if p.valid and p.location]
-                patch_files = [p.location for p in valid_patches]
-                number_to_filename = {p.number: p.location for p in valid_patches}
+            async with file_lock(spec_path):
+                with Specfile(spec_path) as spec:
+                    version = spec.version
+                    valid_patches = [p for p in get_all_patches(spec) if p.valid and p.location]
+                    patch_files = [p.location for p in valid_patches]
+                    number_to_filename = {p.number: p.location for p in valid_patches}
 
-                strip_levels = _extract_strip_levels(spec, number_to_filename)
+                    strip_levels = _extract_strip_levels(spec, number_to_filename)
 
-                return GetPackageInfoToolOutput(
-                    result=PackageInfo(
-                        version=version,
-                        patch_files=patch_files,
-                        patch_strip_levels=strip_levels,
+                    return GetPackageInfoToolOutput(
+                        result=PackageInfo(
+                            version=version,
+                            patch_files=patch_files,
+                            patch_strip_levels=strip_levels,
+                        )
                     )
-                )
 
         except Exception as e:
             raise ToolError(f"Failed to extract package info from {spec_path}: {e}") from e
@@ -171,14 +173,15 @@ class AddChangelogEntryTool(Tool[AddChangelogEntryToolInput, ToolRunOptions, Str
     ) -> StringToolOutput:
         spec_path = get_absolute_path(tool_input.spec, self)
         try:
-            with Specfile(spec_path) as spec:
-                if spec.has_autochangelog:
-                    return StringToolOutput(
-                        result=f"Spec file {spec_path} uses %autochangelog. "
-                        "Changelog is generated automatically, no manual entry needed. "
-                        "Do not modify the changelog file."
-                    )
-                spec.add_changelog_entry(tool_input.content)
+            async with file_lock(spec_path):
+                with Specfile(spec_path) as spec:
+                    if spec.has_autochangelog:
+                        return StringToolOutput(
+                            result=f"Spec file {spec_path} uses %autochangelog. "
+                            "Changelog is generated automatically, no manual entry needed. "
+                            "Do not modify the changelog file."
+                        )
+                    spec.add_changelog_entry(tool_input.content)
         except Exception as e:
             raise ToolError(f"Failed to add changelog entry: {e}") from e
         return StringToolOutput(result=f"Successfully added a new changelog entry to {spec_path}")

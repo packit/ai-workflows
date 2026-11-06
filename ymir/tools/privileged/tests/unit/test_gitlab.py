@@ -25,13 +25,18 @@ from ymir.tools.privileged.gitlab import (
     ForkRepositoryTool,
     GetAuthorizedCommentsFromMergeRequestTool,
     GetFailedPipelineJobsFromMergeRequestTool,
+    GetMergeRequestDiscussionsTool,
+    GetPipelineJobTraceTool,
     GetRemoteBranchHeadTool,
     OpenMergeRequestTool,
     PushToRemoteRepositoryTool,
+    RemoveMergeRequestLabelsTool,
+    ResolveMergeRequestDiscussionTool,
     ResolveQeReviewersTool,
     ResolveReviewersTool,
     RetryPipelineJobTool,
     SetMergeRequestReviewersTool,
+    UpdateMergeRequestCommentTool,
     _get_git_auth_args,
     _remove_existing_clone_path,
     _wait_for_fork_ready,
@@ -837,6 +842,90 @@ async def test_add_merge_request_labels_invalid_url():
     assert "Could not parse merge request URL" in str(exc_info.value.__cause__)
 
 
+@pytest.mark.parametrize(
+    "merge_request_url, expected_project_path",
+    [
+        (
+            "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123",
+            "redhat/rhel/rpms/bash",
+        ),
+        (
+            "https://gitlab.com/packit-service/hello-world/-/merge_requests/123",
+            "packit-service/hello-world",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_remove_merge_request_labels(merge_request_url, expected_project_path):
+    labels = ["mr_testing_completed"]
+
+    # Mock the raw python-gitlab object backing the ogr merge request.
+    raw_pr_mock = flexmock(labels=["mr_testing_completed", "some-other-label"])
+    raw_pr_mock.should_receive("save").once()
+
+    mr_mock = flexmock(_raw_pr=raw_pr_mock)
+
+    # Mock the project object
+    project_mock = flexmock()
+    project_mock.should_receive("get_pr").and_return(mr_mock)
+
+    # Mock GitlabService.get_project_from_url
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url=f"https://gitlab.com/{expected_project_path}"
+    ).and_return(project_mock)
+
+    result = (
+        await RemoveMergeRequestLabelsTool().run(
+            input={"merge_request_url": merge_request_url, "labels": labels}
+        )
+    ).result
+
+    assert result == f"Successfully removed labels {labels} from merge request {merge_request_url}"
+    assert raw_pr_mock.labels == ["some-other-label"]
+
+
+@pytest.mark.asyncio
+async def test_remove_merge_request_labels_label_not_present():
+    merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
+    labels = ["label-that-is-not-set"]
+
+    # Mock the raw python-gitlab object backing the ogr merge request.
+    raw_pr_mock = flexmock(labels=["some-other-label"])
+    raw_pr_mock.should_receive("save").once()
+
+    mr_mock = flexmock(_raw_pr=raw_pr_mock)
+
+    project_mock = flexmock()
+    project_mock.should_receive("get_pr").and_return(mr_mock)
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url="https://gitlab.com/redhat/rhel/rpms/bash"
+    ).and_return(project_mock)
+
+    result = (
+        await RemoveMergeRequestLabelsTool().run(
+            input={"merge_request_url": merge_request_url, "labels": labels}
+        )
+    ).result
+
+    assert result == f"Successfully removed labels {labels} from merge request {merge_request_url}"
+    # No-op: the label wasn't present, so nothing should have changed.
+    assert raw_pr_mock.labels == ["some-other-label"]
+
+
+@pytest.mark.asyncio
+async def test_remove_merge_request_labels_invalid_url():
+    merge_request_url = "https://github.com/user/repo/pull/123"
+    labels = ["test-label"]
+
+    with pytest.raises(Exception) as exc_info:
+        await RemoveMergeRequestLabelsTool().run(
+            input={"merge_request_url": merge_request_url, "labels": labels}
+        )
+
+    assert "Could not parse merge request URL" in str(exc_info.value.__cause__)
+
+
 @pytest.mark.asyncio
 async def test_add_merge_request_comment():
     merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
@@ -873,6 +962,74 @@ async def test_add_merge_request_comment():
     ).result
 
     assert result == f"Successfully added comment to merge request {merge_request_url}"
+
+
+@pytest.mark.asyncio
+async def test_update_merge_request_comment():
+    merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
+    note_id = 456
+    comment = "Updated comment text"
+
+    note = flexmock(body=None)
+    note.should_receive("save").once()
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],
+    ).and_return(
+        flexmock()
+        .should_receive("get_pr")
+        .and_return(
+            flexmock(
+                id=123,
+                _raw_pr=flexmock(
+                    notes=flexmock().should_receive("get").with_args(note_id).and_return(note).mock(),
+                ),
+            ),
+        )
+        .mock()
+    )
+
+    result = (
+        await UpdateMergeRequestCommentTool().run(
+            input={"merge_request_url": merge_request_url, "note_id": note_id, "comment": comment}
+        )
+    ).result
+
+    assert result == f"Successfully updated comment {note_id} on merge request {merge_request_url}"
+    assert note.body == comment
+
+
+@pytest.mark.asyncio
+async def test_update_merge_request_comment_note_not_found():
+    merge_request_url = "https://gitlab.com/redhat/rhel/rpms/bash/-/merge_requests/123"
+    note_id = 999
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url=merge_request_url.rsplit("/-/merge_requests/", 1)[0],
+    ).and_return(
+        flexmock()
+        .should_receive("get_pr")
+        .and_return(
+            flexmock(
+                id=123,
+                _raw_pr=flexmock(
+                    notes=flexmock()
+                    .should_receive("get")
+                    .with_args(note_id)
+                    .and_raise(gitlab.GitlabGetError("404 Not Found"))
+                    .mock(),
+                ),
+            ),
+        )
+        .mock()
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await UpdateMergeRequestCommentTool().run(
+            input={"merge_request_url": merge_request_url, "note_id": note_id, "comment": "x"}
+        )
+
+    assert f"Note {note_id} not found on merge request {merge_request_url}" in str(exc_info.value.__cause__)
 
 
 @pytest.mark.asyncio
@@ -1729,3 +1886,149 @@ async def test_resolve_qe_reviewers_tool():
     flexmock(_resolver).should_receive("resolve_qe_reviewers").replace_with(_mock_resolve)
     result = await ResolveQeReviewersTool().run(input={"package": "bash", "dist_git_branch": "c10s"})
     assert result.result == [99]
+
+
+@pytest.mark.asyncio
+async def test_get_merge_request_discussions():
+    merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/123"
+
+    discussions = [
+        flexmock(
+            id="d1",
+            attributes={
+                "notes": [
+                    {
+                        "author": {"username": "osci-bot"},
+                        "body": "<!--RESULTS_COMMENT-->...",
+                        "created_at": "2024-01-15T10:00:00Z",
+                        "resolvable": True,
+                        "resolved": False,
+                    }
+                ]
+            },
+        ),
+        flexmock(
+            id="d2",
+            attributes={
+                "notes": [
+                    {
+                        "author": {"username": "osci-bot"},
+                        "body": "Hello, thanks for the MR",
+                        "created_at": "2024-01-15T09:00:00Z",
+                        "resolvable": False,
+                        "resolved": None,
+                    }
+                ]
+            },
+        ),
+    ]
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url="https://gitlab.com/redhat/centos-stream/rpms/bash"
+    ).and_return(
+        flexmock()
+        .should_receive("get_pr")
+        .with_args(123)
+        .and_return(
+            flexmock(
+                _raw_pr=flexmock(
+                    discussions=flexmock()
+                    .should_receive("list")
+                    .with_args(get_all=True)
+                    .and_return(discussions)
+                    .mock()
+                )
+            )
+        )
+        .mock()
+    )
+
+    result = (
+        await GetMergeRequestDiscussionsTool().run(input={"merge_request_url": merge_request_url})
+    ).result
+
+    assert len(result) == 2
+    assert result[0].discussion_id == "d1"
+    assert result[0].resolvable is True
+    assert result[0].resolved is False
+    assert result[0].body == "<!--RESULTS_COMMENT-->..."
+    assert result[1].discussion_id == "d2"
+    assert result[1].resolvable is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_merge_request_discussion():
+    merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/123"
+
+    discussion_mock = flexmock(resolved=False)
+    discussion_mock.should_receive("save").once()
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url="https://gitlab.com/redhat/centos-stream/rpms/bash"
+    ).and_return(
+        flexmock()
+        .should_receive("get_pr")
+        .with_args(123)
+        .and_return(
+            flexmock(
+                _raw_pr=flexmock(
+                    discussions=flexmock()
+                    .should_receive("get")
+                    .with_args("d1")
+                    .and_return(discussion_mock)
+                    .mock()
+                )
+            )
+        )
+        .mock()
+    )
+
+    result = (
+        await ResolveMergeRequestDiscussionTool().run(
+            input={"merge_request_url": merge_request_url, "discussion_id": "d1"}
+        )
+    ).result
+
+    assert discussion_mock.resolved is True
+    assert "d1" in result
+
+
+@pytest.mark.asyncio
+async def test_get_pipeline_job_trace():
+    merge_request_url = "https://gitlab.com/redhat/centos-stream/rpms/bash/-/merge_requests/123"
+
+    flexmock(GitlabService).should_receive("get_project_from_url").with_args(
+        url="https://gitlab.com/redhat/centos-stream/rpms/bash"
+    ).and_return(
+        flexmock()
+        .should_receive("get_pr")
+        .with_args(123)
+        .and_return(
+            flexmock(
+                target_project=flexmock(
+                    gitlab_repo=flexmock(
+                        jobs=flexmock()
+                        .should_receive("get")
+                        .with_args("456")
+                        .and_return(
+                            flexmock()
+                            .should_receive("trace")
+                            .and_return(
+                                b"Testing Farm Result: "
+                                b"https://artifacts.osci.redhat.com/testing-farm/abc-123\n"
+                            )
+                            .mock()
+                        )
+                        .mock()
+                    )
+                )
+            )
+        )
+        .mock()
+    )
+
+    result = (
+        await GetPipelineJobTraceTool().run(input={"merge_request_url": merge_request_url, "job_id": "456"})
+    ).result
+
+    assert "artifacts.osci.redhat.com/testing-farm/abc-123" in result

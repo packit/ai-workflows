@@ -194,127 +194,9 @@ You must decide between one of the following actions. Follow these guidelines to
        - Check upstream release notes and changelogs after the RHEL package version date
 
    2.3. Validate the Fix and URL
-   * First, make sure the URL is an actual patch/commit link, not an issue or bug tracker reference
-     (e.g. reject URLs containing /issues/, /bug/, bugzilla, jira, /tickets/)
-   * Use `get_github_patch` for HTTPS GitHub URLs and `get_patch_from_url` for all other
-     patch/commit URLs you intend to use
-   * Prefer the authenticated GitHub MCP tools over shell commands for every supported
-     GitHub operation: use `get_github_patch` for patches,
-     `get_github_pull_request` for pull-request metadata, and `get_github_compare` for
-     comparisons. This avoids exhausting the shared unauthenticated GitHub rate limit.
-     Never use `curl`, `wget`, or another unauthenticated shell request when one of
-     these tools supports the operation. If an unauthenticated GitHub request is
-     rate-limited or times out, retry it through the corresponding authenticated tool.
-   * Once you have the content, you must validate two things:
-     1. **Is it a patch/diff?** Look for diff indicators like:
-        - `diff --git` headers
-        - `--- a/file +++ b/file` unified diff headers
-        - `@@...@@` hunk headers
-        - `+` and `-` lines showing changes
-     2. **Does it fix the issue?** Examine the actual code changes to verify:
-        - The fix directly addresses the root cause identified in your analysis
-        - The code changes align with the symptoms described in the Jira issue
-        - The modified functions/files match those mentioned in the issue
-        - If the CVE description quotes specific code expressions or
-          variable names involved in the vulnerability, verify that the
-          patch modifies those exact expressions — not just the same
-          file or neighboring functions
-     3. **For CVE issues - Verify CVE ID match**: If the issue is a CVE (contains CVE-YYYY-NNNNN):
-        - Check if the patch content or commit message mentions the EXACT CVE ID
-        - If the CVE ID is NOT mentioned in the patch, verify that:
-          * The vulnerability description in the CVE matches what the patch fixes
-          * The code changes address the specific vulnerability type
-            (buffer overflow, integer overflow, etc.)
-          * The affected functions/files align with the CVE details
-        - **Multiple CVEs in one issue**: When the Jira issue covers multiple CVEs,
-          verify you have the correct patches for ALL of them — not just one.
-          Include ALL CVE IDs in the `cve_id` output field so the downstream
-          backport agent knows the full scope and applies all related patches.
-        - If you cannot confirm the patch matches the CVE, search for alternative patches or
-          request clarification
-   * Only proceed with URLs that contain valid patch content AND address the specific issue
-   * If the content is not a proper patch or doesn't fix the issue, continue searching for other fixes
-   * **Only use merged/accepted fixes**: Patches must come from commits that have been
-     merged into the upstream repository (or Fedora). Do NOT use patches from:
-     - Unmerged pull requests or merge requests
-     - Bug tracker attachments or discussion threads (e.g. SourceForge, Bugzilla attachments)
-     - Mailing list proposals that have not been accepted upstream
-     - Forks or personal branches that are not part of the official repository
-     If you find a relevant but unmerged patch during your investigation, mention it in the
-     clarification-needed note so a human can evaluate it, but do not use it as the basis
-     for a backport decision.
-   * **Unmerged upstream fixes — use postponed_pr_pending**: If during your
-     investigation you find a relevant fix in an UNMERGED GitLab merge request
-     or GitHub pull request that addresses the issue but has not been merged yet:
-     - Validate that the PR/MR is still open (not closed/abandoned)
-     - Use resolution "postponed_pr_pending" instead of "clarification-needed"
-     - Set blocker_references to a JSON array with the full PR/MR URL:
-       - GitLab MR: `["https://gitlab.com/org/repo/-/merge_requests/123"]`
-       - GitHub PR: `["https://github.com/org/repo/pull/123"]`
-     - Set pending_issues to [<this issue key>]
-     - This does NOT apply to other platforms (e.g. Bitbucket, SourceForge)
-     The sweep system will monitor the PR/MR and re-triage once it merges.
-   * **Check for follow-up commits**: After identifying a valid fix, you MUST check
-     whether there are follow-up commits that are **necessary to make the fix
-     correct and complete**. A follow-up commit should be included ONLY when:
-     - It fixes a bug, crash, or regression introduced by the primary fix
-       (i.e. the primary fix does not work correctly without it)
-     - It completes the fix for the same issue/CVE when the primary commit
-       only addressed part of the problem (e.g. a second code path still
-       vulnerable to the same CVE)
-     - Its commit message explicitly states it fixes or corrects the primary
-       commit (e.g. "fix regression from ...", "complete fix for CVE-...")
-     A follow-up commit should **NOT** be included when:
-     - It adds additional hardening, defensive checks, or robustness
-       improvements beyond what is needed to fix the reported issue
-     - It adds or improves tests, comments, documentation, or code style
-       without changing the fix logic
-     - It refactors or improves the area touched by the fix but is not
-       required for the fix to work (nice-to-have improvements)
-     - It addresses a separate issue or vulnerability, even if it touches
-       the same files or functions
-     The key question is: "Does the primary fix fully resolve the reported
-     issue/CVE on its own?" If yes, subsequent commits that improve,
-     harden, or extend the fix are out of scope and must be excluded.
-     Use multiple search strategies — any single strategy can miss commits:
-     1. Ancestry search on affected files:
-        `git log <primary-fix>..HEAD -- <affected-files>`
-     2. Author-based search — find commits by the same author on the
-        same files within ~2 months after the primary fix:
-        `git log --all --author="<author>" --since="<fix-date>" --until="<fix-date+2months>" -- <files>`
-     3. Keyword search — search for the issue/CVE ID or related
-        function names in commit messages:
-        `git log --all --grep="<issue-number-or-CVE-ID>"`
-     If you find follow-up commits, evaluate each one against the criteria
-     above. For those that qualify, validate them the same way (use
-     `get_github_patch` for HTTPS GitHub URLs and `get_patch_from_url` otherwise,
-     then verify they are real patches) and include them
-     in your patch_urls list, ordered chronologically (earliest first).
-   * **Prefer individual commit URLs; collapse to PR/MR when appropriate**:
-     Start by searching for individual fixing commits and use their
-     `.patch` URLs in your `patch_urls` list. This is the default.
-     However, use a single PR/MR `.patch` URL instead when either:
-     - You discover that ALL the fixing commits you collected originate
-       from the same pull request or merge request — in that case,
-       replace the individual commit URLs with the PR/MR `.patch` URL, OR
-     - The maintainer rules for the package explicitly instruct you to
-       look for pull requests or merge requests as fixes.
-     When using a PR/MR URL, construct it as:
-     - GitHub PR: `https://github.com/org/repo/pull/N.patch`
-     - GitLab MR: `https://gitlab.com/org/repo/-/merge_requests/N.patch`
-     Fetch and validate GitHub URLs via `get_github_patch`; use
-     `get_patch_from_url` for all other URLs before using them.
-   * **Use commits from the target branch, not the PR source branch**:
-     When a PR/MR is merged via rebase or squash on GitHub/GitLab, the
-     commit hashes on the target branch (e.g. `main`, `master`) differ
-     from the hashes shown in the PR's "Commits" tab, which belong to
-     the source/fork branch. Always use the commit hash that landed on
-     the default branch, not the one from the PR branch.
-     To find the correct hash on GitHub: look for "merged commit <hash>
-     into <target-branch>" in the PR timeline, or check `git log` on
-     the default branch. The fork-branch commit may still be accessible
-     via its URL, but it is not the canonical merged commit and should
-     not be used for backporting.
+   * Call the `load_skill` tool with `name: "triage-validate-fix"` to load the full
+     validation procedure, then follow it to confirm every patch URL is a real,
+     merged patch that fixes this issue before deciding the outcome.
 
    2.4. Decide the Outcome
    {% if not is_older_zstream %}
@@ -382,58 +264,10 @@ You must decide between one of the following actions. Follow these guidelines to
    linked C libraries). It does NOT cover dependencies shipped as pre-built bundled artifacts
    (e.g. a prebuilt webpack/JS bundle) — those are handled in step 2.4 as backport/not-affected.
 
-   3.1. Confirm no source code changes are needed for the package itself, AND confirm the
-        updated dependency is actually recompiled into the package at build time rather than
-        shipped as a pre-built bundled artifact (see step 2.4). If the vulnerable dependency
-        is a pre-built blob the build merely re-ships (e.g. a prebuilt webpack/JS bundle
-        tarball, vendored minified JS, precompiled binaries), a Release-bump rebuild will NOT
-        pick up the fix — do NOT use "rebuild"; choose "backport" or "not-affected" instead.
-   3.2. Check dependency readiness — search thoroughly:
-   * Look for linked Jira issues in fields.issuelinks representing the dependency update
-   * If no linked issue found, use search_jira_issues to find it. Try JQL queries like:
-     - project = RHEL AND summary ~ "<CVE-ID>" AND component != "<this-package>"
-     Include fields ["key", "summary", "fixVersions", "status"] in the search
-   * **CRITICAL — fixVersion validation**: The dependency issue MUST target the same
-     RHEL version stream as this issue (same major.minor, e.g. both rhel-10.3 or
-     rhel-10.3.z). If the search returns multiple results, select only the one
-     whose fixVersion matches this issue's stream. NEVER use a dependency tracker
-     from a different stream (e.g. do not use a rhel-10.0.z tracker for a
-     rhel-10.3 issue — that is a completely different release).
-   * Once found (with matching fixVersion), call get_jira_details on the dependency
-     issue and thoroughly verify it was actually fixed:
-     - Check if 'Fixed in Build' field is set (non-null/non-empty)
-     - Check the issue status and resolution — if the dependency issue was
-       Closed/Done with resolution like 'NOTABUG', 'WONTFIX', 'DUPLICATE',
-       'CANTFIX', or 'DROPPED', the fix was never actually built and the
-       rebuild is not needed. In this case use "not-affected" resolution
-       with explanation that the dependency fix was dropped/rejected.
-   * If the dependency issue has `Fixed in Build` set AND was not
-     dropped/rejected → resolution is "rebuild"
-     Set dependency_issue to the issue key AND dependency_component to the component name
-     (e.g., "golang", "openssl") from the dependency issue's component field
-   * If the dependency issue exists but has no `Fixed in Build` yet
-     and is still open → resolution is "postponed_dependency"
-     Set summary to explain that rebuild is waiting for the dependency to ship,
-     and set pending_issues to the dependency issue key.
-     Set blocker_references to a JSON array containing the dependency issue key, e.g. ["RHEL-67890"].
-     Also set package, fix_version, cve_id, dependency_issue, and dependency_component
-     (same values as you would for a rebuild resolution).
-   * **Fallback — no matching CVE tracker found**: If no dependency CVE tracker
-     exists for this version stream, search for a rebase/update ticket on the
-     dependency component that may include the CVE fix (e.g. a golang rebase
-     that bumps to a version containing the fix). Use JQL like:
-     - project = RHEL AND component = "<dependency>" AND (summary ~ "rebase" OR summary ~ "update") AND fixVersion in ("<fixVersion>", "<fixVersion>.z")
-     If a rebase ticket is found, verify with certainty that the rebase target
-     version actually includes the fix for this CVE (check upstream release
-     notes or changelogs). Only use the rebase ticket as the dependency_issue
-     if you are 100% sure it resolves the CVE.
-   * If you cannot find any dependency ticket for the correct version stream,
-     or you are not certain that a found ticket resolves the CVE, use
-     "clarification-needed" resolution — do NOT fall back to using a tracker
-     from a different version stream.
-   3.3. You must provide a clear justification explaining why a rebuild is needed
-        and how it addresses the issue.
-   3.4. If rebuild: set Jira fields as per the instructions below.
+   3.1. Call the `load_skill` tool with `name: "triage-rebuild"` to load the full
+        rebuild procedure — search for the dependency ticket, validate its
+        fixVersion, verify Fixed in Build / dropped resolutions, handle the
+        postponed_dependency outcome, and set the Jira fields — then follow it.
    {% if is_older_zstream %}
    3.5. Check the Jira issue description and comments for any mention of a build
         side-tag. A side-tag is a Koji build tag name that the build pipeline

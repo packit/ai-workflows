@@ -193,6 +193,10 @@ def build_applicability_prompt(
         "Inconclusive". Be conservative: default to "Inconclusive"
         when unsure.
 
+        In your final answer, set is_affected to True when the package is
+        affected OR the classification is "Inconclusive"; set it to False
+        only when you are confident the package is clearly not affected.
+
         Include confidence as an object with "level" (high, medium, or low)
         and "reason" (specific source/build evidence and remaining uncertainty).
         Rate evidence for THIS target. High requires direct target-source

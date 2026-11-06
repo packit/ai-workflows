@@ -19,6 +19,7 @@ from ymir.agents.triage_agent import (
     _map_version_to_module_branch,
     _postponed_comment_exists,
     _should_update_jira,
+    _strip_json_code_fences,
     _terminal_ymir_labels,
     determine_target_branch,
     label_applicability_confidence,
@@ -190,6 +191,41 @@ def test_error_deferred_to_terminal_retry_path():
     """ERROR is dispatched to retry() and commented once after retries are exhausted."""
     assert _should_update_jira(resolution=Resolution.ERROR, user_triggered=False) is False
     assert _should_update_jira(resolution=Resolution.ERROR, user_triggered=True) is False
+
+
+class TestStripJsonCodeFences:
+    """The final-answer parse must survive markdown code fences."""
+
+    def test_plain_json_is_returned_unchanged(self):
+        text = '{"resolution": "backport", "data": {}}'
+        assert _strip_json_code_fences(text) == text
+
+    def test_fenced_json_is_unwrapped(self):
+        text = '```json\n{"resolution": "backport", "data": {}}\n```'
+        assert _strip_json_code_fences(text) == '{"resolution": "backport", "data": {}}'
+
+    def test_fenced_json_without_language_tag_is_unwrapped(self):
+        text = '```\n{"resolution": "rebase", "data": {}}\n```'
+        assert _strip_json_code_fences(text) == '{"resolution": "rebase", "data": {}}'
+
+    def test_unclosed_fence_still_drops_opening_line(self):
+        text = '```json\n{"resolution": "rebase", "data": {}}'
+        assert _strip_json_code_fences(text) == '{"resolution": "rebase", "data": {}}'
+
+    def test_surrounding_whitespace_is_tolerated(self):
+        text = '\n```json\n{"a": 1}\n```\n'
+        assert _strip_json_code_fences(text) == '{"a": 1}'
+
+    def test_json_containing_backticks_is_not_mangled(self):
+        # A raw-JSON answer that mentions fences inside a string must not be
+        # touched — only answers that actually start with a fence are unwrapped.
+        text = '{"triage_summary": "used ```git log``` to find the fix"}'
+        assert _strip_json_code_fences(text) == text
+
+    def test_fenced_answer_parses_into_output_schema(self):
+        fenced = '```json\n{"resolution": "error", "data": {"details": "x", "jira_issue": "RHEL-1"}}\n```'
+        result = TriageOutputSchema.model_validate_json(_strip_json_code_fences(fenced))
+        assert result.resolution == Resolution.ERROR
 
 
 def _make_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> bytes:
@@ -1424,6 +1460,16 @@ def test_validate_triage_output_keeps_resolution_model_despite_extra_keys():
     assert isinstance(output.data, RebuildData)
     assert output.data.jira_issue == "RHEL-1"
     assert "version" not in json.loads(normalized)["data"]
+
+
+def test_validate_triage_output_accepts_fenced_json():
+    """A markdown-fenced answer is normalized instead of rejected for a retry."""
+    answer = {"resolution": "error", "data": {"details": "boom", "jira_issue": "RHEL-1"}}
+    fenced = f"```json\n{json.dumps(answer)}\n```"
+
+    normalized = validate_triage_output(fenced, jira_issue="RHEL-1")
+
+    assert json.loads(normalized) == answer
 
 
 def _output_format_examples() -> list[dict]:

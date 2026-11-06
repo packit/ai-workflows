@@ -35,6 +35,7 @@ from ymir.agents.utils import (
     build_agent_factory_with_mock_repos,
     get_agent_execution_config,
     get_chat_model,
+    get_skills_dir,
     get_tool_call_checker_config,
     is_reasoning_enabled,
     mcp_tools,
@@ -102,6 +103,7 @@ from ymir.tools.unprivileged.commands import RunShellCommandTool
 
 ## UpstreamSearchTool is currently unmaintained and disabled.
 # from ymir.tools.unprivileged.upstream_search import UpstreamSearchTool
+from ymir.tools.unprivileged.skills import LoadSkillTool
 from ymir.tools.unprivileged.version_mapper import VersionMapperTool
 
 logger = logging.getLogger(__file__)
@@ -164,6 +166,25 @@ async def _postponed_comment_exists(jira_issue: str, resolution: Resolution, ava
         if marker in body and resolution.value in body:
             return True
     return False
+
+
+def _strip_json_code_fences(text: str) -> str:
+    """Strip markdown code fences around a JSON final answer.
+
+    Models occasionally wrap the final answer in a ```json fence despite the
+    output-format instructions; ``model_validate_json`` would reject the fence
+    and fail the whole run, so drop the fence lines before parsing. Unfenced
+    text is returned unchanged so a validation error, if any, points at the
+    model's real output.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return text
+    lines = stripped.splitlines()
+    # Drop the opening fence line (``` or ```json); drop the closing fence
+    # line when present.
+    lines = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+    return "\n".join(lines).strip()
 
 
 _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {
@@ -614,6 +635,7 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
             ThinkTool(),
             RunShellCommandTool(options=local_tool_options) if local_tool_options else RunShellCommandTool(),
             VersionMapperTool(),
+            LoadSkillTool(get_skills_dir()),
         ]
         + [
             t
@@ -651,6 +673,7 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
             ConditionalRequirement("search_jira_issues", only_after=["get_jira_details"]),
             ConditionalRequirement("zstream_search", only_after=["get_jira_details"]),
             ConditionalRequirement("clone_repository", only_after=["get_jira_details"]),
+            ConditionalRequirement("load_skill", only_after=["get_jira_details"]),
         ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
@@ -725,7 +748,7 @@ def validate_triage_output(
     and call final_answer again.
     """
     try:
-        payload = json.loads(final_answer)
+        payload = json.loads(_strip_json_code_fences(final_answer))
     except json.JSONDecodeError as e:
         raise ValueError(f"The answer is not valid JSON: {e}") from e
     if not isinstance(payload, dict):
@@ -1010,7 +1033,9 @@ async def run_workflow(
                 ),
                 **get_agent_execution_config(),
             )
-            state.triage_result = OutputSchema.model_validate_json(response.last_message.text)
+            state.triage_result = OutputSchema.model_validate_json(
+                _strip_json_code_fences(response.last_message.text)
+            )
 
             # postponed_y_stream is owned by the eligibility system (PENDING_DEPENDENCIES
             # verdict). The LLM analysis node is only reached when eligibility returned
@@ -1306,7 +1331,9 @@ async def run_workflow(
                     expected_output=AssessedApplicabilityResult,
                     **get_agent_execution_config(),
                 )
-                applicability = AssessedApplicabilityResult.model_validate_json(response.last_message.text)
+                applicability = AssessedApplicabilityResult.model_validate_json(
+                    _strip_json_code_fences(response.last_message.text)
+                )
                 state.triage_result.confidence = applicability.confidence
 
                 if not applicability.is_affected:

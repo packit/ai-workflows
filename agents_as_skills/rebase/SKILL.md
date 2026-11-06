@@ -159,6 +159,9 @@ If the rebase fails (success=false), skip to **Step 11: Comment in JIRA** with t
 ### Step 6: Run Build
 
 1. Call `build_package` with the SRPM path from Step 5, `dist_git_branch`, and `jira_issue`.
+   Modular issues are built the same way as non-modular ones. When a modular
+   `module:stream` was parsed from the Jira summary (for example `postgresql:16`),
+   pass it as `module_stream` so Copr enables that stream in the buildroot.
 2. If the build **succeeds** -> proceed to Step 7.
 3. If the build **timed out** (`is_timeout` = true) -> proceed to Step 7 (treat as success).
 4. If the build returned an **infrastructure error** (`is_infra_error` = true, e.g. Copr API error, project setup failure) -> set `success=false`, `error` to the infra error message, skip to Step 11.
@@ -251,6 +254,11 @@ Then go back to **Step 8** to re-stage changes (the changelog was just modified)
      <rebase_status from Step 5, wrapped in a collapsible <details> block titled "Rebase status">
 
      <consolidation_summary (if set), wrapped in a collapsible <details> block titled "Consolidated issues">
+
+     <build section, when a Copr build URL is known or the package is modular:
+       Copr build link, with a note that Copr projects are temporary and the link may expire.
+       For a modular package, also note the `module:stream` enabled in the buildroot,
+       or that the stream could not be determined and the build ran without one.>
 
      ---
 

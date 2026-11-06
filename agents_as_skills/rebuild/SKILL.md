@@ -197,6 +197,8 @@ If this fails, set `rebuild_success=false` with the error and skip to **Step 6: 
 
 11. Save the `merge_request_url`. Set `rebuild_success=true`.
 
+Do not submit an MR consolidation job when the issue is modular. Non-modular rebuilds may submit one for `{{package}}` on `{{dist_git_branch}}`.
+
 If the commit, push, or MR creation fails, set `rebuild_success=false` with the error and continue to Step 6.
 
 ### Step 6: Comment in JIRA

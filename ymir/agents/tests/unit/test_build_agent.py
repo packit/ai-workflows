@@ -39,7 +39,11 @@ async def _run(build_input, tools):
 @pytest.mark.asyncio
 async def test_success_submits_once_without_llm(build_input, monkeypatch):
     async def _mock_submit(*_args, **_kwargs):
-        return BuildResult(success=True, artifacts_urls=["https://copr/log.gz"])
+        return BuildResult(
+            success=True,
+            artifacts_urls=["https://copr/log.gz"],
+            build_url="https://copr.devel.redhat.com/coprs/bot/RHEL-123/build/1/",
+        )
 
     _mock_tool = SimpleNamespace(name="build_package")
     flexmock(build_agent).should_receive("run_tool").with_args(
@@ -49,6 +53,7 @@ async def test_success_submits_once_without_llm(build_input, monkeypatch):
         srpm_path=str(build_input.srpm_path),
         dist_git_branch="c10s",
         jira_issue="RHEL-123",
+        module_stream=None,
         git_url=None,
         revision=None,
         package_name=None,
@@ -66,6 +71,7 @@ async def test_success_submits_once_without_llm(build_input, monkeypatch):
         "error": None,
         "is_timeout": False,
         "is_infra_error": False,
+        "build_url": "https://copr.devel.redhat.com/coprs/bot/RHEL-123/build/1/",
     }
 
 

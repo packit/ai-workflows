@@ -31,7 +31,7 @@ from ymir.agents.constants import (
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
-from ymir.agents.package_update_steps import PackageUpdateState
+from ymir.agents.package_update_steps import PackageUpdateState, build_mr_note
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
@@ -76,7 +76,7 @@ from ymir.common.models import (
     TitleOutputSchema,
 )
 from ymir.common.utils import extract_text_from_adf, init_sentry
-from ymir.common.version_utils import detect_modular_issue
+from ymir.common.version_utils import detect_modular_issue, parse_module_stream
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
 from ymir.tools.unprivileged.text import (
@@ -300,6 +300,7 @@ async def run_workflow(
     dist_git_namespace=None,
     workspace_id: UUID | None = None,
     is_modular_issue=False,
+    module_stream=None,
     dry_run: bool = False,
     max_build_attempts: int = 10,
 ):
@@ -443,9 +444,6 @@ async def run_workflow(
                 # Accumulate files from this rebase iteration
                 if state.rebase_result.files_to_git_add:
                     state.all_files_git_to_add.update(state.rebase_result.files_to_git_add)
-                if is_modular_issue:
-                    logger.info(f"Skipping build for modular issue {state.jira_issue}")
-                    return "update_release"
                 return "run_build_agent"
             return "comment_in_jira"
 
@@ -482,6 +480,7 @@ async def run_workflow(
                     srpm_path=state.rebase_result.srpm_path,
                     dist_git_branch=state.dist_git_branch,
                     jira_issue=state.jira_issue,
+                    module_stream=module_stream if is_modular_issue else None,
                     git_url=state.fork_url,
                     revision=revision,
                     package_name=state.package,
@@ -493,6 +492,7 @@ async def run_workflow(
                     srpm_path=state.rebase_result.srpm_path,
                     dist_git_branch=state.dist_git_branch,
                     jira_issue=state.jira_issue,
+                    module_stream=module_stream if is_modular_issue else None,
                 )
             if is_konflux_backend():
                 async with tasks.scratch_build_branch(
@@ -509,6 +509,8 @@ async def run_workflow(
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
                 )
+            if build_result.build_url:
+                state.build_url = build_result.build_url
             if build_result.success:
                 return "update_release"
             if build_result.is_timeout:
@@ -661,6 +663,12 @@ async def run_workflow(
                     if state.consolidation_summary
                     else ""
                 )
+                build_section = build_mr_note(
+                    build_url=state.build_url,
+                    is_modular_issue=is_modular_issue,
+                    module_stream=module_stream,
+                )
+                build_section_block = f"{build_section}\n\n" if build_section else ""
                 (
                     state.merge_request_url,
                     state.merge_request_newly_created,
@@ -684,6 +692,7 @@ async def run_workflow(
                         f"{wrap_details('Rebase status', state.rebase_log[-1])}"
                         f"{consolidation_text}"
                         f"\n\n{branch_note}"
+                        f"{build_section_block}"
                         f"{mr_description_footer(state.package, all_issues)}"
                     ),
                     available_tools=gateway_tools,
@@ -710,12 +719,6 @@ async def run_workflow(
                 comment_text = (
                     state.merge_request_url if state.merge_request_url else state.rebase_result.status
                 )
-                if is_modular_issue:
-                    comment_text += (
-                        "\n\n*Note:* Modular package support is in development. "
-                        "No build was performed — please verify the MR and trigger "
-                        "a build manually."
-                    )
                 # Post same success message to all issues in parallel with per-issue error handling
                 await post_comments_to_all_issues(
                     primary_issue=state.jira_issue,
@@ -862,6 +865,23 @@ async def main() -> None:
                 raw_downstream_component=triage_state.get("raw_downstream_component"),
                 downstream_component=triage_state.get("downstream_component"),
             )
+            _module_stream = None
+            if _modular:
+                parsed_module = parse_module_stream(
+                    triage_state.get("jira_summary"),
+                    triage_state.get("downstream_component"),
+                )
+                if parsed_module:
+                    _module_stream = f"{parsed_module[0]}:{parsed_module[1]}"
+                else:
+                    logger.warning(
+                        "Issue %s detected as modular but module:stream could not be parsed "
+                        "from summary=%r, downstream_component=%r — build will proceed "
+                        "without enabling a module in the buildroot",
+                        rebase_data.jira_issue,
+                        triage_state.get("jira_summary"),
+                        triage_state.get("downstream_component"),
+                    )
             logger.info(
                 f"Processing rebase for package: {rebase_data.package}, "
                 f"version: {rebase_data.version}, JIRA: {rebase_data.jira_issue}, "
@@ -963,6 +983,7 @@ async def main() -> None:
                         dist_git_namespace=dist_git_namespace,
                         workspace_id=task.execution_id,
                         is_modular_issue=_modular,
+                        module_stream=_module_stream,
                         dry_run=dry_run,
                         max_build_attempts=max_build_attempts,
                     )

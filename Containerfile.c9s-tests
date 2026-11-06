@@ -32,6 +32,7 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
        arize-phoenix-otel \
        aiohttp>=3.12.15 \
        redis \
+       backoff \
        sentry-sdk \
        specfile \
        pytest \

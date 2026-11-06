@@ -10,8 +10,7 @@ a fleet of OpenShift Deployments and CronJobs in the `jotnar-ymir` namespace
 on Red Hat's internal GPC cluster (bot identity `redhat-ymir-agent`). For
 the full architecture — agent roles, queues, and data flows — see
 [README.md](README.md), [README-agents.md](README-agents.md),
-[README-supervisor.md](README-supervisor.md), and the `*_data_flow.md`
-docs; this section intentionally does not restate that architecture, to
+[the `*_data_flow.md` docs](jira_data_flow.md); this section intentionally does not restate that architecture, to
 avoid the two going out of sync.
 
 Security-relevant assumptions this system makes about its environment:
@@ -94,7 +93,7 @@ redirects and other caller-supplied URLs before making a request.
 | Local `.secrets/` credential bundle (dev machines, CI runners) | Co-located keytabs, GitLab PAT, Jira token, GCP keys | critical |
 | Jira API token | Read/write access to RHEL/PACKIT Jira issues, including status transitions that trigger errata creation and compose inclusion | high |
 | GCP Vertex AI service-account keys (dev/prod) | Access to hosted LLM inference; misuse enables cost abuse or model manipulation | high |
-| Redis/Valkey task queues (`triage_queue`, `supervisor_work_queue`, `merge_consolidation_queue`) | Integrity of in-flight automation state; controls which package/branch/issue is processed next | high |
+| Redis/Valkey task queues (`triage_queue`, `merge_consolidation_queue`) | Integrity of in-flight automation state; controls which package/branch/issue is processed next | high |
 | Container images (`quay.io/jotnar/*`) | Build supply-chain integrity for all deployed agent/service images | high |
 | Testing Farm API token | Ability to trigger test runs against package builds | medium |
 | Sumo Logic logs, OTEL traces (Phoenix), Sentry logs | May contain tool inputs/outputs; sensitive if credential redaction fails | medium |
@@ -167,7 +166,7 @@ Sorted by (impact desc, likelihood desc).
 - mode: bootstrap
 - date: 2026-08-18
 - target: github.com/packit/ai-workflows @ dc10a6c1
-- inputs: SECURITY.md, README.md, README-agents.md, README-supervisor.md, AGENTS.md,
+- inputs: SECURITY.md, README.md, README-agents.md, AGENTS.md,
   CONTRIBUTING.md, ai_providers_data_flow.md, brew_konflux_data_flow.md,
   gitlab_distgit_data_flow.md, jira_data_flow.md, jira_label_workflow_routing.md,
   docs/mr_consolidation_architecture.md, monitoring.md, data_retention_policy.md,

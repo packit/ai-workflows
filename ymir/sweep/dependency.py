@@ -1,7 +1,7 @@
 """Dependency sweep strategy.
 
 Checks whether the dependency's fixed build is present in the Y-stream
-buildroot.  Uses ``jira_utils.get_issue()`` for blocker lookup and
+buildroot. Uses the shared Jira client for blocker lookup and
 ``check_build_in_buildroot()`` for buildroot verification.
 
 Handles issues tagged ``ymir_postponed_dependency``, which are set when
@@ -11,14 +11,16 @@ yet landed in the target buildroot.
 
 import re
 
+import aiohttp
 import requests
 
+from ymir.common.base_utils import fix_await
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels
+from ymir.common.jira_api import get_issue
+from ymir.common.models import FullIssue
 from ymir.common.utils import check_build_in_buildroot
 from ymir.common.version_utils import normalize_fix_version, parse_rhel_version
-from ymir.supervisor.jira_utils import get_issue
-from ymir.supervisor.supervisor_types import FullIssue
 from ymir.sweep.base import SweepResult, SweepStrategy
 from ymir.sweep.comment_parser import CommentData
 
@@ -62,7 +64,7 @@ class DependencySweep(SweepStrategy):
 
     1. Reads the blocker Jira issue key from the comment's ``*Blockers*:``
        line (or the first ``*Waiting for*:`` entry).
-    2. Fetches the blocker issue via ``jira_utils.get_issue()`` and reads
+    2. Fetches the blocker issue via the shared Jira client and reads
        its ``fixed_in_build`` field.
     3. If ``fixed_in_build`` is absent → still blocked.
     4. Derives ``target_branch`` from the comment summary or issue's
@@ -91,8 +93,8 @@ class DependencySweep(SweepStrategy):
             )
 
         try:
-            blocker = get_issue(blocker_key)
-        except requests.HTTPError as exc:
+            blocker = await fix_await(get_issue(blocker_key))
+        except (requests.HTTPError, aiohttp.ClientError, TimeoutError) as exc:
             return SweepResult(
                 issue_key=issue.key,
                 action="error",

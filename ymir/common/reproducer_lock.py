@@ -64,6 +64,7 @@ _MAX_CLONE_ROOT_DEPTH = 20
 
 
 def _issue_key(issue: dict | None) -> str | None:
+    """Extract and uppercase a linked issue's key, if present."""
     if not issue:
         return None
     key = issue.get("key")
@@ -71,6 +72,7 @@ def _issue_key(issue: dict | None) -> str | None:
 
 
 def _is_cloners_link(link_type: dict | None) -> bool:
+    """Match a Jira link type named ``Cloners``, ignoring case and edge spaces."""
     if not link_type:
         return False
     name = link_type.get("name")
@@ -189,6 +191,7 @@ async def resolve_reproducer_lock_id(
 
 
 def _active_field(package: str, lock_id: str) -> str:
+    """Build the active lock field within the reproducer Redis hash."""
     return f"{package}:{lock_id}:active"
 
 

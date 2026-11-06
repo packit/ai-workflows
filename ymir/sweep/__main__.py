@@ -16,8 +16,8 @@ import os
 import sys
 
 from ymir.common.base_utils import redis_client
+from ymir.common.http_utils import with_aiohttp_session, with_requests_session
 from ymir.common.utils import init_sentry
-from ymir.supervisor.http_utils import with_requests_session
 from ymir.sweep.dependency import DependencySweep
 from ymir.sweep.no_patch import NoPatchSweep
 from ymir.sweep.pr_pending import PRPendingSweep
@@ -36,12 +36,15 @@ STRATEGIES: dict = {
 async def run_sweep(strategy_names: list[str]) -> None:
     """Run the specified sweep strategies in sequence.
 
-    Sets up a shared ``requests.Session`` (required by ``jira_utils``)
-    and creates a single synchronous Redis connection shared across all
-    strategies.  Strategies run sequentially to avoid concurrent Jira
-    API pressure.
+    Sets up shared HTTP sessions and a single Redis connection for all
+    strategies. Strategies run sequentially to avoid concurrent Jira API
+    pressure.
     """
-    async with with_requests_session(), redis_client(os.environ["REDIS_URL"]) as redis:
+    async with (
+        with_aiohttp_session(),
+        with_requests_session(),
+        redis_client(os.environ["REDIS_URL"]) as redis,
+    ):
         for name in strategy_names:
             strategy = STRATEGIES[name]()
             logger.info("Starting %s sweep", name)

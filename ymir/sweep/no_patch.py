@@ -20,9 +20,8 @@ import redis
 
 from ymir.common.base_utils import fix_await
 from ymir.common.constants import JiraLabels, RedisQueues
-from ymir.common.models import Task
-from ymir.supervisor.jira_utils import add_issue_label, remove_issue_label
-from ymir.supervisor.supervisor_types import FullIssue
+from ymir.common.jira_api import add_issue_label, remove_issue_label
+from ymir.common.models import FullIssue, Task
 from ymir.sweep.base import SweepResult, SweepStrategy
 from ymir.sweep.comment_parser import CommentData
 
@@ -60,7 +59,7 @@ class NoPatchSweep(SweepStrategy):
             ``run()`` return format.
         """
         max_issues = int(os.environ.get("MAX_ISSUES_PER_RUN", _MAX_ISSUES_DEFAULT))
-        all_issues = self.get_blocked_issues()
+        all_issues = await self._get_blocked_issues_async()
 
         in_progress_count = 0
         eligible: list[FullIssue] = []
@@ -83,8 +82,8 @@ class NoPatchSweep(SweepStrategy):
             try:
                 task = Task.from_issue(issue_key)
                 await fix_await(redis_conn.lpush(RedisQueues.TRIAGE_QUEUE.value, task.to_json()))
-                add_issue_label(issue_key, JiraLabels.TRIAGE_IN_PROGRESS.value)
-                remove_issue_label(issue_key, self.label.value)
+                await fix_await(add_issue_label(issue_key, JiraLabels.TRIAGE_IN_PROGRESS.value))
+                await fix_await(remove_issue_label(issue_key, self.label.value))
                 self.logger.info("Re-queued %s for fresh triage", issue_key)
                 unblocked += 1
             except redis.RedisError:

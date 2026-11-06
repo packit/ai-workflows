@@ -26,7 +26,12 @@ from ymir.common.models import (
     Resolution,
     TriageEligibility,
 )
-from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD, check_build_in_buildroot
+from ymir.common.utils import (
+    FIXED_IN_BUILD_CUSTOM_FIELD,
+    InvalidDependencyDataError,
+    check_build_in_buildroot,
+    resolve_brew_build,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +49,7 @@ def build_rebuild_siblings_jql(
         fix_version=fix_version,
         excluded_labels=[
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
+            JiraLabels.TRIAGED_ALREADY_FIXED.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBASE.value,
         ],
@@ -206,10 +212,16 @@ async def find_rebuild_siblings(
                         )
                         fib = dep_details.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
                         # fix_version is already normalized by run_triage_analysis
-                        if fib and not await check_build_in_buildroot(
+                        fib_build = await resolve_brew_build(fib) if fib else None
+                        if fib and fib_build is None:
+                            logger.warning(
+                                "Sibling %s: dependency build %s was not found in Brew", candidate_key, fib
+                            )
+                            continue
+                        if fib_build and not await check_build_in_buildroot(
                             target_branch,
                             analysis.dependency_component,
-                            fib,
+                            fib_build.nevr,
                             fix_version=rebuild_data.fix_version or "",
                         ):
                             logger.info(
@@ -221,6 +233,13 @@ async def find_rebuild_siblings(
                                 f"({analysis.dependency_component} not yet in buildroot)"
                             )
                             continue
+                    except InvalidDependencyDataError as e:
+                        logger.warning(f"Sibling {candidate_key}: mismatched dependency metadata: {e}")
+                        summary_lines.append(
+                            f"* {candidate_key} — excluded "
+                            f"(mismatched dependency metadata for {analysis.dependency_component})"
+                        )
+                        continue
                     except Exception as e:
                         logger.warning(f"Buildroot check failed for sibling {candidate_key}: {e}")
 

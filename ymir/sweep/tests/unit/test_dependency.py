@@ -4,6 +4,7 @@ import pytest
 import requests
 from flexmock import flexmock
 
+from ymir.common.utils import BrewBuild
 from ymir.supervisor.supervisor_types import IssueStatus
 from ymir.sweep.dependency import DependencySweep, _resolve_target_branch, branch_from_fix_versions
 from ymir.sweep.tests.unit.conftest import make_issue, make_ymir_comment
@@ -112,6 +113,10 @@ def _make_issue_with_comment(**kw):
     return make_issue(comments=[_make_comment(**kw)])
 
 
+async def _resolve_fixed_build(_nvr):
+    return BrewBuild({"name": "golang", "version": "1.21.0", "release": "1.el9", "epoch": 0})
+
+
 # ---------------------------------------------------------------------------
 # DependencySweep.is_unblocked
 # ---------------------------------------------------------------------------
@@ -121,6 +126,7 @@ def _make_issue_with_comment(**kw):
 async def test_unblocked_when_build_in_buildroot(monkeypatch):
     blocker = _make_blocker(fixed_in_build="golang-1.21.0-1.el9")
     monkeypatch.setattr("ymir.sweep.dependency.get_issue", lambda key, full=False: blocker)
+    monkeypatch.setattr("ymir.sweep.dependency.resolve_brew_build", _resolve_fixed_build)
     monkeypatch.setattr(
         "ymir.sweep.dependency.check_build_in_buildroot",
         lambda *a, **kw: _async_true(),
@@ -150,6 +156,7 @@ async def test_still_blocked_when_no_fixed_in_build(monkeypatch):
 async def test_still_blocked_when_build_not_in_buildroot(monkeypatch):
     blocker = _make_blocker(fixed_in_build="golang-1.21.0-1.el9")
     monkeypatch.setattr("ymir.sweep.dependency.get_issue", lambda key, full=False: blocker)
+    monkeypatch.setattr("ymir.sweep.dependency.resolve_brew_build", _resolve_fixed_build)
     monkeypatch.setattr(
         "ymir.sweep.dependency.check_build_in_buildroot",
         lambda *a, **kw: _async_false(),

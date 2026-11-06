@@ -12,6 +12,9 @@ dynamic = ["dependencies"]
 [tool.hatch.metadata.hooks.requirements_txt]
 files = ["../../requirements-global.txt", "requirements.txt"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [project.scripts]
 ymir-privileged-gateway = "ymir.tools.privileged.gateway:main"
 ymir-unprivileged-gateway = "ymir.tools.unprivileged.gateway:main"

@@ -2,10 +2,10 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from mcp.server.lowlevel.server import request_ctx
-from mcp.types import RequestParams
 
 from ymir.common.config import load_rhel_config, rhel_config_override
+from ymir.common.request_context import request_metadata
+from ymir.tools.mcp_context import request_ctx
 
 # Fixed snapshot based on templates/rhel-config.json, rather than a changing runtime config.
 RHEL_CONFIG = {
@@ -38,11 +38,11 @@ async def test_load_rhel_config_applies_agent_and_gateway_overrides(monkeypatch,
 
     # The gateway permission is deliberately independent of Jira mocking.
     monkeypatch.setenv("ALLOW_RHEL_CONFIG_OVERRIDE", "true")
-    token = request_ctx.set(SimpleNamespace(meta=RequestParams.Meta(rhel_config_override=RHEL_10_2_OVERRIDE)))
+    token = request_metadata.set(SimpleNamespace(rhel_config_override=RHEL_10_2_OVERRIDE))
     try:
         assert await load_rhel_config() == RHEL_10_2_CONFIG
     finally:
-        request_ctx.reset(token)
+        request_metadata.reset(token)
 
     assert await load_rhel_config() == RHEL_CONFIG
 
@@ -53,8 +53,22 @@ async def test_gateway_ignores_metadata_overrides_when_not_allowed(monkeypatch, 
     config_path.write_text(json.dumps(RHEL_CONFIG))
     monkeypatch.setenv("RHEL_CONFIG_PATH", str(config_path))
     monkeypatch.setenv("ALLOW_RHEL_CONFIG_OVERRIDE", "false")
-    token = request_ctx.set(SimpleNamespace(meta=RequestParams.Meta(rhel_config_override=RHEL_10_2_OVERRIDE)))
+    token = request_metadata.set(SimpleNamespace(rhel_config_override=RHEL_10_2_OVERRIDE))
     try:
         assert await load_rhel_config() == RHEL_CONFIG
+    finally:
+        request_metadata.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_load_rhel_config_reads_legacy_mcp_metadata(monkeypatch, tmp_path):
+    config_path = tmp_path / "rhel-config.json"
+    config_path.write_text(json.dumps(RHEL_CONFIG))
+    monkeypatch.setenv("RHEL_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("ALLOW_RHEL_CONFIG_OVERRIDE", "true")
+
+    token = request_ctx.set(SimpleNamespace(meta=SimpleNamespace(rhel_config_override=RHEL_10_2_OVERRIDE)))
+    try:
+        assert await load_rhel_config() == RHEL_10_2_CONFIG
     finally:
         request_ctx.reset(token)

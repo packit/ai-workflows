@@ -56,15 +56,16 @@ def _mcp_rhel_config_override() -> dict[str, Any] | None:
     if os.getenv("ALLOW_RHEL_CONFIG_OVERRIDE", "").lower() != "true":
         return None
 
-    # Only the MCP gateway needs this dependency. Other users of ymir.common,
-    # including the API image, must be able to import the config module without it.
-    from mcp.server.lowlevel.server import request_ctx
+    from ymir.common.request_context import request_metadata
 
-    try:
-        meta = request_ctx.get().meta
-    except LookupError:
-        return None
-
+    meta = request_metadata.get()
+    if meta is None:
+        try:
+            from ymir.tools.mcp_context import request_meta
+        except ImportError:
+            request_meta = None
+        if request_meta is not None:
+            meta = request_meta()
     if meta is None:
         return None
 

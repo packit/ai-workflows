@@ -78,8 +78,8 @@ COPY openinference-streaming.patch /tmp
 RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
     && /opt/beeai-venv/bin/pip install --upgrade pip \
     && /opt/beeai-venv/bin/pip install --no-cache-dir \
-         "litellm<1.106.0,!=1.82.7,!=1.82.8,!=1.92.0" \
-         beeai-framework[vertexai,mcp,duckduckgo]==0.1.85 \
+         "litellm!=1.82.7,!=1.82.8,!=1.92.0,!=1.107.0" \
+         "beeai-framework[vertexai,mcp,duckduckgo] @ https://github.com/i-am-bee/beeai-framework/archive/e7ef6091360e54d18c298d4fc2a6ed8e8d1205bc.tar.gz#subdirectory=python" \
          google-cloud-aiplatform \
          openinference-instrumentation-beeai==0.1.21 \
          arize-phoenix-otel \
@@ -95,7 +95,7 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
     && patch -p5 -i /tmp/openinference-reasoning.patch \
     && patch -p5 -i /tmp/openinference-streaming.patch
 
-# Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)
+# Verify no malicious litellm_init.pth was introduced by compromised litellm packages.
 RUN MALICIOUS=$(find /usr /opt -name "litellm_init.pth" 2>/dev/null); \
     if [ -n "$MALICIOUS" ]; then \
       echo "SECURITY ALERT: malicious litellm_init.pth detected: $MALICIOUS"; \

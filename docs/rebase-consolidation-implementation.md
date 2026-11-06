@@ -189,10 +189,14 @@ when others finish, failed sibling not consolidated.
 
 **Stale sibling link**: The sibling marker comment is permanent, so a link is treated as stale
 when its primary is closed or carries a finished label (`ymir_rebased`, `ymir_rebase_errored`,
-`ymir_needs_attention`, `ymir_triaged_not_affected`, or any `ymir_triaged_deferred_*`). The
+`ymir_needs_attention`, `ymir_triage_errored`, `ymir_triaged`, `ymir_triaged_backport`,
+`ymir_triaged_rebuild`, `ymir_triaged_not_affected`, or any `ymir_triaged_deferred_*`). The
 sibling then runs its own fix instead of deferring forever. If the primary cannot be read,
 automatic runs keep the link live (fail safe) while an explicit `ymir_todo` run fails into the
-task retry path, so the requested fix is not silently replaced by a triage label.
+task retry path, so the requested fix is not silently replaced by a triage label. If the
+sibling's own details cannot be read, every run fails into the retry path: treating it as a
+primary would queue the real primary as one of its siblings and leave both waiting on each
+other.
 
 **No REBASE siblings**: Primary queues when last sibling finishes, rebases alone.
 

@@ -640,53 +640,66 @@ class JiraIssueFetcher:
                     if label in ymir_labels
                 ]
                 if trigger_labels_present and not has_in_progress:
-                    trigger_label = trigger_labels_present[0]
                     if len(trigger_labels_present) > 1:
                         logger.warning(
                             f"Issue {issue_key} has both {JiraLabels.TODO.value} and "
-                            f"{JiraLabels.TODO_TRIAGE.value} - running the full pipeline "
-                            f"and consuming both labels"
+                            f"{JiraLabels.TODO_TRIAGE.value} - the full-pipeline trigger "
+                            f"wins when it is authorized"
                         )
                     # The JQL no longer restricts these triggers by assignee, so we
-                    # verify per-issue that the label was added by a Red Hat Employee.
-                    # If not (or if the author can't be verified), skip the issue —
-                    # the label may have been added by an external collaborator.
+                    # verify per-issue that each label was added by a Red Hat Employee.
+                    # Verify them independently: an unauthorized ymir_todo must not
+                    # discard a separate, authorized ymir_todo_triage request. If an
+                    # author can't be verified, skip the issue — the label may have
+                    # been added by an external collaborator.
+                    authorized_labels: list[str] = []
+                    unauthorized_labels: list[str] = []
                     try:
-                        is_rh_employee = self._label_added_by_rh_employee(issue_key, label=trigger_label)
+                        for label in trigger_labels_present:
+                            if self._label_added_by_rh_employee(issue_key, label=label):
+                                authorized_labels.append(label)
+                            else:
+                                unauthorized_labels.append(label)
                     except requests.RequestException as e:
                         logger.warning(
-                            f"Transient error verifying {trigger_label} author on {issue_key}: {e}; "
+                            f"Transient error verifying trigger label author on {issue_key}: {e}; "
                             f"skipping this issue for this sweep"
                         )
                         existing_keys.add(issue_key)
                         continue
 
-                    if not is_rh_employee:
+                    if unauthorized_labels:
                         logger.warning(
-                            f"Issue {issue_key} has {trigger_label} but the "
-                            f"label was not added by a Red Hat Employee - skipping "
-                            f"and removing the label"
+                            f"Issue {issue_key} has {unauthorized_labels} not added by a "
+                            f"Red Hat Employee - removing them"
                         )
-                        existing_keys.add(issue_key)
                         # Remove the bogus labels so we don't repeat the verification
                         # (two HTTP calls) on every subsequent sweep.
                         if self.dry_run:
-                            logger.info(f"DRY_RUN: would remove {trigger_labels_present} from {issue_key}")
+                            logger.info(f"DRY_RUN: would remove {unauthorized_labels} from {issue_key}")
                         else:
                             try:
-                                self._edit_jira_labels(issue_key, add=[], remove=trigger_labels_present)
+                                self._edit_jira_labels(issue_key, add=[], remove=unauthorized_labels)
                             except Exception as e:
                                 logger.warning(
-                                    f"Failed to remove {trigger_labels_present} from {issue_key}: {e}"
+                                    f"Failed to remove {unauthorized_labels} from {issue_key}: {e}"
                                 )
+
+                    if not authorized_labels:
+                        existing_keys.add(issue_key)
                         continue
+
+                    # ymir_todo comes first in trigger_labels_present, so an
+                    # authorized full-pipeline request wins over an authorized
+                    # triage-only one.
+                    trigger_label = authorized_labels[0]
                     logger.info(
                         f"Issue {issue_key} has {trigger_label} added by an "
                         f"RH employee - marking for user-triggered run"
                     )
                     remove_issues_for_retry.add(issue_key)
                     user_triggered_keys.add(issue_key)
-                    if trigger_labels_present == [JiraLabels.TODO_TRIAGE.value]:
+                    if trigger_label == JiraLabels.TODO_TRIAGE.value:
                         triage_only_keys.add(issue_key)
                     continue
 

@@ -660,6 +660,12 @@ async def test_find_triaged_rebase_siblings_requires_exact_primary_key(monkeypat
         ("Closed", [], True),
         ("New", [JiraLabels.REBASED.value], True),
         ("New", [JiraLabels.TRIAGED_DEFERRED_REBASE.value], True),
+        # A primary that stopped without producing a rebase will never collect
+        # its siblings either.
+        ("New", [JiraLabels.TRIAGE_ERRORED.value], True),
+        ("New", [JiraLabels.TRIAGED.value], True),
+        ("New", [JiraLabels.TRIAGED_BACKPORT.value], True),
+        ("New", [JiraLabels.TRIAGED_REBUILD.value], True),
         ("New", [JiraLabels.WAITING_FOR_SIBLINGS.value], False),
     ],
 )
@@ -754,3 +760,61 @@ async def test_primary_requeue_preserves_triage_only_intent(monkeypatch):
     queue, payload = pushed[0]
     assert queue == RedisQueues.TRIAGE_QUEUE.value
     assert json.loads(payload)["triage_only"] is True
+
+
+@pytest.mark.asyncio
+async def test_queued_sibling_keeps_its_triage_only_marker(monkeypatch):
+    """A sibling queued by a user-triggered primary keeps its own triage-only intent.
+
+    The queued task inherits ``user_triggered`` from the primary, which on its own
+    selects full processing and deletes the persisted marker.
+    """
+    pushed = []
+
+    async def run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            return [{"key": "RHEL-400", "fields": {"labels": []}}]
+        if name == "check_cve_triage_eligibility":
+            return {"is_cve": True, "eligibility": "immediately", "reason": "tracked"}
+        raise AssertionError(f"unexpected tool {name}")
+
+    async def get_metadata(_issue_key):
+        return [JiraLabels.TRIAGE_ONLY.value], None
+
+    async def record(*_args, **_kwargs):
+        return None
+
+    class FakeRedis:
+        async def lpush(self, queue, payload):
+            pushed.append((queue, payload))
+
+    @asynccontextmanager
+    async def fake_redis_client(_url):
+        yield FakeRedis()
+
+    async def fake_fix_await(value):
+        return await value
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
+    monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
+    monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
+    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
+    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+
+    queued = await rebase_consolidation.queue_siblings_for_triage(
+        primary_issue="RHEL-100",
+        rebase_data=RebaseData(
+            package="bash", version="5.2", jira_issue="RHEL-100", fix_version="rhel-10.3.z"
+        ),
+        available_tools=[],
+        user_triggered=True,
+    )
+
+    assert queued == 1
+    queue, payload = pushed[0]
+    assert queue == RedisQueues.TRIAGE_QUEUE_TODO.value
+    task = json.loads(payload)
+    assert task["triage_only"] is True
+    assert task["user_triggered"] is True

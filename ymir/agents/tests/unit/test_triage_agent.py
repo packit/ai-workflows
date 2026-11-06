@@ -339,6 +339,26 @@ async def test_auto_processing_marker_ignored_for_user_triggered_run(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_auto_processing_retries_when_marker_read_fails(monkeypatch):
+    """An unreadable marker must not fall back to the package config.
+
+    The package may be configured for full processing, so guessing would start a
+    fix for an issue whose triage-only marker could not be ruled out. The failure
+    must reach the task retry path instead.
+    """
+
+    async def _failing_metadata(*_args, **_kwargs):
+        raise RuntimeError("Jira unavailable")
+
+    flexmock(agent_tasks).should_receive("fetch_auto_processing_config").never()
+    monkeypatch.setattr(agent_tasks, "get_jira_issue_metadata", _failing_metadata)
+
+    state = TriageState(jira_issue="RHEL-99999")
+    with pytest.raises(RuntimeError, match="Jira unavailable"):
+        await _record_auto_processing_policy(state, "bash", [], user_triggered=False)
+
+
+@pytest.mark.asyncio
 async def test_auto_processing_user_triggered_run_does_not_need_rules_repo(monkeypatch):
     """An explicit ymir_todo must still run while the rules repo is unavailable."""
 
@@ -1753,6 +1773,38 @@ def test_terminal_label_wait_is_ended_by_triage_only(triage_only, expected):
 
 
 @pytest.mark.asyncio
+async def test_is_rebase_sibling_follows_the_newest_primary_link(monkeypatch):
+    """A re-queued sibling defers to its latest primary, not an older finished one.
+
+    Following the older marker would declare the link stale and make this issue
+    run as a primary, which then queues the current primary as its own sibling.
+    """
+
+    async def fake_run_tool(name, **kwargs):
+        return {
+            "fields": {
+                "labels": [],
+                "comment": {
+                    "comments": [
+                        {"body": "Queued for triage as potential sibling of RHEL-100"},
+                        {"body": "Queued for triage as potential sibling of RHEL-300"},
+                    ]
+                },
+            }
+        }
+
+    async def fake_stale(primary_issue, available_tools):
+        assert primary_issue == "RHEL-300"
+        return False
+
+    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
+
+    state = TriageState(jira_issue="RHEL-200")
+    assert await _is_rebase_sibling(state, [], user_triggered=True) is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("primary_stale", "expected"), [(True, False), (False, True)])
 async def test_is_rebase_sibling_follows_primary_state(monkeypatch, primary_stale, expected):
     """A permanent sibling marker defers only while its primary is still working."""
@@ -1855,3 +1907,27 @@ async def test_is_rebase_sibling_unknown_primary_state(monkeypatch, user_trigger
             await _is_rebase_sibling(state, [], user_triggered=user_triggered)
     else:
         assert await _is_rebase_sibling(state, [], user_triggered=user_triggered) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_triggered", [True, False])
+async def test_is_rebase_sibling_fails_when_own_details_unreadable(monkeypatch, user_triggered):
+    """An unreadable marker must not make a real sibling act as a primary.
+
+    The sibling state flag is only set from the marker read itself, so returning
+    False here would start consolidation and queue the real primary as one of
+    this issue's siblings, leaving both waiting on each other.
+    """
+
+    async def failing_run_tool(*_args, **_kwargs):
+        raise RuntimeError("Jira unavailable")
+
+    async def fake_stale(*_args):
+        raise AssertionError("primary lookup must not be attempted")
+
+    monkeypatch.setattr(t_agent, "run_tool", failing_run_tool)
+    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
+
+    state = TriageState(jira_issue="RHEL-200")
+    with pytest.raises(RuntimeError, match="RHEL-200"):
+        await _is_rebase_sibling(state, [], user_triggered=user_triggered)

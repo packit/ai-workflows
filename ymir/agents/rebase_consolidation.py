@@ -30,9 +30,15 @@ logger = logging.getLogger(__name__)
 
 
 def get_rebase_primary_issue(details: dict) -> str | None:
-    """Read the primary issue from the persistent sibling marker comment."""
+    """Read the primary issue from the most recent sibling marker comment.
+
+    The marker is a permanent comment, so an issue can carry one per queueing
+    primary. The newest marker is the current relationship; an older one may
+    point at a primary that already finished, and treating that as stale would
+    make a re-queued sibling run as a primary and queue its own primary.
+    """
     comments = details.get("fields", {}).get("comment", {}).get("comments", [])
-    for comment in comments:
+    for comment in reversed(comments):
         body = extract_text_from_adf(comment.get("body", ""))
         _, marker, reference = body.partition("Queued for triage as potential sibling of")
         # Jira may turn the issue key into an ADF inlineCard or HTML smartlink.
@@ -43,13 +49,18 @@ def get_rebase_primary_issue(details: dict) -> str | None:
 
 _CLOSED_ISSUE_STATUSES = frozenset({"Closed", "Done", "Resolved"})
 # A primary carrying one of these has stopped: it either produced a fix, failed
-# permanently, or deferred the fix to a later explicit request. None of them will
-# pick the sibling up, so a link to them is stale.
+# permanently, resolved into a non-rebase path, or deferred the fix to a later
+# explicit request. None of them will pick the sibling up, so a link to them is
+# stale.
 _FINISHED_PRIMARY_LABELS = frozenset(
     {
         JiraLabels.REBASED.value,
         JiraLabels.REBASE_ERRORED.value,
         JiraLabels.NEEDS_ATTENTION.value,
+        JiraLabels.TRIAGE_ERRORED.value,
+        JiraLabels.TRIAGED.value,
+        JiraLabels.TRIAGED_BACKPORT.value,
+        JiraLabels.TRIAGED_REBUILD.value,
         JiraLabels.TRIAGED_NOT_AFFECTED.value,
         *JiraLabels.deferred_triage_labels(),
     }
@@ -446,8 +457,14 @@ async def queue_siblings_for_triage(
                     continue
 
                 # Queue for triage AFTER label AND comment
-                # Inherit user_triggered from primary to preserve priority
-                task = Task.from_issue(candidate_key, user_triggered=user_triggered)
+                # Inherit user_triggered from primary to preserve priority. Keep the
+                # sibling's own triage-only marker, which must not be overridden by
+                # the trigger flag it inherited.
+                task = Task.from_issue(
+                    candidate_key,
+                    user_triggered=user_triggered,
+                    triage_only=JiraLabels.TRIAGE_ONLY.value in candidate_labels,
+                )
                 # Use priority queue for user-triggered tasks
                 queue = (
                     RedisQueues.TRIAGE_QUEUE_TODO.value if user_triggered else RedisQueues.TRIAGE_QUEUE.value

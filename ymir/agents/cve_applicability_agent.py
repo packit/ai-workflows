@@ -1,13 +1,9 @@
 from pathlib import Path
 from textwrap import dedent
 
-from beeai_framework.agents.requirement.requirements.conditional import (
-    ConditionalRequirement,
-)
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
-from beeai_framework.tools.think import ThinkTool
 
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import get_chat_model, get_tool_call_checker_config, is_reasoning_enabled
@@ -30,22 +26,12 @@ def create_applicability_agent(
         unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
-            ThinkTool(),
             ViewTool(options=local_tool_options),
             SearchTextTool(options=local_tool_options),
             RunShellCommandTool(options=local_tool_options),
             *extra_gateway_tools,
         ],
         memory=UnconstrainedMemory(),
-        requirements=[
-            ConditionalRequirement(
-                ThinkTool,
-                force_at_step=1,
-                force_after=Tool,
-                consecutive_allowed=False,
-                only_success_invocations=False,
-            ),
-        ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat security analyst",
     )

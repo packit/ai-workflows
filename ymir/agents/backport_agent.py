@@ -14,14 +14,10 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from beeai_framework.agents.requirement.requirements.conditional import (
-    ConditionalRequirement,
-)
 from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
-from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field
 from specfile import Specfile
@@ -191,7 +187,6 @@ def create_inherit_adaptation_agent(local_tool_options: dict[str, Any]) -> Reaso
         unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
-            ThinkTool(),
             ViewTool(options=local_tool_options),
             InsertTool(options=local_tool_options),
             InsertAfterSubstringTool(options=local_tool_options),
@@ -200,14 +195,6 @@ def create_inherit_adaptation_agent(local_tool_options: dict[str, Any]) -> Reaso
             GetCWDTool(options=local_tool_options),
         ],
         memory=UnconstrainedMemory(),
-        requirements=[
-            ConditionalRequirement(
-                ThinkTool,
-                force_at_step=1,
-                consecutive_allowed=False,
-                only_success_invocations=False,
-            ),
-        ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
         instructions=get_inherit_adaptation_instructions(),
@@ -250,7 +237,6 @@ async def create_backport_agent(
     enabled = os.getenv("BACKPORT_CONTEXT_MANAGEMENT", "false").lower() == "true"
     llm = get_chat_model()
     base_tools = [
-        ThinkTool(),
         RunShellCommandTool(options=local_tool_options),
         CreateTool(options=local_tool_options),
         ViewTool(options=local_tool_options),
@@ -305,14 +291,6 @@ async def create_backport_agent(
         tool_call_checker=get_tool_call_checker_config(),
         tools=base_tools,
         memory=UnconstrainedMemory(),
-        requirements=[
-            ConditionalRequirement(
-                ThinkTool,
-                force_at_step=1,
-                consecutive_allowed=False,
-                only_success_invocations=False,
-            ),
-        ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
         instructions=instructions,

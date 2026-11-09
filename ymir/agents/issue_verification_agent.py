@@ -9,7 +9,6 @@ from typing import Any
 
 from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
-from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field
 
@@ -127,7 +126,6 @@ async def _analyze_testing_results(
 ) -> TestingAnalystOutput:
     """Run the testing analyst sub-agent to analyze test results."""
     tools = [
-        ThinkTool(),
         *[t for t in gateway_tools if t.name == "get_jira_attachment"],
         ReadLogfileTool(),
         ReadReadmeTool(),

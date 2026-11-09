@@ -10,7 +10,6 @@ from beeai_framework.agents.requirement.requirements.conditional import (
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool, ToolError
-from beeai_framework.tools.think import ThinkTool
 from beeai_framework.utils.cancellation import AbortController
 from beeai_framework.workflows import Workflow
 from pydantic import BaseModel
@@ -229,19 +228,11 @@ def create_build_failure_agent(
         [t for t in mcp_tools if t.name in gateway_log_tools] if has_gateway_log_tools else []
     )
 
-    requirements = [
-        ConditionalRequirement(
-            ThinkTool,
-            force_at_step=1,
-            force_after=Tool,
-            consecutive_allowed=False,
-            only_success_invocations=False,
-        ),
-    ]
-    if has_gateway_log_tools:
-        requirements.append(
-            ConditionalRequirement("extract_log_snippets", only_after=[download_tool_name]),
-        )
+    requirements = (
+        [ConditionalRequirement("extract_log_snippets", only_after=[download_tool_name])]
+        if has_gateway_log_tools
+        else []
+    )
 
     # Gateway-downloaded logs are not in the agent sandbox. Use that path only
     # when both tools are available; otherwise retrieve logs locally from URLs.
@@ -262,7 +253,6 @@ def create_build_failure_agent(
         unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
-            ThinkTool(),
             *local_tools,
             *filtered_mcp_tools,
         ],

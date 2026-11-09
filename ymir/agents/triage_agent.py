@@ -16,7 +16,6 @@ from beeai_framework.agents.requirement.requirements.conditional import (
 from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
-from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field, ValidationError
 
@@ -768,7 +767,6 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
         unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
-            ThinkTool(),
             RunShellCommandTool(options=local_tool_options) if local_tool_options else RunShellCommandTool(),
             VersionMapperTool(),
         ]
@@ -792,12 +790,6 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> ReasoningAgen
         ],
         memory=UnconstrainedMemory(),
         requirements=[
-            ConditionalRequirement(
-                ThinkTool,
-                force_at_step=1,
-                consecutive_allowed=False,
-                only_success_invocations=False,
-            ),
             ConditionalRequirement("get_jira_details", min_invocations=1),
             ConditionalRequirement("get_maintainer_rules", only_after=["get_jira_details"]),
             ConditionalRequirement("get_shared_rules", only_after=["get_jira_details"]),

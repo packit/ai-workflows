@@ -15,7 +15,6 @@ from beeai_framework.memory.utils import extract_last_tool_call_pair
 from beeai_framework.runnable import runnable_entry
 from beeai_framework.template import PromptTemplate
 from beeai_framework.tools import AnyTool
-from beeai_framework.tools.think import ThinkTool
 from beeai_framework.utils.lists import cast_list
 from beeai_framework.utils.models import update_model
 from typing_extensions import Unpack
@@ -42,9 +41,9 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
     reasoning models (e.g., Anthropic extended thinking, OpenAI o-series).
 
     When ``unconstrained=False`` (default), behaves like RequirementAgent:
-    requirements are evaluated each iteration and ThinkTool is available.
+    requirements are evaluated each iteration.
 
-    When ``unconstrained=True``, requirements and ThinkTool are ignored and
+    When ``unconstrained=True``, requirements are ignored and
     tool_choice is always "auto", which is required by reasoning models.
     """
 
@@ -92,10 +91,7 @@ class ReasoningAgent(BaseAgent[ReasoningAgentOutput]):
         if notes:
             template_defaults["notes"] = "\n -".join(cast_list(notes))
         self._templates.system.update(defaults=template_defaults)
-        tools_list = list(tools or [])
-        if unconstrained:
-            tools_list = [t for t in tools_list if not isinstance(t, ThinkTool)]
-        self._tools = tools_list
+        self._tools = list(tools or [])
         self._meta = AgentMeta(name=name or "", description=description or "", tools=self._tools)
         self.runner_cls: type[ReasoningAgentRunner] = ReasoningAgentRunner
 

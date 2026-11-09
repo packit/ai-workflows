@@ -28,6 +28,9 @@ class PackageUpdateState(BaseModel):
     update_branch: str | None = Field(default=None)
     fork_url: str | None = Field(default=None)
     build_error: str | None = Field(default=None)
+    build_url: str | None = Field(
+        default=None, description="Link to the last submitted Copr build, for the MR description"
+    )
     log_result: LogOutputSchema | None = Field(default=None)
     canonical_title: str | None = Field(default=None, description="Resolved title shared by the issue family")
     changelog_entry_count: int | None = Field(
@@ -38,6 +41,37 @@ class PackageUpdateState(BaseModel):
     merge_request_newly_created: bool = Field(default=False)  # was the MR newly created?
     zstream_branch_created: str | None = Field(default=None)
     zstream_branch_warning: str | None = Field(default=None)
+
+
+def build_mr_note(
+    *,
+    build_url: str | None,
+    is_modular_issue: bool,
+    module_stream: str | None,
+) -> str:
+    """Build a section for the merge request description.
+
+    Includes the Copr build link (noting that Copr projects are temporary)
+    and any modular-package notes so reviewers have the context where they
+    review — in the MR description, not in Jira.
+    """
+    parts: list[str] = []
+    if build_url:
+        parts.append(f"Copr build: {build_url}\n*(Copr projects are temporary — this link may expire.)*")
+    if is_modular_issue:
+        if module_stream:
+            parts.append(
+                f"Modular package — Copr build was attempted with "
+                f"module stream `{module_stream}` enabled in the buildroot. "
+                "Please verify the build result before merging."
+            )
+        else:
+            parts.append(
+                "Modular package — the `module:stream` could not be determined, "
+                "so the Copr build ran without enabling a module stream. "
+                "Please verify the MR and build result manually."
+            )
+    return "\n\n".join(parts)
 
 
 class PackageUpdateStep:

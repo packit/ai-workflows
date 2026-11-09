@@ -1,8 +1,12 @@
 # Konflux build backend
 
 By default Ymir builds packages with Copr. Set `BUILD_BACKEND=konflux` to build
-on Konflux (`kflux-rhel-p01`) instead. This document covers the extra
-configuration that backend needs and how its service-account token is rotated.
+on Konflux (`kflux-rhel-p01`) instead. Modular packages stay on Copr either
+way: Konflux cannot enable a module stream, and there is no separate override.
+When the backend is Konflux, the gateway also registers Copr as
+`build_package_copr` and modular builds call that tool. This document covers
+the extra configuration that backend needs and how its service-account token
+is rotated.
 
 ## Environment
 
@@ -22,10 +26,11 @@ The namespace / service account / image repo defaults are baked into
 ## Build lifecycle
 
 Rebase, backport, inherited backport, MR update, and MR consolidation builds
-use a temporary branch on the package fork. The branch is deleted after the
-build returns, including on failure. A validated change is pushed to the live
-MR branch only during publication. Reruns reuse an existing open MR for that
-branch instead of closing it before validation.
+use a temporary branch on the package fork. That branch is deleted after the
+build returns, including on failure. Modular rebase and backport builds do not
+use it: they stay on Copr. A validated change is pushed to the live MR branch
+only during publication. Reruns reuse an existing open MR for that branch
+instead of closing it before validation.
 
 For agent validation, the gateway reads `ExclusiveArch` and `ExcludeArch` from
 the generated SRPM and requests one compatible Konflux build architecture. It

@@ -477,8 +477,28 @@ class TestBackportFixBuildErrorTemplate:
         assert "Do NOT attempt to build the package yourself" in result
         assert "build_srpm" in result
         assert "build_package" not in result
+        assert "module_stream" not in result
         assert "download_artifacts" not in result
         assert "extract_log_snippets" not in result
+
+    def test_modular_fix_tells_the_agent_which_stream_the_rebuild_enables(self):
+        result = render_template(
+            "backport/prompt_fix_build_error.j2",
+            BackportFixBuildInputSchema(
+                local_clone=Path("/tmp/clone"),
+                build_logs_dir=Path("/tmp/clone-build-logs"),
+                unpacked_sources=Path("/tmp/sources"),
+                package="postgresql",
+                dist_git_branch="c10s",
+                jira_issue="RHEL-12345",
+                upstream_patches=["https://example.com/p1.patch"],
+                build_error="No matching package to install: postgresql-server-devel",
+                module_stream="postgresql:16",
+            ),
+        )
+        assert 'module_stream="postgresql:16"' in result
+        assert "Do not call a build tool yourself" in result
+        assert "build_package" not in result
 
 
 class TestRebaseTemplate:

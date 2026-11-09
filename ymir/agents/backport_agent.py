@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from specfile import Specfile
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import is_konflux_backend, run_build
+from ymir.agents.build_agent import build_tool_name, run_build, use_konflux_backend
 from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
@@ -1446,6 +1446,7 @@ async def run_workflow(
                             upstream_patches=state.upstream_patches,
                             build_error=state.build_error,
                             triage_summary=state.triage_summary,
+                            module_stream=module_stream if is_modular_issue else None,
                         ),
                     ),
                     expected_output=BackportOutputSchema,
@@ -1507,7 +1508,17 @@ async def run_workflow(
                 target_branch=state.dist_git_branch,
                 specfile=state.spec_name,
             )
-            if is_konflux_backend():
+
+            async def _submit_build():
+                return await run_build(
+                    build_input=build_input,
+                    available_tools=gateway_tools,
+                    local_tool_options=local_tool_options,
+                    tool_name=build_tool_name(modular=is_modular_issue),
+                )
+
+            # Modular packages stay on Copr: Konflux cannot enable a module stream.
+            if use_konflux_backend(modular=is_modular_issue):
                 async with tasks.scratch_build_branch(
                     state.local_clone,
                     state.fork_url,
@@ -1515,17 +1526,9 @@ async def run_workflow(
                     state.inherit_local_commit,
                     gateway_tools,
                 ):
-                    build_result = await run_build(
-                        build_input=build_input,
-                        available_tools=gateway_tools,
-                        local_tool_options=local_tool_options,
-                    )
+                    build_result = await _submit_build()
             else:
-                build_result = await run_build(
-                    build_input=build_input,
-                    available_tools=gateway_tools,
-                    local_tool_options=local_tool_options,
-                )
+                build_result = await _submit_build()
             if build_result.build_url:
                 state.build_url = build_result.build_url
             if build_result.success:
@@ -1899,11 +1902,10 @@ async def run_workflow(
 
             The single build step for both backends: the scratch branch is pushed
             first so Konflux can build the ref, while Copr builds the generated
-            SRPM (run_build dispatches on BUILD_BACKEND and ignores the ref
-            fields). Modular issues pass module_stream so Copr enables it in the
-            buildroot. The MR is opened only after a green build; a failed build
-            loops back to fix_build_error (cherry-pick) or restarts the backport
-            (git am).
+            SRPM. Modular issues always use Copr, even when BUILD_BACKEND is
+            konflux, and pass module_stream so Copr enables it in the buildroot.
+            The MR is opened only after a green build; a failed build loops back
+            to fix_build_error (cherry-pick) or restarts the backport (git am).
             """
             if not state.backport_result or not state.backport_result.srpm_path:
                 logger.error("Cannot build: no valid backport result or SRPM path")
@@ -1944,27 +1946,29 @@ async def run_workflow(
                 target_branch=state.dist_git_branch,
                 specfile=state.spec_name,
             )
-            if is_konflux_backend():
+
+            async def _submit_build():
+                return await run_build(
+                    build_input=build_input,
+                    available_tools=gateway_tools,
+                    local_tool_options=local_tool_options,
+                    tool_name=build_tool_name(modular=is_modular_issue),
+                )
+
+            # Modular packages stay on Copr: Konflux cannot enable a module stream.
+            if use_konflux_backend(modular=is_modular_issue):
                 try:
                     async with tasks.scratch_build_branch(
                         state.local_clone, state.fork_url, state.update_branch, revision, gateway_tools
                     ):
-                        build_result = await run_build(
-                            build_input=build_input,
-                            available_tools=gateway_tools,
-                            local_tool_options=local_tool_options,
-                        )
+                        build_result = await _submit_build()
                 except Exception as error:
                     logger.warning("Could not validate Konflux scratch ref: %s", error)
                     state.backport_result.success = False
                     state.backport_result.error = f"Could not validate build ref: {error}"
                     return "comment_in_jira"
             else:
-                build_result = await run_build(
-                    build_input=build_input,
-                    available_tools=gateway_tools,
-                    local_tool_options=local_tool_options,
-                )
+                build_result = await _submit_build()
             if build_result.build_url:
                 state.build_url = build_result.build_url
             if build_result.success or build_result.is_timeout:

@@ -26,6 +26,8 @@ from ymir.agents.utils import (
 )
 from ymir.common.logging_setup import get_trajectory_writeable
 from ymir.common.models import (
+    MODULAR_COPR_BUILD_TOOL,
+    MODULAR_COPR_DOWNLOAD_TOOL,
     BuildFailureAnalysisInput,
     BuildFailureAnalysisOutput,
     BuildInputSchema,
@@ -50,6 +52,29 @@ def is_konflux_backend() -> bool:
     return build_backend() == "konflux"
 
 
+def use_konflux_backend(*, modular: bool = False) -> bool:
+    """Whether this build should use Konflux.
+
+    Modular packages stay on Copr until Konflux can enable a module stream.
+    There is no environment override: the choice is hardcoded.
+    """
+    if modular:
+        return False
+    return is_konflux_backend()
+
+
+def build_tool_name(*, modular: bool = False) -> str:
+    """Gateway tool that submits this build.
+
+    Non-modular builds use ``build_package`` (Copr or Konflux, whichever
+    BUILD_BACKEND selected). Modular builds use the dedicated Copr tool when
+    the default backend is Konflux.
+    """
+    if modular and is_konflux_backend():
+        return MODULAR_COPR_BUILD_TOOL
+    return "build_package"
+
+
 class BuildState(BaseModel):
     build_input: BuildInputSchema
     build_result: BuildResult | None = None
@@ -61,6 +86,7 @@ async def run_build(
     build_input: BuildInputSchema,
     available_tools: list[Tool],
     local_tool_options: dict[str, Any],
+    tool_name: str = "build_package",
 ) -> BuildOutputSchema:
     """Submit one build through the gateway, diagnosing only failures with logs.
 
@@ -68,13 +94,21 @@ async def run_build(
     particular, neither diagnosis nor a failed diagnosis resubmits the build.
     Callers retain ownership of timeout policy and workflow-level retries.
     A missing advertised build tool is reported as an infrastructure failure.
+    ``tool_name`` is ``build_package`` for the configured backend, or the
+    dedicated Copr tool when a modular package must not go to Konflux.
     """
+    copr_override = tool_name == MODULAR_COPR_BUILD_TOOL
     workflow = Workflow(BuildState, name="BuildWorkflow")
 
     async def execute_build(state: BuildState) -> str:
+        if copr_override:
+            logger.info(
+                "Building %s with Copr; Konflux does not support modular builds",
+                state.build_input.jira_issue,
+            )
         try:
             result = await run_tool(
-                "build_package",
+                tool_name,
                 available_tools=available_tools,
                 expected_output=BuildResult,
                 **state.build_input.model_dump(mode="json"),
@@ -106,8 +140,9 @@ async def run_build(
 
         # Copr advertises gzipped build logs; Konflux returns authenticated
         # Kubearchive pod-log URLs (no .log.gz suffix). Diagnose whenever the
-        # backend handed us any log URLs to inspect.
-        if is_konflux_backend():
+        # backend handed us any log URLs to inspect. A modular Copr build
+        # keeps the Copr rule even when BUILD_BACKEND is konflux.
+        if is_konflux_backend() and not copr_override:
             has_logs = bool(result.artifacts_urls)
         else:
             has_logs = any(urlsplit(url).path.endswith(".log.gz") for url in result.artifacts_urls or [])
@@ -120,7 +155,11 @@ async def run_build(
         if state.build_result is None or state.output is None:
             raise RuntimeError("Build failure diagnosis requires an existing build result")
         try:
-            analyst = create_build_failure_agent(available_tools, local_tool_options)
+            analyst = create_build_failure_agent(
+                available_tools,
+                local_tool_options,
+                download_tool_name=(MODULAR_COPR_DOWNLOAD_TOOL if copr_override else "download_artifacts"),
+            )
             response = await analyst.run(
                 render_template(
                     get_prompt(),
@@ -162,10 +201,15 @@ async def run_build(
     return response.state.output
 
 
-def get_instructions(*, has_extract_log_snippets: bool = False) -> str:
+def get_instructions(
+    *, has_extract_log_snippets: bool = False, download_tool_name: str = "download_artifacts"
+) -> str:
     return render_template(
         "build/instructions.j2",
-        BuildInstructionsInput(has_extract_log_snippets=has_extract_log_snippets),
+        BuildInstructionsInput(
+            has_extract_log_snippets=has_extract_log_snippets,
+            download_tool_name=download_tool_name,
+        ),
     )
 
 
@@ -173,8 +217,13 @@ def get_prompt() -> str:
     return "build/prompt.j2"
 
 
-def create_build_failure_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any]) -> ReasoningAgent:
-    gateway_log_tools = {"download_artifacts", "extract_log_snippets"}
+def create_build_failure_agent(
+    mcp_tools: list[Tool],
+    local_tool_options: dict[str, Any],
+    *,
+    download_tool_name: str = "download_artifacts",
+) -> ReasoningAgent:
+    gateway_log_tools = {download_tool_name, "extract_log_snippets"}
     has_gateway_log_tools = gateway_log_tools <= {t.name for t in mcp_tools}
     filtered_mcp_tools = (
         [t for t in mcp_tools if t.name in gateway_log_tools] if has_gateway_log_tools else []
@@ -191,7 +240,7 @@ def create_build_failure_agent(mcp_tools: list[Tool], local_tool_options: dict[s
     ]
     if has_gateway_log_tools:
         requirements.append(
-            ConditionalRequirement("extract_log_snippets", only_after=["download_artifacts"]),
+            ConditionalRequirement("extract_log_snippets", only_after=[download_tool_name]),
         )
 
     # Gateway-downloaded logs are not in the agent sandbox. Use that path only
@@ -221,5 +270,8 @@ def create_build_failure_agent(mcp_tools: list[Tool], local_tool_options: dict[s
         requirements=requirements,
         middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
-        instructions=get_instructions(has_extract_log_snippets=has_gateway_log_tools),
+        instructions=get_instructions(
+            has_extract_log_snippets=has_gateway_log_tools,
+            download_tool_name=download_tool_name,
+        ),
     )

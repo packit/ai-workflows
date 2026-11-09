@@ -16,12 +16,14 @@ from ymir.agents import backport_agent, tasks
 from ymir.common.models import BackportOutputSchema, BuildInputSchema, BuildOutputSchema, LogOutputSchema
 
 
-async def _run_from_build_step(monkeypatch, *, is_modular_issue, module_stream):
+async def _run_from_build_step(monkeypatch, *, is_modular_issue, module_stream, backend=None):
     """Start the real workflow at commit_push_and_build and capture the BuildInputSchema used."""
     captured_build_inputs = []
+    captured_tool_names = []
 
-    async def _fake_run_build(*, build_input, **_kwargs):
+    async def _fake_run_build(*, build_input, tool_name="build_package", **_kwargs):
         captured_build_inputs.append(build_input)
+        captured_tool_names.append(tool_name)
         return BuildOutputSchema(success=True, error=None)
 
     async def _fake_commit_changes(*_args, **_kwargs):
@@ -42,7 +44,10 @@ async def _run_from_build_step(monkeypatch, *, is_modular_issue, module_stream):
     flexmock(backport_agent).should_receive("create_log_agent").and_return(None)
     flexmock(backport_agent).should_receive("get_mock_local_tool_env").and_return(None)
     monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
-    monkeypatch.delenv("BUILD_BACKEND", raising=False)
+    if backend is None:
+        monkeypatch.delenv("BUILD_BACKEND", raising=False)
+    else:
+        monkeypatch.setenv("BUILD_BACKEND", backend)
 
     run_workflow = Workflow.run
 
@@ -81,30 +86,51 @@ async def _run_from_build_step(monkeypatch, *, is_modular_issue, module_stream):
     )
 
     assert len(captured_build_inputs) == 1
-    return captured_build_inputs[0]
+    return captured_build_inputs[0], captured_tool_names[0]
 
 
 @pytest.mark.asyncio
 async def test_modular_issue_attempts_build_with_module_stream_enabled(monkeypatch):
     """No flag: a resolved module:stream must always reach the Copr build call."""
-    build_input = await _run_from_build_step(
+    build_input, tool_name = await _run_from_build_step(
         monkeypatch, is_modular_issue=True, module_stream="postgresql:16"
     )
 
     assert isinstance(build_input, BuildInputSchema)
     assert build_input.module_stream == "postgresql:16"
+    assert tool_name == "build_package"
 
 
 @pytest.mark.asyncio
 async def test_non_modular_issue_builds_without_module_stream(monkeypatch):
-    build_input = await _run_from_build_step(monkeypatch, is_modular_issue=False, module_stream=None)
+    build_input, tool_name = await _run_from_build_step(
+        monkeypatch, is_modular_issue=False, module_stream=None
+    )
 
     assert build_input.module_stream is None
+    assert tool_name == "build_package"
 
 
 @pytest.mark.asyncio
 async def test_modular_issue_without_resolved_stream_still_builds(monkeypatch):
     """If the module:stream couldn't be parsed, the build is still attempted (just unmodularized)."""
-    build_input = await _run_from_build_step(monkeypatch, is_modular_issue=True, module_stream=None)
+    build_input, tool_name = await _run_from_build_step(
+        monkeypatch, is_modular_issue=True, module_stream=None
+    )
 
     assert build_input.module_stream is None
+    assert tool_name == "build_package"
+
+
+@pytest.mark.asyncio
+async def test_modular_issue_stays_on_copr_when_backend_is_konflux(monkeypatch):
+    """Konflux cannot enable a module stream, so modular builds call the Copr tool."""
+    build_input, tool_name = await _run_from_build_step(
+        monkeypatch,
+        is_modular_issue=True,
+        module_stream="postgresql:16",
+        backend="konflux",
+    )
+
+    assert build_input.module_stream == "postgresql:16"
+    assert tool_name == "build_package_copr"

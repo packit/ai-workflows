@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ymir.common import load_rhel_config
 from ymir.common.base_utils import init_kerberos_ticket
-from ymir.common.models import BuildResult
+from ymir.common.models import MODULAR_COPR_BUILD_TOOL, MODULAR_COPR_DOWNLOAD_TOOL, BuildResult
 from ymir.common.validators import AbsolutePath
 from ymir.common.version_utils import construct_internal_branch_name, parse_branch_name, parse_rhel_version
 from ymir.tools.base import CloneableTool as Tool
@@ -466,3 +466,29 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Dow
                     rmtree(target_path)
                     raise
         return DownloadArtifactsToolOutput(result=DownloadArtifactsResult(target_path=target_path))
+
+
+class ModularCoprBuildTool(BuildPackageTool):
+    """Copr build under a distinct name so it can be registered beside Konflux.
+
+    Konflux cannot enable a module stream. Modular packages keep using this
+    tool when BUILD_BACKEND=konflux; both implementations cannot share
+    ``build_package``.
+    """
+
+    name = MODULAR_COPR_BUILD_TOOL
+    description = """
+    Builds the specified SRPM in Copr.
+    Modular packages use this while Konflux cannot enable a module stream.
+    """
+
+
+class ModularCoprDownloadTool(DownloadArtifactsTool):
+    """Copr artifact download under a distinct name, paired with ModularCoprBuildTool."""
+
+    name = MODULAR_COPR_DOWNLOAD_TOOL
+    description = """
+    Downloads Copr build artifacts to a temporary location.
+    Used for modular package builds when the default backend is Konflux.
+    Any gzipped log files will be automatically decompressed.
+    """

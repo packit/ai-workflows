@@ -177,7 +177,10 @@ Backport (including Y-stream inheritance), rebase, MR updates, and MR
 consolidation use a shared `BuildWorkflow`. Its `execute_build` step calls
 `build_package` through the existing MCP gateway. The default backend submits
 and polls Copr; `BUILD_BACKEND=konflux` instead builds the pushed fork commit
-as a scratch Konflux PipelineRun. The discovered spec filename is passed to
+as a scratch Konflux PipelineRun. Modular packages are the exception: they
+always build with Copr, even when `BUILD_BACKEND=konflux`, because Konflux
+cannot enable a module stream. The gateway then also exposes Copr as
+`build_package_copr`. The discovered spec filename is passed to
 Konflux when it differs from the package name. The generated SRPM determines
 which single architecture Konflux validates, preferring x86_64 when supported. See
 [Konflux backend](docs/konflux-backend.md) for configuration and

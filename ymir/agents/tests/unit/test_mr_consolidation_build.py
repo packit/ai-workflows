@@ -85,6 +85,7 @@ async def test_build_project_identifier_preserves_jira_metadata(
                     "srpm_path": {"type": "string"},
                     "dist_git_branch": {"type": "string"},
                     "jira_issue": {"type": "string"},
+                    "module_stream": {"type": ["string", "null"]},
                     # Optional Konflux build-from-ref fields; Copr ignores them
                     # but BuildInputSchema.model_dump() always emits them.
                     "git_url": {"type": ["string", "null"]},
@@ -160,6 +161,7 @@ async def test_build_project_identifier_preserves_jira_metadata(
             "srpm_path": "/git-repos/package/package-1-1.src.rpm",
             "dist_git_branch": "c10s",
             "jira_issue": project,
+            "module_stream": None,
             "git_url": None,
             "revision": None,
             "package_name": None,
@@ -329,6 +331,7 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(
         "srpm_path": "/git-repos/package/package-1-1.src.rpm",
         "dist_git_branch": "c10s",
         "jira_issue": "RHEL-12345",
+        "module_stream": None,
         "git_url": fork_url,
         "revision": revision,
         "package_name": package,

@@ -352,3 +352,77 @@ async def test_fix_build_error_keeps_old_url_when_no_build_was_attempted(monkeyp
     )
 
     assert captured_build_url["url"] == old_build_url
+
+
+@pytest.mark.asyncio
+async def test_fix_build_error_prompt_includes_module_stream(monkeypatch, tmp_path):
+    """The repair prompt must name the stream the workflow rebuild enables."""
+    local_clone = tmp_path / "pkg"
+    local_clone.mkdir()
+    unpacked_sources = tmp_path / "pkg-upstream"
+    unpacked_sources.mkdir()
+
+    fix_output = BackportOutputSchema(
+        success=True,
+        status="Regenerated the SRPM",
+        srpm_path=Path("/tmp/test.src.rpm"),
+        error=None,
+    )
+    captured = {}
+
+    async def _fake_run(prompt, *_a, **_kw):
+        captured["prompt"] = prompt
+        return SimpleNamespace(last_message=SimpleNamespace(text=fix_output.model_dump_json()))
+
+    async def _fake_create_backport_agent(*_a, **_kw):
+        agent = flexmock()
+        agent.should_receive("run").replace_with(_fake_run).once()
+        return agent
+
+    @asynccontextmanager
+    async def gateway(*args, **kwargs):
+        yield []
+
+    flexmock(backport_agent).should_receive("mcp_tools").replace_with(gateway)
+    flexmock(backport_agent).should_receive("create_log_agent").and_return(None)
+    flexmock(backport_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(backport_agent).should_receive("create_backport_agent").replace_with(_fake_create_backport_agent)
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+
+    run_workflow = Workflow.run
+
+    def start_at_fix_build(workflow, state, options=None):
+        if workflow.name == "BackportWorkflow":
+            state.backport_result = BackportOutputSchema(
+                success=False, status="", srpm_path=Path("/tmp/test.src.rpm"), error="build failed"
+            )
+            state.build_error = "No matching package to install: postgresql-server-devel"
+            state.used_cherry_pick_workflow = True
+            state.local_clone = local_clone
+            state.unpacked_sources = unpacked_sources
+            state.incremental_fix_attempts = 0
+            workflow.set_start("fix_build_error")
+
+            async def stop(_state):
+                return Workflow.END
+
+            workflow.steps["update_release"].handler = stop
+            workflow.steps["comment_in_jira"].handler = stop
+        return run_workflow(workflow, state, options)
+
+    monkeypatch.setattr(Workflow, "run", start_at_fix_build)
+
+    await backport_agent.run_workflow(
+        package="postgresql",
+        dist_git_branch="c10s",
+        upstream_patches=[],
+        jira_issue="RHEL-999",
+        cve_id=None,
+        dry_run=True,
+        backport_agent_factory=lambda *_: None,
+        is_modular_issue=True,
+        module_stream="postgresql:16",
+    )
+
+    assert 'module_stream="postgresql:16"' in captured["prompt"]
+    assert "build_package" not in captured["prompt"]

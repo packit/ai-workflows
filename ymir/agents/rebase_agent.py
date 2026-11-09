@@ -20,7 +20,7 @@ from beeai_framework.workflows import Workflow
 from pydantic import Field
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import is_konflux_backend, run_build
+from ymir.agents.build_agent import build_tool_name, run_build, use_konflux_backend
 from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
@@ -474,7 +474,9 @@ async def run_workflow(
             )
 
         async def run_build_agent(state):
-            if is_konflux_backend():
+            # Modular packages stay on Copr: Konflux cannot enable a module stream.
+            konflux_build = use_konflux_backend(modular=is_modular_issue)
+            if konflux_build:
                 revision = await _prepare_konflux_rebase_ref(state)
                 build_input = BuildInputSchema(
                     srpm_path=state.rebase_result.srpm_path,
@@ -494,21 +496,22 @@ async def run_workflow(
                     jira_issue=state.jira_issue,
                     module_stream=module_stream if is_modular_issue else None,
                 )
-            if is_konflux_backend():
-                async with tasks.scratch_build_branch(
-                    state.local_clone, state.fork_url, state.update_branch, revision, gateway_tools
-                ):
-                    build_result = await run_build(
-                        build_input=build_input,
-                        available_tools=gateway_tools,
-                        local_tool_options=local_tool_options,
-                    )
-            else:
-                build_result = await run_build(
+
+            async def _submit_build():
+                return await run_build(
                     build_input=build_input,
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
+                    tool_name=build_tool_name(modular=is_modular_issue),
                 )
+
+            if konflux_build:
+                async with tasks.scratch_build_branch(
+                    state.local_clone, state.fork_url, state.update_branch, revision, gateway_tools
+                ):
+                    build_result = await _submit_build()
+            else:
+                build_result = await _submit_build()
             if build_result.build_url:
                 state.build_url = build_result.build_url
             if build_result.success:
@@ -644,7 +647,7 @@ async def run_workflow(
 
         async def commit_push_and_open_mr(state):
             try:
-                if is_konflux_backend() and state.rebase_base_head:
+                if use_konflux_backend(modular=is_modular_issue) and state.rebase_base_head:
                     # Collapse the Konflux build-candidate commit into the
                     # final MR commit: soft-reset to the pristine base so the
                     # already-staged tree commits as a single commit.

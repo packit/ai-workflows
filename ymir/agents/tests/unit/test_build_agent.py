@@ -530,6 +530,15 @@ def test_build_backend_helpers(monkeypatch):
     assert build_agent.build_backend() == "copr"
     assert not build_agent.is_konflux_backend()
 
+    monkeypatch.setenv("BUILD_BACKEND", "konflux")
+    assert build_agent.use_konflux_backend(modular=False)
+    assert not build_agent.use_konflux_backend(modular=True)
+    assert build_agent.build_tool_name(modular=False) == "build_package"
+    assert build_agent.build_tool_name(modular=True) == "build_package_copr"
+
+    monkeypatch.setenv("BUILD_BACKEND", "copr")
+    assert build_agent.build_tool_name(modular=True) == "build_package"
+
 
 @pytest.mark.asyncio
 async def test_konflux_log_urls_trigger_diagnosis(build_input, monkeypatch):
@@ -555,6 +564,73 @@ async def test_konflux_log_urls_trigger_diagnosis(build_input, monkeypatch):
 
     assert not result.success
     assert result.error == "Konflux diagnosis"
+
+
+@pytest.mark.asyncio
+async def test_modular_copr_override_uses_copr_tool_and_logs(build_input, monkeypatch):
+    """A modular build under BUILD_BACKEND=konflux calls Copr and diagnoses .log.gz only."""
+    monkeypatch.setenv("BUILD_BACKEND", "konflux")
+    seen = {}
+
+    async def _mock_submit(*args, **_kwargs):
+        seen["tool"] = args[0]
+        return BuildResult(
+            success=False,
+            error_message="Build failed",
+            artifacts_urls=["https://copr.example/builder-live.log.gz"],
+            build_url="https://copr.devel.redhat.com/coprs/bot/RHEL-123/build/9/",
+        )
+
+    async def _mock_analyst_run(*_args, **_kwargs):
+        return SimpleNamespace(last_message=SimpleNamespace(text='{"error": "Copr diagnosis"}'))
+
+    def _mock_factory(*_args, **kwargs):
+        seen["download_tool_name"] = kwargs.get("download_tool_name")
+        return SimpleNamespace(run=_mock_analyst_run)
+
+    tool = SimpleNamespace(name="build_package_copr")
+    flexmock(build_agent).should_receive("run_tool").replace_with(_mock_submit).once()
+    flexmock(build_agent).should_receive("create_build_failure_agent").replace_with(_mock_factory).once()
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+
+    result = await build_agent.run_build(
+        build_input=build_input,
+        available_tools=[tool],
+        local_tool_options={"working_directory": Path("/git-repos/package")},
+        tool_name="build_package_copr",
+    )
+
+    assert seen["tool"] == "build_package_copr"
+    assert seen["download_tool_name"] == "download_artifacts_copr"
+    assert result.error == "Copr diagnosis"
+    assert result.build_url == "https://copr.devel.redhat.com/coprs/bot/RHEL-123/build/9/"
+
+
+@pytest.mark.asyncio
+async def test_modular_copr_override_ignores_urls_without_log_suffix(build_input, monkeypatch):
+    """Konflux pod-log URLs are not Copr logs, so a modular Copr build does not diagnose them."""
+    monkeypatch.setenv("BUILD_BACKEND", "konflux")
+
+    async def _mock_submit(*_args, **_kwargs):
+        return BuildResult(
+            success=False,
+            error_message="Build failed",
+            artifacts_urls=["https://kubearchive/api/v1/namespaces/ymir-tenant/pods/p/log"],
+        )
+
+    flexmock(build_agent).should_receive("run_tool").replace_with(_mock_submit).once()
+    flexmock(build_agent).should_receive("create_build_failure_agent").never()
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+
+    result = await build_agent.run_build(
+        build_input=build_input,
+        available_tools=[SimpleNamespace(name="build_package_copr")],
+        local_tool_options={"working_directory": Path("/git-repos/package")},
+        tool_name="build_package_copr",
+    )
+
+    assert not result.success
+    assert result.error == "Build failed"
 
 
 @pytest.mark.asyncio

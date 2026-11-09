@@ -785,6 +785,11 @@ class TriageOutputSchema(BaseModel):
 # Build Agent Schemas
 # ============================================================================
 
+# Konflux registers build_package itself. Modular packages stay on Copr, so the
+# gateway also advertises Copr under these names when BUILD_BACKEND=konflux.
+MODULAR_COPR_BUILD_TOOL = "build_package_copr"
+MODULAR_COPR_DOWNLOAD_TOOL = "download_artifacts_copr"
+
 
 class BuildInstructionsInput(BaseModel):
     """Input schema for the build agent instructions template."""
@@ -792,6 +797,10 @@ class BuildInstructionsInput(BaseModel):
     has_extract_log_snippets: bool = Field(
         default=False,
         description="Whether both gateway log download and extraction tools are available",
+    )
+    download_tool_name: str = Field(
+        default="download_artifacts",
+        description="Gateway tool that downloads the failed build's logs",
     )
 
 

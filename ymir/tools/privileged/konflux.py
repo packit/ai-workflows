@@ -80,6 +80,12 @@ OCI_ARTIFACT_EXPIRES_AFTER = "1d"
 # appstudio-pipelines-scc the pipeline pods require, and whose image repo
 # receives the scratch build. git-url + revision are set per run, so this single
 # Component backs every package. Overridable via env for other deployments.
+# API and pipeline defaults for the production Konflux cluster.
+DEFAULT_API_URL = "https://api.kflux-rhel-p01.fc38.p1.openshiftapps.com:6443"
+PRODUCTION_KUBEARCHIVE_URL = (
+    "https://kubearchive-api-server-product-kubearchive.apps.kflux-rhel-p01.fc38.p1.openshiftapps.com"
+)
+DEFAULT_PIPELINE_URL = "https://gitlab.cee.redhat.com/rhel-on-konflux/rpmbuild-pipeline.git"
 DEFAULT_NAMESPACE = "ymir-tenant"
 DEFAULT_SERVICE_ACCOUNT = "build-pipeline-ymir-scratch-build"
 DEFAULT_IMAGE_REPO = "quay.io/redhat-user-workloads/ymir-tenant/ymir-scratch-build"
@@ -114,8 +120,8 @@ def _load_config() -> KonfluxConfig:
             missing.append(name)
         return value
 
-    api_url = required("KONFLUX_API_URL").rstrip("/")
-    pipeline_url = required("KONFLUX_PIPELINE_URL")
+    api_url = (os.environ.get("KONFLUX_API_URL", "").strip() or DEFAULT_API_URL).rstrip("/")
+    pipeline_url = os.environ.get("KONFLUX_PIPELINE_URL", "").strip() or DEFAULT_PIPELINE_URL
     gitlab_token = required("GITLAB_TOKEN")
 
     # The SA token may be supplied either as a file (KONFLUX_TOKEN_FILE, read
@@ -150,6 +156,14 @@ def _load_config() -> KonfluxConfig:
         )
 
     kubearchive_url = os.environ.get("KUBEARCHIVE_API_URL", "").strip().rstrip("/") or None
+    if (
+        kubearchive_url
+        and urlsplit(api_url).netloc.lower() != urlsplit(DEFAULT_API_URL).netloc.lower()
+        and urlsplit(kubearchive_url).hostname == urlsplit(PRODUCTION_KUBEARCHIVE_URL).hostname
+    ):
+        raise ToolErrorWithContext(
+            "KUBEARCHIVE_API_URL targets production but KONFLUX_API_URL is a different cluster"
+        )
     namespace = os.environ.get("KONFLUX_NAMESPACE", "").strip() or DEFAULT_NAMESPACE
     service_account = os.environ.get("KONFLUX_SERVICE_ACCOUNT", "").strip() or DEFAULT_SERVICE_ACCOUNT
     container_image = os.environ.get("KONFLUX_IMAGE_REPO", "").strip().rstrip("/") or DEFAULT_IMAGE_REPO

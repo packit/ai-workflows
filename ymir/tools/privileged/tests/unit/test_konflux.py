@@ -329,6 +329,77 @@ async def test_build_remaps_centos_target_to_rhel_branch():
 # --------------------------------------------------------------------------- #
 # Config loading                                                              #
 # --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("url_value", [None, "", "   "])
+def test_load_config_defaults_api_and_pipeline_but_disables_archive(monkeypatch, url_value):
+    for name in ("KONFLUX_API_URL", "KONFLUX_PIPELINE_URL", "KUBEARCHIVE_API_URL"):
+        if url_value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, url_value)
+    monkeypatch.setenv("GITLAB_TOKEN", "glpat")
+    monkeypatch.setenv("KONFLUX_TOKEN", "sa-token")
+    monkeypatch.delenv("KONFLUX_TOKEN_FILE", raising=False)
+
+    cfg = konflux_mod._load_config()
+
+    assert cfg.api_url == "https://api.kflux-rhel-p01.fc38.p1.openshiftapps.com:6443"
+    assert cfg.pipeline_url == "https://gitlab.cee.redhat.com/rhel-on-konflux/rpmbuild-pipeline.git"
+    assert cfg.kubearchive_url is None
+
+
+@pytest.mark.parametrize("archive_value", [None, "", "   "])
+@pytest.mark.parametrize(
+    "method,resource", [("get_pipelinerun", "pipelineruns"), ("get_taskrun", "taskruns")]
+)
+def test_custom_konflux_api_without_archive_never_sends_token_to_fallback(
+    monkeypatch, archive_value, method, resource
+):
+    monkeypatch.setenv("KONFLUX_API_URL", "https://custom-konflux.example.com")
+    monkeypatch.setenv("GITLAB_TOKEN", "glpat")
+    monkeypatch.setenv("KONFLUX_TOKEN", "sa-token")
+    monkeypatch.delenv("KONFLUX_TOKEN_FILE", raising=False)
+    if archive_value is None:
+        monkeypatch.delenv("KUBEARCHIVE_API_URL", raising=False)
+    else:
+        monkeypatch.setenv("KUBEARCHIVE_API_URL", archive_value)
+
+    config = konflux_mod._load_config()
+    assert config.kubearchive_url is None
+    client = KonfluxClient(config, "ymir-tenant")
+    calls = []
+
+    def _get(*args, **kwargs):
+        calls.append((args[-1], kwargs["headers"]["Authorization"]))
+        return flexmock(status_code=404, reason="Not Found")
+
+    flexmock(requests.Session).should_receive("get").replace_with(_get).once()
+    assert getattr(client, method)("run-1") is None
+    assert calls == [
+        (
+            f"https://custom-konflux.example.com/apis/tekton.dev/v1/namespaces/ymir-tenant/{resource}/run-1",
+            "Bearer sa-token",
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "archive_url",
+    [
+        "https://kubearchive-api-server-product-kubearchive.apps.kflux-rhel-p01.fc38.p1.openshiftapps.com",
+        "https://KUBEARCHIVE-API-SERVER-PRODUCT-KUBEARCHIVE.apps.kflux-rhel-p01.fc38.p1.openshiftapps.com/",
+    ],
+)
+def test_custom_konflux_api_rejects_production_archive(monkeypatch, archive_url):
+    monkeypatch.setenv("KONFLUX_API_URL", "https://custom-konflux.example.com")
+    monkeypatch.setenv("KUBEARCHIVE_API_URL", archive_url)
+    monkeypatch.setenv("GITLAB_TOKEN", "glpat")
+    monkeypatch.setenv("KONFLUX_TOKEN", "sa-token")
+    monkeypatch.delenv("KONFLUX_TOKEN_FILE", raising=False)
+
+    with pytest.raises(konflux_mod.ToolErrorWithContext, match="KUBEARCHIVE_API_URL"):
+        konflux_mod._load_config()
+
+
 def test_load_config_missing_env_raises(monkeypatch):
     for var in (
         "KONFLUX_API_URL",

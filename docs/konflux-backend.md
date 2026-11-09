@@ -1,8 +1,7 @@
 # Konflux build backend
 
-By default Ymir builds packages with Copr. Set `BUILD_BACKEND=konflux` to build
-on Konflux (`kflux-rhel-p01`) instead. Modular packages stay on Copr either
-way: Konflux cannot enable a module stream, and there is no separate override.
+Local Compose and production OpenShift deployments use Konflux (`kflux-rhel-p01`)
+by default. Set `BUILD_BACKEND=copr` to use Copr instead. Modular packages stay on Copr either way: Konflux cannot enable a module stream, and there is no separate override.
 When the backend is Konflux, the gateway also registers Copr as
 `build_package_copr` and modular builds call that tool. This document covers
 the extra configuration that backend needs and how its service-account token
@@ -10,14 +9,20 @@ is rotated.
 
 ## Environment
 
-Set in `.secrets/mcp-gateway.env` (see `templates/mcp-gateway.env`):
+The API and pipeline URLs default to the production Konflux cluster. The
+template sets them explicitly; existing local env files with missing or blank
+values use the same defaults. Set nonempty values in
+`.secrets/mcp-gateway.env` to target a different deployment. Kubearchive is
+optional: a missing or blank `KUBEARCHIVE_API_URL` disables the 404 fallback.
+Set it explicitly to the archive for the selected cluster. The gateway rejects
+the production archive URL when `KONFLUX_API_URL` targets another cluster.
 
-| Variable | Example |
+| Variable | Default or requirement |
 | -------- | ------- |
 | `KONFLUX_API_URL` | `https://api.kflux-rhel-p01.fc38.p1.openshiftapps.com:6443` |
-| `KUBEARCHIVE_API_URL` | `https://kubearchive-api-server-product-kubearchive.apps.kflux-rhel-p01.fc38.p1.openshiftapps.com` |
+| `KUBEARCHIVE_API_URL` | Optional; production archive: `https://kubearchive-api-server-product-kubearchive.apps.kflux-rhel-p01.fc38.p1.openshiftapps.com` |
 | `KONFLUX_PIPELINE_URL` | `https://gitlab.cee.redhat.com/rhel-on-konflux/rpmbuild-pipeline.git` |
-| `GITLAB_TOKEN` | (already required) used for the per-build git-auth secret |
+| `GITLAB_TOKEN` | Required; used for the per-build git-auth secret |
 
 The namespace / service account / image repo defaults are baked into
 `konflux.py`; override only for a different deployment via `KONFLUX_NAMESPACE`,
@@ -89,10 +94,23 @@ bot-0` cannot mint its own token anyway; see below.)
    ```bash
    oc login https://api.prod-scale-spoke1-dc-rdu3.prod-scale-mgmthub1-dc-rdu3.itup.redhat.com:6443
    ```
-2. Pull the token into the file the gateway container reads:
+2. `make start`, `make start-detached`, and e2e Make targets pull the token into
+   the file the gateway container reads automatically. For other local Konflux
+   builds, run:
    ```bash
    make konflux-token
    ```
+
+These targets refresh the token before starting Compose when their selected
+`BUILD_BACKEND` is `konflux`, the local default. Set `BUILD_BACKEND=copr` in the
+project `.env` or pass it to `make` to use Copr. Use a literal `copr` or
+`konflux` value in `.env`. A shell environment or Make command-line value takes
+precedence over `.env`; without either, Konflux is
+used. The triage e2e target selects the backend after installing any
+TMT-provided `.env` and `.secrets`. They stop if the cluster login
+or Secret read fails, so they do not continue with a missing token. Even suites
+that do not build need this because the gateway validates the token at startup.
+`make start BUILD_BACKEND=copr` starts with Copr and skips token retrieval.
 
 `make konflux-token` runs `scripts/refresh-konflux-token.sh`, which verifies you
 are logged in to the gateway cluster, then decodes

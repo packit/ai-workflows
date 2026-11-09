@@ -217,8 +217,8 @@ are not requeued.
 
 Backport (including Y-stream inheritance), rebase, MR updates, and MR
 consolidation use a shared `BuildWorkflow`. Its `execute_build` step calls
-`build_package` through the existing MCP gateway. The default backend submits
-and polls Copr; `BUILD_BACKEND=konflux` instead builds the pushed fork commit
+`build_package` through the existing MCP gateway. `BUILD_BACKEND=copr` submits
+and polls Copr; `BUILD_BACKEND=konflux` builds the pushed fork commit
 as a scratch Konflux PipelineRun. Modular packages are the exception: they
 always build with Copr, even when `BUILD_BACKEND=konflux`, because Konflux
 cannot enable a module stream. The gateway then also exposes Copr as
@@ -354,12 +354,23 @@ cp -r templates .secrets
 
 - Follow the comments to fill out the needed credentials.
 
-For local Konflux builds, log in to the gateway OpenShift cluster and run
-`make konflux-token` before setting `BUILD_BACKEND=konflux`. This writes the
-short-lived service-account token to `.secrets/konflux/token`, which the gateway
-reads for each build. Refresh it when a build returns 401; a gateway restart is
-not needed. See [Konflux backend setup](docs/konflux-backend.md) for the login
-command, required access, and remaining configuration.
+Local Compose defaults to Konflux. For Konflux runs, log in to the gateway
+OpenShift cluster before running `make start`, `make start-detached`, or an e2e
+Make target. These targets refresh the token automatically before starting
+Compose when `BUILD_BACKEND=konflux`. Set `BUILD_BACKEND=copr` in the project
+`.env` or pass it to `make` to use Copr without token retrieval. Use a literal
+`copr` or `konflux` value in `.env`. A shell environment or Make command-line
+value takes precedence over `.env`; without
+either, Konflux is used. The triage e2e target selects the backend after
+installing any TMT-provided `.env` and `.secrets`. This is needed even for suites
+that do not submit builds because the gateway validates its Konflux token at
+startup. For other local Konflux builds, refresh the token manually before
+starting the build.
+
+This writes the short-lived service-account token to `.secrets/konflux/token`,
+which the gateway reads for each build. Refresh it when a build returns 401; a
+gateway restart is not needed. See [Konflux backend setup](docs/konflux-backend.md)
+for the login command, required access, and remaining configuration.
 
 The `mcp-gateway` requires a `keytab` file.
 

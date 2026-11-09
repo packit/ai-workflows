@@ -24,7 +24,8 @@ Security-relevant assumptions this system makes about its environment:
 - **Build validation can trigger a Konflux build directly.** With
   `BUILD_BACKEND=konflux`, agents call `build_package` through the privileged
   MCP gateway, which creates and polls a scratch PipelineRun from a pushed
-  fork commit. The default backend is Copr. The human-applied MR label
+  fork commit. Local Compose and production OpenShift deployments select
+  Konflux by default; Copr remains an explicit option. The human-applied MR label
   `feature::draft-builds::enabled` gates the separate GitLab CI draft/release
   build path, not agent build validation. Agents can automatically apply
   build-*target* labels (`target::zstream`, added by

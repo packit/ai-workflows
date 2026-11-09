@@ -31,7 +31,7 @@ from ymir.agents.constants import (
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
-from ymir.agents.package_update_steps import PackageUpdateState
+from ymir.agents.package_update_steps import PackageUpdateState, build_mr_note
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
@@ -509,6 +509,8 @@ async def run_workflow(
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
                 )
+            if build_result.build_url:
+                state.build_url = build_result.build_url
             if build_result.success:
                 return "update_release"
             if build_result.is_timeout:
@@ -661,6 +663,12 @@ async def run_workflow(
                     if state.consolidation_summary
                     else ""
                 )
+                build_section = build_mr_note(
+                    build_url=state.build_url,
+                    is_modular_issue=is_modular_issue,
+                    module_stream=module_stream,
+                )
+                build_section_block = f"{build_section}\n\n" if build_section else ""
                 (
                     state.merge_request_url,
                     state.merge_request_newly_created,
@@ -684,6 +692,7 @@ async def run_workflow(
                         f"{wrap_details('Rebase status', state.rebase_log[-1])}"
                         f"{consolidation_text}"
                         f"\n\n{branch_note}"
+                        f"{build_section_block}"
                         f"{mr_description_footer(state.package, all_issues)}"
                     ),
                     available_tools=gateway_tools,
@@ -710,16 +719,6 @@ async def run_workflow(
                 comment_text = (
                     state.merge_request_url if state.merge_request_url else state.rebase_result.status
                 )
-                if is_modular_issue:
-                    comment_text += (
-                        "\n\n*Note:* Modular package — Copr build was attempted with "
-                        f"module stream `{module_stream}` enabled in the buildroot. "
-                        "Please verify the MR and build result before shipping."
-                        if module_stream
-                        else "\n\n*Note:* Modular package support is in development. "
-                        "The module:stream could not be determined, so no build was "
-                        "attempted — please verify the MR and trigger a build manually."
-                    )
                 # Post same success message to all issues in parallel with per-issue error handling
                 await post_comments_to_all_issues(
                     primary_issue=state.jira_issue,

@@ -1,7 +1,5 @@
-from beeai_framework.agents.requirement.requirements.conditional import ConditionalRequirement
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
-from beeai_framework.tools.think import ThinkTool
 
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
@@ -27,9 +25,8 @@ def create_title_agent() -> ReasoningAgent:
         llm=get_chat_model(),
         unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
-        tools=[ThinkTool()],
+        tools=[],
         memory=UnconstrainedMemory(),
-        requirements=[ConditionalRequirement(ThinkTool, force_at_step=1)],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
         instructions=get_instructions(),

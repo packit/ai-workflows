@@ -1,10 +1,8 @@
 from typing import Any
 
-from beeai_framework.agents.requirement.requirements.conditional import ConditionalRequirement
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
-from beeai_framework.tools.think import ThinkTool
 
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
@@ -42,7 +40,6 @@ def create_log_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> Reaso
         unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
-            ThinkTool(),
             RunShellCommandTool(options=local_tool_options),
             CreateTool(options=local_tool_options),
             ViewTool(options=local_tool_options),
@@ -54,15 +51,6 @@ def create_log_agent(_: list[Tool], local_tool_options: dict[str, Any]) -> Reaso
             AddChangelogEntryTool(options=local_tool_options),
         ],
         memory=UnconstrainedMemory(),
-        requirements=[
-            ConditionalRequirement(
-                ThinkTool,
-                force_at_step=1,
-                force_after=Tool,
-                consecutive_allowed=False,
-                only_success_invocations=False,
-            ),
-        ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
         instructions=get_instructions(),

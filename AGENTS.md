@@ -82,7 +82,12 @@ make check-unprivileged-tools-in-container
 
 ### Konflux Builds
 
-- **Local token prerequisite**: Before using `BUILD_BACKEND=konflux`, log in to the gateway OpenShift cluster and run `make konflux-token`. The short-lived token is stored in `.secrets/konflux/token`; refresh it if a build returns 401. See [Konflux backend setup](docs/konflux-backend.md).
+- **Local token prerequisite**: Local Podman Compose defaults to
+  `BUILD_BACKEND=konflux`. Log in to the gateway OpenShift cluster before
+  running `make start`, `make start-detached`, or an e2e Make target; these
+  targets refresh the token automatically when using Konflux. The short-lived
+  token is stored in `.secrets/konflux/token`; refresh it if a build returns
+  401. See [Konflux backend setup](docs/konflux-backend.md).
 
 ### CI Pipeline
 - **COPY <<EOF variable trap**: Shell variables in COPY instructions don't expand. Use `RUN` with shell redirection instead

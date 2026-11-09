@@ -116,7 +116,7 @@ def _select_build_tools(tool_options: dict) -> list:
         # SA token file (e.g. the rotation CronJob has not populated it yet) or
         # any other misconfiguration refuses the process rather than surfacing
         # only on the first build. _load_config raises on an empty/unreadable
-        # token file and on missing API URLs / GITLAB_TOKEN.
+        # token file and on missing GITLAB_TOKEN. Konflux URLs have defaults.
         try:
             _load_config()
         except Exception as e:

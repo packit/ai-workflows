@@ -386,8 +386,12 @@ oc -n jotnar-ymir--jotnar-ymir get secret konflux-bot-0-token
 
 `deployment-mcp-gateway.yml` mounts `konflux-bot-0-token` as a directory and
 sets `KONFLUX_TOKEN_FILE=/home/mcp/konflux/token`, together with
-`KONFLUX_API_URL`, `KUBEARCHIVE_API_URL`, and `KONFLUX_PIPELINE_URL`. The
-gateway stays on Copr until `BUILD_BACKEND=konflux` is selected separately.
+`KONFLUX_API_URL`, `KUBEARCHIVE_API_URL`, and `KONFLUX_PIPELINE_URL`.
+The production manifests select Konflux in both `deployment-mcp-gateway.yml`
+and `configmap-agents-env.yml`. The gateway uses the setting to register the
+Konflux build tools; backport, rebase, and MR-consolidation agents use it to
+prepare the pushed commit that Konflux builds. Restart those agent deployments
+after changing the ConfigMap so their pods read the new value.
 
 ## API Authentication (OIDC)
 

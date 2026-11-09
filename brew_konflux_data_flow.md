@@ -4,8 +4,9 @@ This document describes how the AI Workflows system interacts with Brew (Koji) a
 
 Konflux has two distinct paths here: agent scratch-build validation through the
 privileged MCP gateway when `BUILD_BACKEND=konflux`, and GitLab CI draft/release
-builds after a human enables them on an MR. Copr is the default agent validation
-backend.
+builds after a human enables them on an MR. Local Compose and production
+OpenShift deployments select Konflux for agent validation by default; Copr can
+be selected explicitly.
 
 ## System Architecture
 

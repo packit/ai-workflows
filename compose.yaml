@@ -11,7 +11,7 @@ x-beeai-env: &beeai-env
   MAX_CONCURRENT_TASKS: ${MAX_CONCURRENT_TASKS:-1}
   LOG_BUFFER_SIZE: ${LOG_BUFFER_SIZE:-0}
   DRY_RUN: ${DRY_RUN:-false}
-  BUILD_BACKEND: ${BUILD_BACKEND:-copr}
+  BUILD_BACKEND: ${BUILD_BACKEND:-konflux}
   JIRA_DRY_RUN: ${JIRA_DRY_RUN:-false}
   JIRA_ALLOW_STATUS_CHANGES: ${JIRA_ALLOW_STATUS_CHANGES:-false}
   ERRATA_ALLOW_STATUS_CHANGES: ${ERRATA_ALLOW_STATUS_CHANGES:-false}
@@ -129,7 +129,7 @@ services:
       # env_file, so `${FORK_NAMESPACE:-}` would blank the secret whenever the
       # host var is unset, breaking fork push auth (_is_private_gitlab). A host
       # override is still possible via `podman-compose run -e FORK_NAMESPACE=...`.
-      # Selects the build tool set (copr default | konflux). Konflux also needs
+      # Selects the build tool set (konflux default | copr). Konflux also needs
       # the KONFLUX_* vars (API/PIPELINE urls + token) and GITLAB_TOKEN, supplied
       # via .secrets/mcp-gateway.env. Every build targets one fixed, generic
       # Component in ymir-tenant (ymir-scratch-build): its build-service-provisioned
@@ -138,7 +138,7 @@ services:
       # The target defaults (namespace/SA/image repo) are baked into konflux.py and
       # need no env; override only for a different deployment via KONFLUX_NAMESPACE,
       # KONFLUX_SERVICE_ACCOUNT, and KONFLUX_IMAGE_REPO.
-      - BUILD_BACKEND=${BUILD_BACKEND:-copr}
+      - BUILD_BACKEND=${BUILD_BACKEND:-konflux}
       # Konflux SA token path (read fresh per build, so a rotated file is
       # picked up without restarting the gateway). The token value lives in
       # the mounted file below, never in git. See docs/konflux-backend.md.
@@ -155,10 +155,10 @@ services:
       - .secrets/keytab:/home/mcp/keytab:ro,z,U
       - ${GIT_REPOS_HOST:-git-repos}:${GIT_REPO_BASEPATH:-/git-repos}:z
       - .secrets/rhel-config.json:/home/mcp/rhel-config.json:ro,z,U
-      # Rotated Konflux SA token (konflux backend only). Refresh the existing
-      # file in place: replacing a file bind mount requires a gateway restart.
-      # If you are not using the konflux build backend, seed the mount with
-      # the empty placeholder:
+      # Rotated Konflux SA token. The start and Konflux e2e Make targets refresh
+      # it automatically. Keep the existing file during refresh: replacing it
+      # would require a gateway restart. For a Copr override, seed the empty
+      # placeholder if no token file exists:
       #   cp templates/konflux/token .secrets/konflux/token
       - ${KONFLUX_TOKEN_HOST:-.secrets/konflux/token}:/home/mcp/konflux-token:ro,z,U
     command: ["python", "-m", "ymir.tools.privileged.gateway"]

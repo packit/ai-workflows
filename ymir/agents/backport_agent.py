@@ -114,7 +114,12 @@ from ymir.common.models import (
 )
 from ymir.common.reproducer_lock import resolve_clone_root
 from ymir.common.utils import get_all_patches, init_sentry
-from ymir.common.version_utils import detect_modular_issue, is_older_zstream, parse_rhel_version
+from ymir.common.version_utils import (
+    detect_modular_issue,
+    is_older_zstream,
+    parse_module_stream,
+    parse_rhel_version,
+)
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.distgit_detector import DistgitDetectorTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
@@ -850,6 +855,7 @@ async def run_workflow(
     inherit_agent_factory=None,
     workspace_id: UUID | None = None,
     is_modular_issue=False,
+    module_stream=None,
 ):
     if max_incremental_fix_attempts is None:
         max_incremental_fix_attempts = max_build_attempts
@@ -1367,8 +1373,9 @@ async def run_workflow(
                 # A freshly staged backport refreshes the release and stages the
                 # regenerated patches (update_release -> stage_changes), then the
                 # single build step (commit_push_and_build) commits, pushes and
-                # builds for both backends. Modular issues skip the build in
-                # stage_changes. A failed build routes back to fix_build_error.
+                # builds for both backends, including modular issues (with
+                # module_stream enabled in the Copr buildroot when it was parsed).
+                # A failed build routes back to fix_build_error.
                 return "update_release"
             return "comment_in_jira"
 
@@ -1488,6 +1495,7 @@ async def run_workflow(
                 srpm_path=state.backport_result.srpm_path,
                 dist_git_branch=state.dist_git_branch,
                 jira_issue=state.jira_issue,
+                module_stream=module_stream if is_modular_issue else None,
                 git_url=state.fork_url,
                 revision=state.inherit_local_commit,
                 package_name=state.package,
@@ -1604,11 +1612,8 @@ async def run_workflow(
             if state.inherit_change:
                 return "commit_inherited_change"
             if state.log_result:
-                # Modular issues are published without a build; everything else
-                # commits, pushes and builds via the single commit_push_and_build
-                # step (identical for Copr and Konflux).
-                if is_modular_issue:
-                    return "commit_push_and_open_mr"
+                # Modular and non-modular issues share commit_push_and_build.
+                # Copr enables module_stream in the buildroot when it was parsed.
                 return "commit_push_and_build"
             return "run_log_agent"
 
@@ -1870,12 +1875,13 @@ async def run_workflow(
         async def commit_push_and_build(state):
             """Build the backport, then push and open the MR on success.
 
-            The single build step for non-modular issues on both backends: the
-            scratch branch is pushed first so Konflux can build the ref, while Copr
-            builds the generated SRPM (run_build dispatches on BUILD_BACKEND and
-            ignores the ref fields). The MR is opened only after a green build; a
-            failed build loops back to fix_build_error (cherry-pick) or restarts
-            the backport (git am).
+            The single build step for both backends: the scratch branch is pushed
+            first so Konflux can build the ref, while Copr builds the generated
+            SRPM (run_build dispatches on BUILD_BACKEND and ignores the ref
+            fields). Modular issues pass module_stream so Copr enables it in the
+            buildroot. The MR is opened only after a green build; a failed build
+            loops back to fix_build_error (cherry-pick) or restarts the backport
+            (git am).
             """
             if not state.backport_result or not state.backport_result.srpm_path:
                 logger.error("Cannot build: no valid backport result or SRPM path")
@@ -1909,6 +1915,7 @@ async def run_workflow(
                 srpm_path=state.backport_result.srpm_path,
                 dist_git_branch=state.dist_git_branch,
                 jira_issue=state.jira_issue,
+                module_stream=module_stream if is_modular_issue else None,
                 git_url=state.fork_url,
                 revision=revision,
                 package_name=state.package,
@@ -2058,9 +2065,13 @@ async def run_workflow(
                     )
                 if is_modular_issue:
                     comment_text += (
-                        "\n\n*Note:* Modular package support is in development. "
-                        "No build was performed — please verify the MR and trigger "
-                        "a build manually."
+                        "\n\n*Note:* Modular package — Copr build was attempted with "
+                        f"module stream `{module_stream}` enabled in the buildroot. "
+                        "Please verify the MR and build result before shipping."
+                        if module_stream
+                        else "\n\n*Note:* Modular package support is in development. "
+                        "The module:stream could not be determined, so no build was "
+                        "attempted — please verify the MR and trigger a build manually."
                     )
                 is_error = False
             else:
@@ -2230,12 +2241,30 @@ async def main() -> None:
                 raw_downstream_component=triage_state.get("raw_downstream_component"),
                 downstream_component=triage_state.get("downstream_component"),
             )
+            _module_stream = None
+            if _modular:
+                parsed_module = parse_module_stream(
+                    triage_state.get("jira_summary"),
+                    triage_state.get("downstream_component"),
+                )
+                if parsed_module:
+                    _module_stream = f"{parsed_module[0]}:{parsed_module[1]}"
+                else:
+                    logger.warning(
+                        "Issue %s detected as modular but module:stream could not be parsed "
+                        "from summary=%r, downstream_component=%r — build will proceed "
+                        "without enabling a module in the buildroot",
+                        backport_data.jira_issue,
+                        triage_state.get("jira_summary"),
+                        triage_state.get("downstream_component"),
+                    )
             logger.info(
-                "Modular check for %s: jira_summary=%r, downstream_component=%r, result=%s",
+                "Modular check for %s: jira_summary=%r, downstream_component=%r, result=%s, module_stream=%s",
                 backport_data.jira_issue,
                 triage_state.get("jira_summary"),
                 triage_state.get("downstream_component"),
                 _modular,
+                _module_stream,
             )
             logger.info(
                 f"Processing backport for package: {backport_data.package}, "
@@ -2331,6 +2360,7 @@ async def main() -> None:
                         task_metadata=triage_state,
                         workspace_id=task.execution_id,
                         is_modular_issue=_modular,
+                        module_stream=_module_stream,
                     )
                     logger.info(
                         f"Backport processing completed for {backport_data.jira_issue}, "

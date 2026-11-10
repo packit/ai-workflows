@@ -12,10 +12,12 @@ is rotated.
 The API and pipeline URLs default to the production Konflux cluster. The
 template sets them explicitly; existing local env files with missing or blank
 values use the same defaults. Set nonempty values in
-`.secrets/mcp-gateway.env` to target a different deployment. Kubearchive is
-optional: a missing or blank `KUBEARCHIVE_API_URL` disables the 404 fallback.
-Set it explicitly to the archive for the selected cluster. The gateway rejects
-the production archive URL when `KONFLUX_API_URL` targets another cluster.
+`.secrets/mcp-gateway.env` to target a different deployment. The local template
+enables the production Kubearchive 404 fallback. When changing
+`KONFLUX_API_URL`, also set `KUBEARCHIVE_API_URL` to the matching cluster's
+archive or leave it blank to disable fallback. A missing or blank archive URL
+also disables fallback in existing env files. The gateway rejects the production
+archive URL when `KONFLUX_API_URL` targets another cluster.
 
 | Variable | Default or requirement |
 | -------- | ------- |

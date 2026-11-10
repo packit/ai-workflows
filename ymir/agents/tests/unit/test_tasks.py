@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import pytest
+from beeai_framework.tools import ToolError
 from flexmock import flexmock
 
 from ymir.agents import tasks as agent_tasks
@@ -1393,6 +1394,20 @@ async def test_get_jira_issue_metadata_returns_defaults_on_failure():
     assert status is None
 
 
+@pytest.mark.asyncio
+async def test_get_jira_issue_metadata_reraises_when_requested():
+    """A strict caller must not see unreadable labels as an empty label list."""
+
+    async def _mock_run_tool(*_args, **_kwargs):
+        raise RuntimeError("connection refused")
+
+    flexmock(agent_tasks).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
+
+    with pytest.raises(RuntimeError, match="connection refused"):
+        await get_jira_issue_metadata("RHEL-99999", raise_on_error=True)
+
+
 MOCK_RHEL_CONFIG = {
     "current_y_streams": {"9": "rhel-9.9", "10": "rhel-10.3"},
     "current_z_streams": {"8": "rhel-8.10.z", "9": "rhel-9.8.z", "10": "rhel-10.2.z"},
@@ -2084,14 +2099,18 @@ async def test_fetch_auto_processing_config_parses_triage_only():
 
 @pytest.mark.asyncio
 async def test_fetch_auto_processing_config_raises_on_fetch_failure():
-    """A GitLab error must not silently fall back to the full pipeline."""
+    """A GitLab error must not silently fall back to the full pipeline.
+
+    The rules tool raises on a failed fetch, so the error cannot be mistaken
+    for file content or for a package without a config.
+    """
 
     async def _mock_run_tool(*_args, **_kwargs):
-        return "Failed to fetch maintainer rules (HTTP 500): internal server error"
+        raise ToolError("Unexpected HTTP status 500")
 
     flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_run_tool)
 
-    with pytest.raises(agent_tasks.MaintainerRulesFetchError):
+    with pytest.raises(ToolError, match="HTTP status 500"):
         await fetch_auto_processing_config("bash", [])
 
 

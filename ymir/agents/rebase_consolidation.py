@@ -304,6 +304,10 @@ class SiblingRebaseAnalysis(BaseModel):
         return self
 
 
+class SiblingLabelsUnreadableError(Exception):
+    """Raised when a sibling's labels cannot be read, so discovery is incomplete."""
+
+
 async def queue_siblings_for_triage(
     primary_issue: str,
     rebase_data: RebaseData,
@@ -328,6 +332,11 @@ async def queue_siblings_for_triage(
 
     Returns:
         Number of siblings queued for triage (or would be queued in dry-run)
+
+    Raises:
+        SiblingLabelsUnreadableError: When a candidate's labels cannot be read.
+            Discovery is then incomplete, so the run must retry rather than let
+            the primary rebase without a potential sibling.
     """
     if not rebase_data.fix_version:
         logger.info(f"No fix_version for {primary_issue}, skipping sibling queue")
@@ -380,7 +389,12 @@ async def queue_siblings_for_triage(
             # Defensive check for non-retriable terminal labels (should already be filtered by JQL,
             # but check again in case of Jira indexing delays or race conditions).
             # Per jira_label_workflow_routing.md: FAILED labels are retriable, ERRORED block retry.
-            candidate_labels, _ = await tasks.get_jira_issue_metadata(candidate_key)
+            try:
+                candidate_labels, _ = await tasks.get_jira_issue_metadata(candidate_key, raise_on_error=True)
+            except Exception as e:
+                # Skipping would let the primary rebase without this sibling and
+                # split a shared rebase, so retry the whole triage instead.
+                raise SiblingLabelsUnreadableError(candidate_key) from e
             terminal_labels = {
                 JiraLabels.REBASE_SIBLING.value,
                 JiraLabels.TRIAGED_REBASE.value,
@@ -479,6 +493,8 @@ async def queue_siblings_for_triage(
                 f"{'[DRY-RUN] Would queue' if dry_run else 'Queued'} sibling {candidate_key} for triage"
             )
 
+        except SiblingLabelsUnreadableError:
+            raise
         except Exception as e:
             import traceback
 

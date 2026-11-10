@@ -778,7 +778,7 @@ async def test_queued_sibling_keeps_its_triage_only_marker(monkeypatch):
             return {"is_cve": True, "eligibility": "immediately", "reason": "tracked"}
         raise AssertionError(f"unexpected tool {name}")
 
-    async def get_metadata(_issue_key):
+    async def get_metadata(_issue_key, *, raise_on_error=False):
         return [JiraLabels.TRIAGE_ONLY.value], None
 
     async def record(*_args, **_kwargs):
@@ -818,3 +818,55 @@ async def test_queued_sibling_keeps_its_triage_only_marker(monkeypatch):
     task = json.loads(payload)
     assert task["triage_only"] is True
     assert task["user_triggered"] is True
+
+
+@pytest.mark.asyncio
+async def test_unreadable_sibling_labels_retry_instead_of_splitting_the_rebase(monkeypatch):
+    """A sibling whose labels cannot be read must fail the discovery.
+
+    Skipping it would let the primary rebase alone and split a shared rebase, so
+    the run retries and discovers the sibling on the next attempt.
+    """
+    pushed = []
+    read_kwargs = []
+
+    async def run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            return [{"key": "RHEL-500", "fields": {"labels": []}}]
+        if name == "check_cve_triage_eligibility":
+            return {"is_cve": True, "eligibility": "immediately", "reason": "tracked"}
+        raise AssertionError(f"unexpected tool {name}")
+
+    async def get_metadata(_issue_key, **kwargs):
+        read_kwargs.append(kwargs)
+        raise RuntimeError("Jira unavailable")
+
+    class FakeRedis:
+        async def lpush(self, queue, payload):
+            pushed.append((queue, payload))
+
+    @asynccontextmanager
+    async def fake_redis_client(_url):
+        yield FakeRedis()
+
+    async def fake_fix_await(value):
+        return await value
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
+    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
+    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+
+    with pytest.raises(rebase_consolidation.SiblingLabelsUnreadableError):
+        await rebase_consolidation.queue_siblings_for_triage(
+            primary_issue="RHEL-100",
+            rebase_data=RebaseData(
+                package="bash", version="5.2", jira_issue="RHEL-100", fix_version="rhel-10.3.z"
+            ),
+            available_tools=[],
+            user_triggered=True,
+        )
+
+    assert pushed == []
+    assert read_kwargs == [{"raise_on_error": True}]

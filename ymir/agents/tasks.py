@@ -406,10 +406,6 @@ class InvalidReleaseBumpingConfigError(Exception):
     """Raised when ymir.yaml exists but the release_bumping section cannot be parsed."""
 
 
-class MaintainerRulesFetchError(Exception):
-    """Raised when the rules repository could not be read, as opposed to missing the file."""
-
-
 class InvalidBranchCreationConfigError(Exception):
     """Raised when ymir.yaml exists but the branch_creation section cannot be parsed."""
 
@@ -427,7 +423,6 @@ async def fetch_branch_creation_config(
     Fetch failures propagate so callers can retry.
 
     Raises:
-        MaintainerRulesFetchError: When the rules repository could not be read.
         InvalidBranchCreationConfigError: When the file exists but the
             ``branch_creation`` section does not conform to the expected schema.
 
@@ -446,8 +441,6 @@ async def fetch_branch_creation_config(
     )
 
     outcome = classify_rules_output(raw)
-    if outcome is RulesOutcome.FETCH_FAILED:
-        raise MaintainerRulesFetchError(raw)
     if outcome is RulesOutcome.NOT_FOUND:
         return PackageBranchCreationConfig()
 
@@ -493,9 +486,6 @@ async def fetch_auto_processing_config(
 
     Returns:
         Parsed auto-processing config.
-
-    Raises:
-        MaintainerRulesFetchError: When the rules repository could not be read.
     """
     raw = await run_tool(
         "get_maintainer_rules",
@@ -505,8 +495,6 @@ async def fetch_auto_processing_config(
     )
 
     outcome = classify_rules_output(raw)
-    if outcome is RulesOutcome.FETCH_FAILED:
-        raise MaintainerRulesFetchError(raw)
     if outcome is RulesOutcome.NOT_FOUND:
         return PackageAutoProcessingConfig()
 
@@ -566,9 +554,6 @@ async def fetch_release_bumping_config(
         return PackageReleaseBumpingConfig()
 
     outcome = classify_rules_output(raw)
-    if outcome is RulesOutcome.FETCH_FAILED:
-        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, raw)
-        return PackageReleaseBumpingConfig()
     if outcome is RulesOutcome.NOT_FOUND:
         return PackageReleaseBumpingConfig()
 
@@ -1012,8 +997,15 @@ async def change_jira_status(
     )
 
 
-async def get_jira_issue_metadata(jira_issue: str) -> tuple[list[str], str | None]:
-    """Fetch labels and status for a Jira issue in a single API call."""
+async def get_jira_issue_metadata(
+    jira_issue: str, *, raise_on_error: bool = False
+) -> tuple[list[str], str | None]:
+    """Fetch labels and status for a Jira issue in a single API call.
+
+    By default a failure is logged and reported as an empty label list. Pass
+    ``raise_on_error=True`` where the caller must not mistake unreadable labels
+    for an issue that has none, e.g. when a label decides the processing mode.
+    """
     try:
         async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
             details = await run_tool(
@@ -1025,6 +1017,8 @@ async def get_jira_issue_metadata(jira_issue: str) -> tuple[list[str], str | Non
             status = details.get("fields", {}).get("status", {}).get("name")
             return labels, status
     except Exception as e:
+        if raise_on_error:
+            raise
         logger.warning(f"Failed to get metadata for {jira_issue}: {e}")
         return [], None
 
@@ -1812,9 +1806,6 @@ async def fetch_consolidation_config(
         return PackageConsolidationConfig()
 
     outcome = classify_rules_output(raw)
-    if outcome is RulesOutcome.FETCH_FAILED:
-        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, raw)
-        return PackageConsolidationConfig()
     if outcome is RulesOutcome.NOT_FOUND:
         return PackageConsolidationConfig()
 
@@ -1905,9 +1896,6 @@ async def fetch_reproducer_config(
         return PackageReproducerConfig()
 
     outcome = classify_rules_output(raw)
-    if outcome is RulesOutcome.FETCH_FAILED:
-        logger.warning("Failed to fetch ymir.yaml for %s: %s", package, raw)
-        return PackageReproducerConfig()
     if outcome is RulesOutcome.NOT_FOUND:
         return PackageReproducerConfig()
 

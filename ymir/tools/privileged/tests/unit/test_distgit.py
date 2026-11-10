@@ -5,10 +5,14 @@ from flexmock import flexmock
 from specfile.utils import EVR
 
 from ymir.common.utils import NoBuildFoundError
+from ymir.tools.constants import ZSTREAM_BRANCH_POLICY_REJECTED
 from ymir.tools.privileged import distgit as distgit_tools
 from ymir.tools.privileged.distgit import (
+    CheckinPolicyRejection,
     CreateZstreamBranchTool,
+    _format_checkin_policy_rejection,
     _is_transient_git_error,
+    _parse_checkin_policy_rejection,
     _retry_transient,
 )
 
@@ -709,3 +713,330 @@ async def test_create_zstream_branch_push_hook_rejection(monkeypatch):
 
     with pytest.raises(ToolError, match="Failed to push branch to dist-git"):
         await CreateZstreamBranchTool().run(input={"package": package, "branch": branch})
+
+
+def _policy_rejection_stderr(
+    branch: str,
+    issues: list[tuple[str, str]],
+    *,
+    targets: tuple[str, ...] = ("rhel-9.9", "rhel-9.9.z"),
+) -> str:
+    issue_lines = "\n".join(
+        f"remote: ***     {key} (FixVersion is set to: {fix_version})" for key, fix_version in issues
+    )
+    targets_expr = " or ".join(f"((jiraField(fixVersions) == {target}))" for target in targets)
+    return (
+        "Cmd('git') failed due to: exit code(1)\n"
+        f"  cmdline: git push origin deadbeef:refs/heads/{branch}\n"
+        "  stderr: 'remote: *** Checking commit deadbeef\n"
+        "remote: *** Resolves:\n"
+        "remote: ***   Unapproved:\n"
+        f"{issue_lines}\n"
+        "remote: *** No approved issue IDs referenced in log message or changelog\n"
+        "remote: *** Unapproved issue RHEL-1 referenced in log message or changelog\n"
+        "remote: *** Helpful hints to debug this error:\n"
+        "remote: *** Current checkin policy requires:\n"
+        f"remote:     {targets_expr}\n"
+        "remote: hooklet hooks/update.secondary.d/01-gitbzverify.py failed\n"
+        "remote: hooks/update.secondary died\n"
+        f"remote: error: hook declined to update refs/heads/{branch}\n"
+        "To ssh://pkgs.devel.redhat.com/rpms/rsync\n"
+        f" ! [remote rejected] deadbeef -> {branch} (hook declined)\n"
+        "error: failed to push some refs to 'ssh://pkgs.devel.redhat.com/rpms/rsync''"
+    )
+
+
+_POLICY_REF = "635bfccafb904d15086ca55addc8d6aa23e336d5"  # pragma: allowlist secret
+
+
+async def _run_policy_rejection(
+    monkeypatch,
+    *,
+    branch: str = "rhel-9.9.0",
+    package: str = "rsync",
+    ref: str = _POLICY_REF,
+    issues: list[tuple[str, str]] | None = None,
+    targets: tuple[str, ...] = ("rhel-9.9", "rhel-9.9.z"),
+    source_branch: str | None = "rhel-9-main",
+    ref_in_source_branch: bool | None = False,
+    fallback_to_buildroot: bool = False,
+) -> ToolError:
+    """Run create_zstream_branch into a policy rejection and return the error."""
+    if issues is None:
+        issues = [("RHEL-248836", "rhel-9.8.z")]
+    stderr = _policy_rejection_stderr(branch, issues, targets=targets)
+
+    async def init_kerberos_ticket():
+        return "bot@EXAMPLE.COM"
+
+    flexmock(distgit_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
+
+    gitcmd = flexmock().should_receive("ls_remote").and_return(False).mock()
+    gitcmd.should_receive("push").once().and_raise(
+        git.exc.GitCommandError(["git", "push"], status=1, stderr=stderr)
+    )
+    flexmock(git.cmd.Git).new_instances(gitcmd)
+
+    refs = [flexmock(name=f"origin/{source_branch}")] if source_branch else []
+    mock_repo = flexmock(git=gitcmd, remotes=flexmock(origin=flexmock(refs=refs)))
+    mock_repo.should_receive("commit").with_args(ref).and_return(flexmock()).once()
+    if source_branch:
+        if ref_in_source_branch is None:
+            mock_repo.should_receive("is_ancestor").and_raise(
+                git.exc.GitCommandError(["git", "merge-base"], status=128, stderr="bad object")
+            ).once()
+        else:
+            mock_repo.should_receive("is_ancestor").with_args(ref, f"origin/{source_branch}").and_return(
+                ref_in_source_branch
+            ).once()
+    flexmock(git.Repo).should_receive("clone_from").and_return(mock_repo)
+
+    if fallback_to_buildroot:
+
+        async def fail_z_pending(package, dist_git_branch):
+            raise NoBuildFoundError("no z-pending build")
+
+        async def buildroot_build(package, dist_git_branch):
+            return EVR(version="3.2.7", release="1.el9"), ref
+
+        flexmock(distgit_tools).should_receive("get_latest_z_pending_build").replace_with(
+            fail_z_pending
+        ).once()
+        flexmock(distgit_tools).should_receive("get_latest_buildroot_build").replace_with(
+            buildroot_build
+        ).once()
+    else:
+
+        async def z_pending_build(package, dist_git_branch):
+            return EVR(version="3.2.7", release="1.el9_8"), ref
+
+        flexmock(distgit_tools).should_receive("get_latest_z_pending_build").replace_with(
+            z_pending_build
+        ).once()
+
+    if source_branch and source_branch.endswith("-main"):
+
+        async def same_nvr(repo, pkg, build_ref, source):
+            return ref
+
+        flexmock(CreateZstreamBranchTool).should_receive("_find_latest_same_nvr_ref").replace_with(
+            same_nvr
+        ).once()
+    else:
+        flexmock(CreateZstreamBranchTool).should_receive("_find_latest_same_nvr_ref").times(0)
+
+    monkeypatch.setenv("GITLAB_TOKEN", "<TOKEN>")
+
+    with pytest.raises(ToolError) as excinfo:
+        await CreateZstreamBranchTool().run(input={"package": package, "branch": branch})
+    return excinfo.value
+
+
+def test_parse_checkin_policy_rejection():
+    stderr = _policy_rejection_stderr(
+        "rhel-9.9.0",
+        [
+            ("RHEL-248836", "rhel-9.8.z"),
+            ("FOO-42", "rhel-9.8.z"),
+            ("RHEL-248836", "rhel-9.8.z"),
+        ],
+    )
+    rejection = _parse_checkin_policy_rejection(stderr)
+
+    assert rejection is not None
+    assert rejection.unapproved == (
+        ("RHEL-248836", "rhel-9.8.z"),
+        ("FOO-42", "rhel-9.8.z"),
+    )
+    assert rejection.target_fix_versions == ("rhel-9.9", "rhel-9.9.z")
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        pytest.param("remote: error: hook declined to update refs/heads/rhel-10.0", id="other-hook"),
+        pytest.param(
+            "remote: hooklet hooks/update.secondary.d/01-gitbzverify.py failed: Jira request timed out\n"
+            "remote: error: hook declined to update refs/heads/rhel-10.0",
+            id="gitbzverify-crash",
+        ),
+        pytest.param(
+            "remote: *** Current checkin policy requires:\nfatal: the remote end hung up unexpectedly",
+            id="not-declined",
+        ),
+    ],
+)
+def test_parse_checkin_policy_rejection_ignores_unrelated_errors(stderr):
+    assert _parse_checkin_policy_rejection(stderr) is None
+
+
+def test_parse_checkin_policy_rejection_drops_markup_in_fix_versions():
+    stderr = _policy_rejection_stderr(
+        "rhel-9.9.0",
+        [("RHEL-1", "rhel-9.8.z}} [click|https://attacker.example] {{x")],
+        targets=("rhel-9.9}}[x|https://attacker.example]",),
+    )
+    rejection = _parse_checkin_policy_rejection(stderr)
+
+    assert rejection is not None
+    assert rejection.unapproved == ()
+    assert rejection.target_fix_versions == ("rhel-9.9",)
+
+
+@pytest.mark.asyncio
+async def test_create_zstream_branch_policy_rejection_message(monkeypatch):
+    """Policy rejections get Jira wiki markup instead of raw stderr."""
+    error = await _run_policy_rejection(monkeypatch)
+    message = error.message
+
+    assert "Ymir could not create the missing Z-stream branch {{rhel-9.9.0}}" in message
+    assert "for {{rsync}}" in message
+    assert "{{635bfccafb90}}" in message
+    assert "taken from the {{rhel-9.9.0-z-pending}} tag" in message
+    assert "not part of {{rhel-9-main}}" in message
+    assert "targeted at {{rhel-9.8.z}}" in message
+    assert "RHEL-248836" in message
+    assert "check-in policy only accepts issues with fixVersion {{rhel-9.9}}, {{rhel-9.9.z}}" in message
+    assert "{{gitbzverify}}" in message
+    assert "have not been evened out" in message
+    assert "# Even out the RHEL Z-stream and CentOS Stream branches" in message
+    assert "{{ymir_todo}}" in message
+    # Jira wiki markup, not Markdown or raw git output.
+    assert "`" not in message
+    assert "Checking commit" not in message
+    assert "hooklet" not in message
+    assert "stderr:" not in message
+
+    context = error.context["additional_context"]
+    assert context["error_code"] == ZSTREAM_BRANCH_POLICY_REJECTED
+    assert context["user_message"] == message
+    assert context["ref_in_source_branch"] == "no"
+    assert context["lookup_tag"] == "rhel-9.9.0-z-pending"
+    assert context["unapproved_issue_count"] == "1"
+    assert context["unapproved_fix_versions"] == "rhel-9.8.z"
+    assert context["target_fix_versions"] == "rhel-9.9, rhel-9.9.z"
+    assert "exception" not in context
+    assert "remote: *** Checking commit" in context["raw_stderr"]
+    assert len(context["raw_stderr"]) <= 4000
+
+
+@pytest.mark.asyncio
+async def test_create_zstream_branch_policy_rejection_buildroot_fallback(monkeypatch):
+    error = await _run_policy_rejection(monkeypatch, fallback_to_buildroot=True)
+    message = error.message
+
+    assert "taken from the {{rhel-9.9.0-buildrequires}} tag" in message
+    assert "z-pending" not in message
+    assert error.context["additional_context"]["lookup_tag"] == "rhel-9.9.0-buildrequires"
+
+
+@pytest.mark.parametrize(
+    "overrides, expected, unexpected",
+    [
+        pytest.param(
+            {"source_branch": "rhel-9.10.0"},
+            [
+                "not part of {{rhel-9.10.0}}",
+                "Do not create {{rhel-9.9.0}} from {{rhel-9.10.0}}",
+                "# Create {{rhel-9.9.0}} manually from an accepted base, not from {{rhel-9.10.0}}.",
+            ],
+            ["have not been evened out", "CentOS Stream"],
+            id="higher-zstream-source",
+        ),
+        pytest.param(
+            {"source_branch": "rhel-9.10.0", "ref_in_source_branch": None},
+            [
+                "could not verify whether the commit belongs to {{rhel-9.10.0}}",
+                "# Create {{rhel-9.9.0}} manually from an accepted base, not from {{rhel-9.10.0}}.",
+            ],
+            ["CentOS Stream"],
+            id="higher-zstream-ancestry-unknown",
+        ),
+        pytest.param(
+            {"source_branch": None, "ref_in_source_branch": None},
+            [
+                "could not find a newer Z-stream or a CentOS Stream branch",
+                "once an appropriate source branch exists",
+            ],
+            ["Even out the RHEL", "part of"],
+            id="no-source-branch",
+        ),
+        pytest.param(
+            {"ref_in_source_branch": None},
+            [
+                "could not verify whether the commit belongs to {{rhel-9-main}}",
+                "# Check whether commit {{635bfccafb90}} is part of {{rhel-9-main}}. If it is not, even out",
+            ],
+            ["That commit is part of", "That commit is not part of", "# Even out the RHEL"],
+            id="ancestry-unknown",
+        ),
+        pytest.param(
+            {"ref_in_source_branch": True},
+            [
+                "is part of {{rhel-9-main}}",
+                "Review whether the referenced fixes should target {{rhel-9.9.0}}",
+            ],
+            ["not part of", "have not been evened out", "Even out the RHEL"],
+            id="ref-in-source",
+        ),
+        pytest.param(
+            {"unapproved": (("RHEL-100", "rhel-9.8.z"), ("RHEL-101", "rhel-9.7.z"))},
+            [
+                "targeted at other streams ({{rhel-9.7.z}}, {{rhel-9.8.z}})",
+                "RHEL-100 (rhel-9.8.z)",
+                "RHEL-101 (rhel-9.7.z)",
+            ],
+            [],
+            id="multiple-fix-versions",
+        ),
+        pytest.param(
+            {"unapproved": ()},
+            ["did not list the individual issues"],
+            ["targeted at", ":\n\n"],
+            id="empty-issue-list",
+        ),
+        pytest.param(
+            {"unapproved": tuple((f"RHEL-{900001 + index}", "rhel-9.8.z") for index in range(19))},
+            ["RHEL-900001", "RHEL-900005", "and 14 more"],
+            ["RHEL-900006"],
+            id="truncated-issue-list",
+        ),
+        pytest.param(
+            {"target_fix_versions": ()},
+            ["Dist-git's {{gitbzverify}} hook declined the push."],
+            ["only accepts"],
+            id="no-policy-targets",
+        ),
+        pytest.param(
+            {"build_ref": "1111111111112222222222223333333333334444"},  # pragma: allowlist secret
+            [
+                "based on commit {{635bfccafb90}}, the latest commit with the same NVR as build commit "
+                "{{111111111111}} from the {{rhel-9.9.0-z-pending}} tag",
+            ],
+            ["taken from the"],
+            id="ref-advanced-past-build",
+        ),
+    ],
+)
+def test_format_checkin_policy_rejection(overrides, expected, unexpected):
+    rejection_fields = {
+        "unapproved": (("RHEL-248836", "rhel-9.8.z"),),
+        "target_fix_versions": ("rhel-9.9", "rhel-9.9.z"),
+    }
+    format_args = {"build_ref": _POLICY_REF, "source_branch": "rhel-9-main", "ref_in_source_branch": False}
+    for key, value in overrides.items():
+        (rejection_fields if key in rejection_fields else format_args)[key] = value
+
+    message = _format_checkin_policy_rejection(
+        package="rsync",
+        branch="rhel-9.9.0",
+        ref=_POLICY_REF,
+        lookup_tag="rhel-9.9.0-z-pending",
+        rejection=CheckinPolicyRejection(**rejection_fields),
+        **format_args,
+    )
+
+    for text in expected:
+        assert text in message
+    for text in unexpected:
+        assert text not in message

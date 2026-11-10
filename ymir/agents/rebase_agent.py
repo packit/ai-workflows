@@ -898,6 +898,7 @@ async def main() -> None:
                 comment_text=None,
                 rebase_data=rebase_data,
                 user_triggered=user_triggered,
+                retryable: bool = True,
             ) -> tuple[str, str] | None:
                 """Handle a failed task by re-queuing or finalizing.
 
@@ -908,7 +909,7 @@ async def main() -> None:
                 """
                 task.attempts += 1
                 retry_queue = rebase_queue_todo if task.user_triggered else rebase_queue
-                if task.attempts < max_retries:
+                if retryable and task.attempts < max_retries:
                     logger.warning(
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {rebase_data.jira_issue}"
@@ -916,7 +917,7 @@ async def main() -> None:
                     return (retry_queue, task.model_dump_json())
                 # Final attempt exhausted — mark errored and stop retrying.
                 logger.error(
-                    f"Task failed after {max_retries} attempts, "
+                    f"Task failed after {task.attempts} attempt(s), "
                     f"moving to error list: {rebase_data.jira_issue}"
                 )
                 # Label all consolidated issues with error status
@@ -995,6 +996,14 @@ async def main() -> None:
                         f"success: {state.rebase_result.success}"
                     )
 
+            except tasks.ZstreamBranchPolicyRejected as e:
+                logger.warning(f"Z-stream branch creation blocked for {rebase_data.jira_issue}: {e.message}")
+                return await retry(
+                    task,
+                    ErrorData(details=e.triage_details, jira_issue=rebase_data.jira_issue),
+                    comment_text=e.message,
+                    retryable=False,
+                )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during rebase processing for {rebase_data.jira_issue}: {error}")

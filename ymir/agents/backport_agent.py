@@ -2332,6 +2332,7 @@ async def main() -> None:
                 comment_text=None,
                 backport_data=backport_data,
                 user_triggered=user_triggered,
+                retryable: bool = True,
             ) -> tuple[str, str] | None:
                 """Handle a failed task by re-queuing or finalizing.
 
@@ -2346,14 +2347,14 @@ async def main() -> None:
                 """
                 task.attempts += 1
                 retry_queue = backport_queue_todo if task.user_triggered else backport_queue
-                if task.attempts < max_retries:
+                if retryable and task.attempts < max_retries:
                     logger.warning(
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {backport_data.jira_issue}"
                     )
                     return (retry_queue, task.model_dump_json())
 
-                logger.error(f"Task failed after {max_retries} attempts: {backport_data.jira_issue}")
+                logger.error(f"Task failed after {task.attempts} attempt(s): {backport_data.jira_issue}")
                 await finalize_failure(error, retry_queue, task, comment_text)
                 return None
 
@@ -2388,6 +2389,16 @@ async def main() -> None:
                         f"success: {state.backport_result.success}"
                     )
 
+            except tasks.ZstreamBranchPolicyRejected as e:
+                logger.warning(
+                    f"Z-stream branch creation blocked for {backport_data.jira_issue}: {e.message}"
+                )
+                return await retry(
+                    task,
+                    ErrorData(details=e.triage_details, jira_issue=backport_data.jira_issue),
+                    comment_text=e.message,
+                    retryable=False,
+                )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during backport processing for {backport_data.jira_issue}: {error}")

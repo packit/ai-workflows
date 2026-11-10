@@ -1,0 +1,30 @@
+--- a/beeai_framework/adapters/litellm/chat.py
++++ b/beeai_framework/adapters/litellm/chat.py
+@@ -364,16 +364,22 @@
+             text = update.content
+             tool_calls = getattr(update, "tool_calls", None)
+
+-            # Anthropic requires `thinking_blocks` (with cryptographic signatures) to be sent back
+-            # in conversation history; without them LiteLLM silently disables thinking on follow-up turns
++            # Anthropic requires every complete thinking and redacted_thinking block
++            # to be replayed unchanged after tool calls. Redacted blocks carry opaque
++            # data instead of a signature; only unsigned thinking deltas are partial.
+             meta = None
+             if (
+                 (thinking_blocks := getattr(update, "thinking_blocks", None))
+                 and isinstance(thinking_blocks, list)
+-                # Streaming deltas carry partial blocks without signatures - filter those out
+-                and (signed_thinking_blocks := [b for b in thinking_blocks if b.get("signature")])
++                and (
++                    complete_thinking_blocks := [
++                        block
++                        for block in thinking_blocks
++                        if block.get("signature") or block.get("type") == "redacted_thinking"
++                    ]
++                )
+             ):
+-                meta = {"thinking_blocks": signed_thinking_blocks}
++                meta = {"thinking_blocks": complete_thinking_blocks}
+
+             parts: list[AssistantMessageContent] = []
+             if reasoning_content:

@@ -47,6 +47,10 @@ RUN pip install --no-cache-dir \
       "sentry-sdk>=2.13.0" \
       jwcrypto
 
+COPY beeai-redacted-thinking.patch /tmp
+RUN cd /opt/beeai-venv/lib/python3.13/site-packages \
+    && git apply /tmp/beeai-redacted-thinking.patch
+
 # Verify no malicious litellm_init.pth was introduced by compromised litellm packages (e.g. 1.82.7, 1.82.8)
 RUN MALICIOUS=$(find /usr /opt -name "litellm_init.pth" 2>/dev/null); \
     if [ -n "$MALICIOUS" ]; then \

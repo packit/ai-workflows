@@ -90,6 +90,15 @@ sequenceDiagram
 
 ### Agent-to-Model Communication
 
+Agent images apply `beeai-redacted-thinking.patch` to BeeAI
+0.1.85 after installation. Claude may return opaque `redacted_thinking` blocks
+alongside signed thinking blocks. Both must be retained in their original order
+when the agent sends tool results back to Vertex AI. The patch fixes BeeAI's
+signature-only filter, which otherwise drops redacted blocks and can make the
+next model request fail with a 400. The regression test is
+`ymir/agents/tests/unit/test_beeai_thinking_blocks.py`; check whether the patch
+is still needed before changing the pinned BeeAI version.
+
 ```mermaid
 flowchart LR
     TRIAGE["Triage Agent"]

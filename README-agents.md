@@ -66,6 +66,20 @@ commit missing from the clone is also flagged for review. The check is skipped
 for other branches; Brew lookup failures and unexpected Git errors are logged
 without claiming the branch is stale.
 
+### Branch creation blocked by dist-git policy
+
+A new internal z-stream branch is based on the newest build visible in its
+`-z-pending` tag. Because Koji tag inheritance can expose a build from an older
+stream, that base commit may reference fixes targeted at the previous
+Z-stream. The dist-git `gitbzverify` hook then declines the push. Ymir detects
+this specific rejection and posts a Jira wiki-markup comment naming the
+rejected issues and fix versions, explaining why the base commit cannot be
+used, and listing the ways to unblock: sync the branches, create the missing
+branch from an accepted base, or retry with `ymir_todo`. The raw hook output
+is kept in the logs and as a size-limited, credential-redacted copy in the
+trace context rather than in the Jira comment. The failure is not retried: it
+stops at the final failure step until a maintainer acts.
+
 ### Manual creation of internal z-stream branches
 
 Packages can disable automatic branch creation in their rules repository's

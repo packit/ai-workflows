@@ -2,10 +2,12 @@ import asyncio
 import logging
 import os
 import random
+import re
 import shutil
 import tempfile
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TypeVar
 
 import git
@@ -20,6 +22,7 @@ from ymir.common.utils import NoBuildFoundError, get_latest_buildroot_build, get
 from ymir.common.version_utils import parse_zstream_branch_name
 from ymir.tools.base import CloneableTool as Tool
 from ymir.tools.base import make_additional_context, tool_error_context
+from ymir.tools.constants import ZSTREAM_BRANCH_POLICY_REJECTED
 from ymir.tools.errors import ToolErrorWithContext
 from ymir.tools.privileged.utils import sanitize_url
 
@@ -41,6 +44,212 @@ _TRANSIENT_STDERR_PATTERNS = (
 )
 
 _T = TypeVar("_T")
+
+# A commit is checked against the target branch's dist-git check-in policy by
+# the gitbzverify update hook. When the commit references issues whose
+# FixVersion does not match the target branch, the hook declines the push.
+_UNAPPROVED_ISSUE_RE = re.compile(
+    r"(?P<issue>[A-Z][A-Z0-9]+-\d+)\s+\(FixVersion is set to:\s*(?P<fix_version>[\w.+-]+)\s*\)"
+)
+# Fix versions are restricted to plain version characters so hook output cannot
+# inject Jira wiki markup into the comment.
+_POLICY_TARGET_RE = re.compile(r"jiraField\(fixVersions\)\s*==\s*(?P<fix_version>[\w.+-]+)")
+_MAX_LISTED_POLICY_ISSUES = 5
+
+
+@dataclass(frozen=True)
+class CheckinPolicyRejection:
+    """Issues and policy targets parsed from a dist-git check-in rejection."""
+
+    unapproved: tuple[tuple[str, str], ...]
+    target_fix_versions: tuple[str, ...]
+
+
+def _parse_checkin_policy_rejection(stderr: str) -> CheckinPolicyRejection | None:
+    """Return parsed details when *stderr* is a dist-git check-in policy rejection.
+
+    Returns ``None`` for unrelated push failures so callers can keep surfacing
+    the original error.
+    """
+    is_policy_rejection = "hook declined" in stderr and (
+        "Current checkin policy requires" in stderr or _UNAPPROVED_ISSUE_RE.search(stderr) is not None
+    )
+    if not is_policy_rejection:
+        return None
+
+    unapproved: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for match in _UNAPPROVED_ISSUE_RE.finditer(stderr):
+        issue = match.group("issue")
+        fix_version = match.group("fix_version")
+        if (issue, fix_version) not in seen:
+            seen.add((issue, fix_version))
+            unapproved.append((issue, fix_version))
+
+    targets = tuple(dict.fromkeys(_POLICY_TARGET_RE.findall(stderr)))
+    return CheckinPolicyRejection(tuple(unapproved), targets)
+
+
+def _jira_code(value: str) -> str:
+    """Return Jira wiki-markup monospace text."""
+    return "{{" + value + "}}"
+
+
+def _format_checkin_policy_rejection(
+    *,
+    package: str,
+    branch: str,
+    ref: str,
+    build_ref: str,
+    lookup_tag: str,
+    source_branch: str | None,
+    ref_in_source_branch: bool | None,
+    rejection: CheckinPolicyRejection,
+) -> str:
+    """Build the maintainer-facing explanation for a rejected branch push."""
+    fix_versions = sorted({fix_version for _issue, fix_version in rejection.unapproved})
+    if ref == build_ref:
+        base_description = (
+            f"The branch would be based on commit {_jira_code(ref[:12])}, taken from the "
+            f"{_jira_code(lookup_tag)} tag."
+        )
+    else:
+        base_description = (
+            f"The branch would be based on commit {_jira_code(ref[:12])}, the latest commit with "
+            f"the same NVR as build commit {_jira_code(build_ref[:12])} from the "
+            f"{_jira_code(lookup_tag)} tag."
+        )
+    lines = [
+        f"Ymir could not create the missing Z-stream branch {_jira_code(branch)} for {_jira_code(package)}.",
+        "",
+        base_description,
+    ]
+
+    if source_branch:
+        if ref_in_source_branch is False:
+            lines.append(f"That commit is not part of {_jira_code(source_branch)}.")
+        elif ref_in_source_branch is True:
+            lines.append(
+                f"That commit is part of {_jira_code(source_branch)}, but it references issues "
+                f"that are not accepted for {_jira_code(branch)}."
+            )
+
+    if rejection.unapproved:
+        if len(fix_versions) == 1:
+            lines.append(f"It references issues targeted at {_jira_code(fix_versions[0])}:")
+        else:
+            lines.append(
+                "It references issues targeted at other streams ("
+                + ", ".join(_jira_code(v) for v in fix_versions)
+                + "):"
+            )
+        listed = rejection.unapproved[:_MAX_LISTED_POLICY_ISSUES]
+        if len(fix_versions) == 1:
+            issue_text = ", ".join(issue for issue, _fix_version in listed)
+        else:
+            issue_text = ", ".join(f"{issue} ({fix_version})" for issue, fix_version in listed)
+        remaining = len(rejection.unapproved) - len(listed)
+        if remaining > 0:
+            issue_text += f", ... and {remaining} more"
+        lines.append(issue_text)
+    else:
+        lines.append("The dist-git hook did not list the individual issues in a format Ymir could parse.")
+
+    if rejection.target_fix_versions:
+        targets = ", ".join(_jira_code(v) for v in rejection.target_fix_versions)
+        lines.extend(
+            [
+                "",
+                (
+                    f"The {_jira_code(branch)} check-in policy only accepts issues with "
+                    f"fixVersion {targets}, so dist-git's {_jira_code('gitbzverify')} hook "
+                    "declined the push."
+                ),
+            ]
+        )
+    else:
+        lines.extend(["", f"Dist-git's {_jira_code('gitbzverify')} hook declined the push."])
+
+    if source_branch is None:
+        lines.extend(
+            [
+                "",
+                (
+                    "Ymir could not find a newer Z-stream or a CentOS Stream branch to base "
+                    "the new branch on, so it used the build commit directly."
+                ),
+            ]
+        )
+    elif ref_in_source_branch is False and source_branch.endswith("-main"):
+        lines.extend(
+            [
+                "",
+                (
+                    "This usually means the branches have not been evened out: the branch "
+                    "containing the build commit has changes that are not in "
+                    f"{_jira_code(source_branch)} and are not accepted for {_jira_code(branch)}."
+                ),
+            ]
+        )
+    elif ref_in_source_branch is False:
+        lines.extend(
+            [
+                "",
+                (
+                    f"The build commit is not part of the newer Z-stream "
+                    f"{_jira_code(source_branch)} that Ymir considered. Do not create "
+                    f"{_jira_code(branch)} from {_jira_code(source_branch)}: it contains "
+                    f"fixes that are not accepted for {_jira_code(branch)}."
+                ),
+            ]
+        )
+    elif ref_in_source_branch is None:
+        lines.extend(
+            [
+                "",
+                (
+                    f"Ymir could not verify whether the commit belongs to "
+                    f"{_jira_code(source_branch)}. Review the branch contents before retrying."
+                ),
+            ]
+        )
+
+    if source_branch is None:
+        action = (
+            f"# Create {_jira_code(branch)} manually once an appropriate source branch "
+            "exists in the repository."
+        )
+    elif ref_in_source_branch is True:
+        action = (
+            f"# Review whether the referenced fixes should target "
+            f"{_jira_code(branch)}, or correct the branch contents so the new branch can "
+            "be based on an accepted commit."
+        )
+    elif ref_in_source_branch is None and source_branch.endswith("-main"):
+        action = (
+            f"# Check whether commit {_jira_code(ref[:12])} is part of {_jira_code(source_branch)}. "
+            "If it is not, even out the RHEL Z-stream and CentOS Stream branches using your usual "
+            f"sync process; otherwise create {_jira_code(branch)} manually from an accepted base."
+        )
+    elif source_branch.endswith("-main"):
+        action = (
+            "# Even out the RHEL Z-stream and CentOS Stream branches using your usual "
+            f"sync process, or create {_jira_code(branch)} manually from an accepted base."
+        )
+    else:
+        action = (
+            f"# Create {_jira_code(branch)} manually from an accepted base, not from "
+            f"{_jira_code(source_branch)}."
+        )
+    lines.extend(
+        [
+            "",
+            "To unblock Ymir:",
+            action,
+            f"# Add the {_jira_code('ymir_todo')} label to this issue to retry.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _is_transient_git_error(exc: Exception) -> bool:
@@ -250,6 +459,7 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     "skipping push and waiting for mirror sync"
                 )
             else:
+                lookup_tag = f"{branch}-z-pending"
                 with tool_error_context(
                     "Failed to find suitable source build", package=package, branch=branch
                 ):
@@ -257,7 +467,9 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         _, ref = await get_latest_z_pending_build(package, branch)
                     except NoBuildFoundError:
                         # this could be a buildroot-only package
+                        lookup_tag = f"{branch}-buildrequires"
                         _, ref = await get_latest_buildroot_build(package, branch)
+                build_ref = ref
                 source_branch = self._find_source_branch(repo, branch)
                 if source_branch and source_branch.endswith("-main"):
                     ref = await self._find_latest_same_nvr_ref(
@@ -269,6 +481,16 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                     branch_creation_details = f"from {source_branch} at {ref[:12]}"
                 else:
                     branch_creation_details = f"at {ref[:12]}"
+                ref_in_source_branch = None
+                if source_branch:
+                    try:
+                        ref_in_source_branch = await asyncio.to_thread(
+                            repo.is_ancestor, ref, f"origin/{source_branch}"
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"Could not check ancestry of {ref[:12]} against origin/{source_branch}: {exc}"
+                        )
                 with tool_error_context(
                     "Failed to push branch to dist-git", package=package, branch=branch, ref=ref
                 ):
@@ -278,10 +500,56 @@ class CreateZstreamBranchTool(Tool[CreateZstreamBranchToolInput, ToolRunOptions,
                         raise ToolError(
                             f"Commit {ref} (from latest Brew build) not found in dist-git clone of {package}"
                         ) from None
-                    await _retry_transient(
-                        lambda: asyncio.to_thread(repo.git.push, "origin", f"{ref}:refs/heads/{branch}"),
-                        f"push {branch} to dist-git",
-                    )
+                    try:
+                        await _retry_transient(
+                            lambda: asyncio.to_thread(repo.git.push, "origin", f"{ref}:refs/heads/{branch}"),
+                            f"push {branch} to dist-git",
+                        )
+                    except git.exc.GitCommandError as e:
+                        stderr = e.stderr or ""
+                        if rejection := _parse_checkin_policy_rejection(stderr):
+                            logger.warning(
+                                f"Dist-git check-in policy rejected {ref[:12]} branch "
+                                f"{branch} for {package}: {sanitize_url(stderr)}"
+                            )
+                            message = _format_checkin_policy_rejection(
+                                package=package,
+                                branch=branch,
+                                ref=ref,
+                                build_ref=build_ref,
+                                lookup_tag=lookup_tag,
+                                source_branch=source_branch,
+                                ref_in_source_branch=ref_in_source_branch,
+                                rejection=rejection,
+                            )
+                            raise ToolErrorWithContext(
+                                message,
+                                cause=e,
+                                additional_context=make_additional_context(
+                                    error_code=ZSTREAM_BRANCH_POLICY_REJECTED,
+                                    user_message=message,
+                                    package=package,
+                                    branch=branch,
+                                    ref=ref,
+                                    build_ref=build_ref,
+                                    source_branch=source_branch or "",
+                                    lookup_tag=lookup_tag,
+                                    ref_in_source_branch=(
+                                        "unknown"
+                                        if ref_in_source_branch is None
+                                        else "yes"
+                                        if ref_in_source_branch
+                                        else "no"
+                                    ),
+                                    unapproved_issue_count=len(rejection.unapproved),
+                                    unapproved_fix_versions=", ".join(
+                                        sorted({fix_version for _issue, fix_version in rejection.unapproved})
+                                    ),
+                                    target_fix_versions=", ".join(rejection.target_fix_versions),
+                                    raw_stderr=sanitize_url(stderr)[:4000],
+                                ),
+                            ) from e
+                        raise
                     if not await _retry_transient(
                         lambda: asyncio.to_thread(repo.git.ls_remote, "--heads", "origin", branch),
                         f"verify {branch} on dist-git",

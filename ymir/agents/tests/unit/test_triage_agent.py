@@ -339,19 +339,18 @@ async def test_auto_processing_marker_ignored_for_user_triggered_run(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_auto_processing_retries_when_marker_read_fails(monkeypatch):
+async def test_auto_processing_retries_when_marker_read_fails():
     """An unreadable marker must not fall back to the package config.
 
     The package may be configured for full processing, so guessing would start a
-    fix for an issue whose triage-only marker could not be ruled out. The failure
-    must reach the task retry path instead.
+    fix for an issue whose triage-only marker could not be ruled out. The labels
+    must be read strictly and the failure must reach the task retry path.
     """
 
-    async def _failing_metadata(*_args, **_kwargs):
-        raise RuntimeError("Jira unavailable")
-
     flexmock(agent_tasks).should_receive("fetch_auto_processing_config").never()
-    monkeypatch.setattr(agent_tasks, "get_jira_issue_metadata", _failing_metadata)
+    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").with_args(
+        "RHEL-99999", raise_on_error=True
+    ).and_raise(RuntimeError("Jira unavailable")).once()
 
     state = TriageState(jira_issue="RHEL-99999")
     with pytest.raises(RuntimeError, match="Jira unavailable"):
@@ -363,7 +362,7 @@ async def test_auto_processing_user_triggered_run_does_not_need_rules_repo(monke
     """An explicit ymir_todo must still run while the rules repo is unavailable."""
 
     async def _failing_fetch(*_args, **_kwargs):
-        raise agent_tasks.MaintainerRulesFetchError("Failed to fetch maintainer rules (HTTP 500)")
+        raise RuntimeError("Failed to fetch maintainer rules (HTTP 500)")
 
     monkeypatch.setattr(agent_tasks, "fetch_auto_processing_config", _failing_fetch)
 

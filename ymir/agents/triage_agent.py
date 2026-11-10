@@ -717,7 +717,7 @@ async def _record_auto_processing_policy(
         # request. If the labels cannot be read we cannot know whether it is
         # there, so let the failure reach the task retry path instead of
         # falling back to the package config, which may select full processing.
-        current_labels, _ = await tasks.get_jira_issue_metadata(state.jira_issue)
+        current_labels, _ = await tasks.get_jira_issue_metadata(state.jira_issue, raise_on_error=True)
         if JiraLabels.TRIAGE_ONLY.value in current_labels:
             logger.info(
                 "Issue %s carries %s - keeping this run triage-only",

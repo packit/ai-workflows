@@ -19,6 +19,7 @@ def test_build_rebuild_siblings_jql():
     assert '"ymir_triaged_deferred_rebuild"' in jql
     assert '"ymir_triaged_deferred_rebase"' in jql
     assert '"ymir_triaged_deferred_backport"' in jql
+    assert '"ymir_triage_only"' in jql
     assert '"ymir_triaged_backport"' in jql
     assert '"ymir_triaged_rebase"' in jql
     assert 'status in ("New", "Planning")' in jql

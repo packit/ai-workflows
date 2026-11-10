@@ -523,7 +523,9 @@ async def test_push_issues_to_queue_ymir_todo_bypasses_skip_modular(fetcher, moc
     flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
         create_async_mock_return_value(set())
     )
-    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args("MOD-TODO").and_return(True)
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "MOD-TODO", label=JiraLabels.TODO.value
+    ).and_return(True)
     flexmock(fetcher).should_receive("_edit_jira_labels").once()
 
     task = Task.from_issue("MOD-TODO", user_triggered=True)
@@ -1084,9 +1086,9 @@ async def test_push_user_triggered_issue(fetcher, mock_redis_context):
         create_async_mock_return_value(set())
     )
     # Author verification passes — label was added by a Red Hat Employee.
-    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args("TODO-1").and_return(
-        True
-    ).once()
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-1", label=JiraLabels.TODO.value
+    ).and_return(True).once()
 
     # The critical label flip must be invoked before the Redis push.
     flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
@@ -1146,9 +1148,9 @@ async def test_skip_user_triggered_when_not_rh_employee(fetcher, mock_redis_cont
     flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
         create_async_mock_return_value(set())
     )
-    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args("TODO-EXT-1").and_return(
-        False
-    ).once()
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-EXT-1", label=JiraLabels.TODO.value
+    ).and_return(False).once()
     # Bogus label is removed so the per-sweep verification cost doesn't repeat
     # forever. No Redis push.
     flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
@@ -1171,9 +1173,9 @@ async def test_user_triggered_skip_when_label_flip_fails(fetcher, mock_redis_con
     flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
         create_async_mock_return_value(set())
     )
-    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args("TODO-FAIL").and_return(
-        True
-    ).once()
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-FAIL", label=JiraLabels.TODO.value
+    ).and_return(True).once()
 
     flexmock(fetcher).should_receive("_edit_jira_labels").and_raise(
         requests.HTTPError("Jira write failed")
@@ -1186,6 +1188,230 @@ async def test_user_triggered_skip_when_label_flip_fails(fetcher, mock_redis_con
     result = await fetcher.push_issues_to_queue(issues)
 
     assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_push_triage_only_issue(fetcher, mock_redis_context):
+    """ymir_todo_triage: enqueue as user_triggered and triage_only, flip the label."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [{"key": "TODO-TRIAGE-1", "fields": {"labels": [JiraLabels.TODO_TRIAGE.value]}}]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-TRIAGE-1", label=JiraLabels.TODO_TRIAGE.value
+    ).and_return(True).once()
+
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "TODO-TRIAGE-1",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.TRIAGE_ONLY.value],
+        remove=[JiraLabels.TODO_TRIAGE.value],
+    ).once()
+
+    expected_task = Task.from_issue("TODO-TRIAGE-1", user_triggered=True, triage_only=True)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE_TODO.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_push_both_triggers_runs_full_pipeline(fetcher, mock_redis_context):
+    """ymir_todo wins over ymir_todo_triage, and both trigger labels are consumed."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "TODO-BOTH-1",
+            "fields": {"labels": [JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value]},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    # Each present trigger is verified independently.
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-BOTH-1", label=JiraLabels.TODO.value
+    ).and_return(True).once()
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-BOTH-1", label=JiraLabels.TODO_TRIAGE.value
+    ).and_return(True).once()
+
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "TODO-BOTH-1",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+        remove=[JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value],
+    ).once()
+
+    expected_task = Task.from_issue("TODO-BOTH-1", user_triggered=True, triage_only=False)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE_TODO.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_push_authorized_triage_trigger_despite_unauthorized_todo(fetcher, mock_redis_context):
+    """An outsider's ymir_todo must not discard an employee's ymir_todo_triage."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "TODO-BOTH-2",
+            "fields": {"labels": [JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value]},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-BOTH-2", label=JiraLabels.TODO.value
+    ).and_return(False).once()
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-BOTH-2", label=JiraLabels.TODO_TRIAGE.value
+    ).and_return(True).once()
+
+    # Only the unauthorized trigger is removed up front.
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "TODO-BOTH-2", add=[], remove=[JiraLabels.TODO.value]
+    ).once()
+    # The authorized triage-only run consumes the remaining trigger.
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "TODO-BOTH-2",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.TRIAGE_ONLY.value],
+        remove=[JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value],
+    ).once()
+
+    expected_task = Task.from_issue("TODO-BOTH-2", user_triggered=True, triage_only=True)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE_TODO.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_skip_issue_when_no_trigger_written_by_rh_employee(fetcher, mock_redis_context):
+    """Two unauthorized triggers are both removed, and nothing is enqueued."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "TODO-BOTH-3",
+            "fields": {"labels": [JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value]},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-BOTH-3", label=JiraLabels.TODO.value
+    ).and_return(False).once()
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-BOTH-3", label=JiraLabels.TODO_TRIAGE.value
+    ).and_return(False).once()
+
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "TODO-BOTH-3",
+        add=[],
+        remove=[JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value],
+    ).once()
+    mock_redis.should_receive("lpush").never()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_ymir_todo_clears_triage_only_marker(fetcher, mock_redis_context):
+    """An explicit ymir_todo on an issue carrying a persisted triage-only marker
+    runs the full pipeline and removes the marker along with the trigger."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "TODO-MARKER-1",
+            "fields": {"labels": [JiraLabels.TODO.value, JiraLabels.TRIAGE_ONLY.value]},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-MARKER-1", label=JiraLabels.TODO.value
+    ).and_return(True).once()
+
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "TODO-MARKER-1",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
+        remove=[JiraLabels.TODO.value, JiraLabels.TRIAGE_ONLY.value],
+    ).once()
+
+    expected_task = Task.from_issue("TODO-MARKER-1", user_triggered=True, triage_only=False)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE_TODO.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_needed_preserves_triage_only_marker(fetcher, mock_redis_context):
+    """A crash retry of a triage-only request must not start the fix pipeline."""
+    mock_redis, _ = mock_redis_context
+
+    issues = [
+        {
+            "key": "RETRY-MARKER-1",
+            "fields": {"labels": [JiraLabels.RETRY_NEEDED.value, JiraLabels.TRIAGE_ONLY.value]},
+        }
+    ]
+
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "RETRY-MARKER-1",
+        add=[JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.TRIAGE_ONLY.value],
+        remove=[JiraLabels.RETRY_NEEDED.value],
+    ).once()
+
+    expected_task = Task.from_issue("RETRY-MARKER-1", user_triggered=False, triage_only=True)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    result = await fetcher.push_issues_to_queue(issues)
+
+    assert result == 1
+
+
+def test_find_stale_in_flight_label_ignores_triage_only_marker(fetcher):
+    """The persisted triage-only marker is intent, not an outcome — it must not
+    block recovery of a stale in-flight label."""
+    issue = {"fields": {"updated": _STALE_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(
+        issue, [JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.TRIAGE_ONLY.value]
+    )
+    assert result == JiraLabels.TRIAGE_IN_PROGRESS.value
 
 
 def _changelog_response(histories, is_last_page=True):
@@ -1719,9 +1945,9 @@ async def test_locked_todo_consumes_label_but_skips_enqueue(fetcher, mock_redis_
     flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
         create_async_mock_return_value(set())
     )
-    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args("TODO-LOCKED").and_return(
-        True
-    ).once()
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "TODO-LOCKED", label=JiraLabels.TODO.value
+    ).and_return(True).once()
     flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
         "TODO-LOCKED",
         add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
@@ -1782,3 +2008,80 @@ def test_label_added_by_rh_employee_walks_paginated_changelog(fetcher):
     ).one_by_one()
 
     assert fetcher._label_added_by_rh_employee("RHEL-LONG") is True
+
+
+def _consolidation_pair(
+    base_component="curl",
+    next_component="curl",
+    base_downstream="",
+    next_downstream="",
+):
+    """Build a base/next issue pair eligible for label-triggered consolidation."""
+    base = {
+        "key": "BASE-1",
+        "fields": {
+            "labels": [JiraLabels.CONSOLIDATE_BASE.value],
+            "components": [{"name": base_component}],
+            "customfield_10669": base_downstream,
+            "fixVersions": [{"name": "rhel-9.8"}],
+        },
+    }
+    next_ = {
+        "key": "NEXT-1",
+        "fields": {
+            "labels": [JiraLabels.CONSOLIDATE_NEXT.value],
+            "components": [{"name": next_component}],
+            "customfield_10669": next_downstream,
+            "fixVersions": [{"name": "rhel-9.8"}],
+        },
+    }
+    return [base, next_]
+
+
+@pytest.mark.asyncio
+async def test_process_consolidation_labels_submits_job_for_non_modular_pair(fetcher, mock_redis_context):
+    mock_redis, _ = mock_redis_context
+    issues = _consolidation_pair()
+
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    flexmock(jira_issue_fetcher_impl).should_receive("submit_merge_job").with_args(
+        mock_redis, "curl", "rhel-9.8.0", source_issues=["BASE-1", "NEXT-1"]
+    ).and_return(create_async_mock_return_value(jira_issue_fetcher_impl.SubmitResult.SUBMITTED)).once()
+    flexmock(fetcher).should_receive("_edit_jira_labels")
+    flexmock(fetcher).should_receive("_post_jira_comment")
+
+    submitted = await fetcher._process_consolidation_labels(issues)
+
+    assert submitted == 1
+
+
+@pytest.mark.asyncio
+async def test_process_consolidation_labels_skips_modular_base_issue(fetcher, mock_redis_context):
+    """A modular downstream component (module:stream/package) on either issue must
+    block the pairing — consolidation's Copr build doesn't enable module streams."""
+    _, _ = mock_redis_context
+    issues = _consolidation_pair(base_downstream="postgresql:16/postgis")
+
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    flexmock(jira_issue_fetcher_impl).should_receive("submit_merge_job").never()
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    flexmock(fetcher).should_receive("_post_jira_comment").never()
+
+    submitted = await fetcher._process_consolidation_labels(issues)
+
+    assert submitted == 0
+
+
+@pytest.mark.asyncio
+async def test_process_consolidation_labels_skips_modular_next_issue(fetcher, mock_redis_context):
+    _, _ = mock_redis_context
+    issues = _consolidation_pair(next_downstream="postgresql:16/postgis")
+
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    flexmock(jira_issue_fetcher_impl).should_receive("submit_merge_job").never()
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    flexmock(fetcher).should_receive("_post_jira_comment").never()
+
+    submitted = await fetcher._process_consolidation_labels(issues)
+
+    assert submitted == 0

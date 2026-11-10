@@ -46,6 +46,10 @@ def build_rebuild_siblings_jql(
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBASE.value,
+            *JiraLabels.deferred_triage_labels(),
+            # Triage-only issues stop at triage whatever the outcome, so an
+            # unresolved one must not be pulled into a neighbour's rebuild.
+            JiraLabels.TRIAGE_ONLY.value,
         ],
         downstream_component=downstream_component,
     )

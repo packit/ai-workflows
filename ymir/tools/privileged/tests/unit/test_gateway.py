@@ -302,18 +302,25 @@ class TestBuildBackendToggle:
 
         gateway_module.main()
         return {
-            type(t).__name__
+            t.name: type(t).__name__
             for t in registered_tools
-            if getattr(t, "name", None) in ("build_package", "download_artifacts")
+            if getattr(t, "name", None)
+            and (t.name.startswith("build_package") or t.name.startswith("download_artifacts"))
         }
 
     def test_default_backend_registers_copr_tools(self, monkeypatch):
         names = self._run_main_and_collect(monkeypatch, None)
-        assert names == {"BuildPackageTool", "DownloadArtifactsTool"}
+        assert names == {
+            "build_package": "BuildPackageTool",
+            "download_artifacts": "DownloadArtifactsTool",
+        }
 
     def test_copr_backend_registers_copr_tools(self, monkeypatch):
         names = self._run_main_and_collect(monkeypatch, "copr")
-        assert names == {"BuildPackageTool", "DownloadArtifactsTool"}
+        assert names == {
+            "build_package": "BuildPackageTool",
+            "download_artifacts": "DownloadArtifactsTool",
+        }
 
     @staticmethod
     def _set_valid_konflux_env(monkeypatch, token_file: str):
@@ -329,11 +336,19 @@ class TestBuildBackendToggle:
         token_file.write_text("sa-token\n")
         self._set_valid_konflux_env(monkeypatch, str(token_file))
         names = self._run_main_and_collect(monkeypatch, "konflux")
-        assert names == {"KonfluxBuildTool", "KonfluxDownloadArtifactsTool"}
+        assert names == {
+            "build_package": "KonfluxBuildTool",
+            "download_artifacts": "KonfluxDownloadArtifactsTool",
+            "build_package_copr": "ModularCoprBuildTool",
+            "download_artifacts_copr": "ModularCoprDownloadTool",
+        }
 
     def test_unknown_backend_falls_back_to_copr(self, monkeypatch):
         names = self._run_main_and_collect(monkeypatch, "bogus")
-        assert names == {"BuildPackageTool", "DownloadArtifactsTool"}
+        assert names == {
+            "build_package": "BuildPackageTool",
+            "download_artifacts": "DownloadArtifactsTool",
+        }
 
     def _run_main_expecting_no_registration(self, monkeypatch):
         """Run main() with the server mocked but register_many/aserve forbidden.

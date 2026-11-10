@@ -115,16 +115,29 @@ class Task(BaseModel):
         "failure labels that are otherwise suppressed. Error comments are "
         "posted regardless of this flag.",
     )
+    triage_only: bool = Field(
+        default=False,
+        description="True when a maintainer requested a triage-only run via the "
+        "ymir_todo_triage label — overrides auto_processing.mode from the package's "
+        "ymir.yaml so the fix pipeline is not queued.",
+    )
 
     def to_json(self) -> str:
         """Convert to JSON string for Redis queue storage."""
         return self.model_dump_json()
 
     @classmethod
-    def from_issue(cls, issue: str, attempts: int = 0, user_triggered: bool = False) -> "Task":
+    def from_issue(
+        cls, issue: str, attempts: int = 0, user_triggered: bool = False, triage_only: bool = False
+    ) -> "Task":
         """Create a task from a JIRA issue key."""
         metadata = TriageInputSchema(issue=issue)
-        return cls(metadata=metadata.model_dump(), attempts=attempts, user_triggered=user_triggered)
+        return cls(
+            metadata=metadata.model_dump(),
+            attempts=attempts,
+            user_triggered=user_triggered,
+            triage_only=triage_only,
+        )
 
 
 # ============================================================================
@@ -196,6 +209,13 @@ class BackportInputSchema(BaseModel):
         default=False,
         description="Whether the extract_log_snippets tool is available",
     )
+    module_stream: str | None = Field(
+        default=None,
+        description=(
+            "'module:stream' to pass to build_package for modular packages "
+            "(e.g. 'postgresql:16'). None for non-modular packages."
+        ),
+    )
 
 
 class BackportFixBuildInputSchema(BackportInputSchema):
@@ -213,6 +233,14 @@ class BackportOutputSchema(BaseModel):
     )
     srpm_path: Path | None = Field(description="Absolute path to generated SRPM")
     error: str | None = Field(description="Specific details about an error")
+    build_url: str | None = Field(
+        default=None,
+        description=(
+            "URL of the last Copr build submitted via the build_package tool "
+            "(e.g. during fix_build_error). Include so the caller can link "
+            "to the correct build in Jira comments."
+        ),
+    )
 
 
 class InheritAdaptationInputSchema(BaseModel):
@@ -603,7 +631,7 @@ class TriageOutputSchema(BaseModel):
         default=None, description="Confidence in target-source applicability; None means unassessed"
     )
 
-    def format_for_comment(self, auto_chain: bool = False) -> str:
+    def format_for_comment(self, auto_chain: bool = False, triage_only: bool = False) -> str:
         """Format the triage result in a human-readable format for Jira comments."""
         resolution = f"*Resolution*: {self.resolution.value}\n"
         confidence_text = (
@@ -611,14 +639,18 @@ class TriageOutputSchema(BaseModel):
             if self.confidence is not None
             else ""
         )
-        follow_up_note = (
-            ""
-            if auto_chain
-            else (
+        if triage_only:
+            follow_up_note = (
+                "\n\n_This run stopped after triage (triage-only mode). "
+                "The fix pipeline was not started; add `ymir_todo` to run it._"
+            )
+        elif auto_chain:
+            follow_up_note = ""
+        else:
+            follow_up_note = (
                 "\n\n_Automated individual follow-up workflow for this "
                 "resolution type is planned for Q2 2026. Stay tuned._"
             )
-        )
 
         match self.data:
             case BackportData():
@@ -770,6 +802,11 @@ class TriageOutputSchema(BaseModel):
 # Build Agent Schemas
 # ============================================================================
 
+# Konflux registers build_package itself. Modular packages stay on Copr, so the
+# gateway also advertises Copr under these names when BUILD_BACKEND=konflux.
+MODULAR_COPR_BUILD_TOOL = "build_package_copr"
+MODULAR_COPR_DOWNLOAD_TOOL = "download_artifacts_copr"
+
 
 class BuildInstructionsInput(BaseModel):
     """Input schema for the build agent instructions template."""
@@ -777,6 +814,10 @@ class BuildInstructionsInput(BaseModel):
     has_extract_log_snippets: bool = Field(
         default=False,
         description="Whether both gateway log download and extraction tools are available",
+    )
+    download_tool_name: str = Field(
+        default="download_artifacts",
+        description="Gateway tool that downloads the failed build's logs",
     )
 
 
@@ -786,6 +827,13 @@ class BuildInputSchema(BaseModel):
     srpm_path: Path = Field(description="Path to SRPM to build or inspect for architecture tags")
     dist_git_branch: str = Field(description="dist-git branch to update")
     jira_issue: str | None = Field(description="Jira issue to reference as resolved")
+    module_stream: str | None = Field(
+        default=None,
+        description=(
+            "'module:stream' to enable in the Copr chroot buildroot (e.g. 'postgresql:16') "
+            "so BuildRequires from a modular package resolve. None for non-modular builds."
+        ),
+    )
     # Konflux-only fields (Copr ignores them). The Konflux backend builds from a
     # pushed git ref rather than a local SRPM, so the caller supplies these once
     # the fork branch has been pushed.
@@ -806,6 +854,9 @@ class BuildResult(BaseModel):
     error_message: str | None = Field(description="Error message in case of failure", default=None)
     artifacts_urls: list[str] | None = Field(
         description="URLs to build artifacts (logs and RPM files)", default=None
+    )
+    build_url: str | None = Field(
+        description="Link to the Copr build page (e.g. for linking from a Jira comment)", default=None
     )
 
 
@@ -830,6 +881,9 @@ class BuildOutputSchema(BaseModel):
     is_infra_error: bool = Field(
         default=False,
         description="Whether the failure was caused by a Copr API or infrastructure error, not a build error",
+    )
+    build_url: str | None = Field(
+        description="Link to the Copr build page, when a build was actually submitted", default=None
     )
 
 
@@ -1010,6 +1064,30 @@ class PackageBranchCreationConfig(BaseModel):
     automatic: bool = Field(
         default=True,
         description="Whether Ymir may automatically create missing internal z-stream branches",
+    )
+
+
+class AutoProcessingMode(StrEnum):
+    """How far Ymir drives an issue after triage."""
+
+    FULL = "full"
+    TRIAGE_ONLY = "triage_only"
+
+
+class PackageAutoProcessingConfig(BaseModel):
+    """Machine-readable auto-processing config from the per-package rules repo.
+
+    Parsed from the ``auto_processing`` section of
+    ``gitlab.com/redhat/centos-stream/rules/<package>/ymir.yaml``.
+
+    ``triage_only`` stops after triage: the resolution is labeled with a
+    ``ymir_triaged_deferred_*`` label and the fix pipeline is not queued.
+    A maintainer can add ``ymir_todo`` later to run the full pipeline.
+    """
+
+    mode: AutoProcessingMode = Field(
+        default=AutoProcessingMode.FULL,
+        description="'full' runs the downstream fix pipeline; 'triage_only' stops after triage",
     )
 
 

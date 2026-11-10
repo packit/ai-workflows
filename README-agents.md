@@ -94,6 +94,48 @@ field unknown and are retried post-applicability. Existing branches can be used
 regardless of this setting; CentOS Stream and modular branches keep their
 existing handling. Dry runs do not write hold labels or comments.
 
+### Triage-only auto-processing
+
+Packages that cannot consume CI capacity for the full fix pipeline can stop
+Ymir after triage. The mode is set per package in the same `ymir.yaml`:
+
+```yaml
+auto_processing:
+  mode: triage_only
+```
+
+Triage still analyzes the CVE, checks applicability, and enqueues the
+reproducer, so the issue is ready for a developer. Instead of queueing the
+rebase/backport/rebuild agent and opening an MR, triage records the decision
+with a terminal `ymir_triaged_deferred_backport`, `ymir_triaged_deferred_rebase`,
+or `ymir_triaged_deferred_rebuild` label and posts a comment explaining the
+result. These labels are not in-flight states, so the fetcher never treats them
+as stale work.
+
+To run the fix pipeline later, a maintainer adds `ymir_todo`. A `ymir_todo`
+run ignores `triage_only` and always proceeds with the full pipeline, exactly
+as it does for a package without the setting. Because the deferred label is
+terminal rather than in-flight, the issue does not block
+Z-stream dependency checks or sibling consolidation.
+
+Triage-only can also be requested per issue, for packages that run the full
+pipeline by default: adding `ymir_todo_triage` (Red Hat Employee only, verified
+per issue like `ymir_todo`) runs triage and defers the fix. If both labels are
+present, `ymir_todo` wins and the run executes the full pipeline; both trigger
+labels are consumed.
+
+The per-issue choice is persisted as the `ymir_triage_only` label so it survives
+automatic re-entry. When the fetcher consumes `ymir_todo_triage` it stamps the
+marker, and the triage agent and the postponement sweeps read it on later runs,
+so a postponed issue that the sweep re-queues (or a task recovered after a crash)
+is triaged again without starting the fix pipeline. The marker is cleared when
+the fetcher consumes `ymir_todo`, the explicit request for full processing.
+
+Missing or omitted `auto_processing` configuration defaults to `mode: full`.
+Malformed YAML, an unknown mode, or a wrongly shaped section is logged and also
+defaults to full so a broken rules file cannot silently disable the fix
+pipeline. Fetch failures propagate and trigger the normal agent-level retry.
+
 ### Y-stream inheritance fast path
 
 For Important and Critical Y-stream CVEs, triage carries the shipped leading
@@ -175,9 +217,12 @@ are not requeued.
 
 Backport (including Y-stream inheritance), rebase, MR updates, and MR
 consolidation use a shared `BuildWorkflow`. Its `execute_build` step calls
-`build_package` through the existing MCP gateway. The default backend submits
-and polls Copr; `BUILD_BACKEND=konflux` instead builds the pushed fork commit
-as a scratch Konflux PipelineRun. The discovered spec filename is passed to
+`build_package` through the existing MCP gateway. `BUILD_BACKEND=copr` submits
+and polls Copr; `BUILD_BACKEND=konflux` builds the pushed fork commit
+as a scratch Konflux PipelineRun. Modular packages are the exception: they
+always build with Copr, even when `BUILD_BACKEND=konflux`, because Konflux
+cannot enable a module stream. The gateway then also exposes Copr as
+`build_package_copr`. The discovered spec filename is passed to
 Konflux when it differs from the package name. The generated SRPM determines
 which single architecture Konflux validates, preferring x86_64 when supported. See
 [Konflux backend](docs/konflux-backend.md) for configuration and
@@ -309,12 +354,23 @@ cp -r templates .secrets
 
 - Follow the comments to fill out the needed credentials.
 
-For local Konflux builds, log in to the gateway OpenShift cluster and run
-`make konflux-token` before setting `BUILD_BACKEND=konflux`. This writes the
-short-lived service-account token to `.secrets/konflux/token`, which the gateway
-reads for each build. Refresh it when a build returns 401; a gateway restart is
-not needed. See [Konflux backend setup](docs/konflux-backend.md) for the login
-command, required access, and remaining configuration.
+Local Compose defaults to Konflux. For Konflux runs, log in to the gateway
+OpenShift cluster before running `make start`, `make start-detached`, or an e2e
+Make target. These targets refresh the token automatically before starting
+Compose when `BUILD_BACKEND=konflux`. Set `BUILD_BACKEND=copr` in the project
+`.env` or pass it to `make` to use Copr without token retrieval. Use a literal
+`copr` or `konflux` value in `.env`. A shell environment or Make command-line
+value takes precedence over `.env`; without
+either, Konflux is used. The triage e2e target selects the backend after
+installing any TMT-provided `.env` and `.secrets`. This is needed even for suites
+that do not submit builds because the gateway validates its Konflux token at
+startup. For other local Konflux builds, refresh the token manually before
+starting the build.
+
+This writes the short-lived service-account token to `.secrets/konflux/token`,
+which the gateway reads for each build. Refresh it when a build returns 401; a
+gateway restart is not needed. See [Konflux backend setup](docs/konflux-backend.md)
+for the login command, required access, and remaining configuration.
 
 The `mcp-gateway` requires a `keytab` file.
 

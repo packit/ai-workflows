@@ -30,15 +30,62 @@ logger = logging.getLogger(__name__)
 
 
 def get_rebase_primary_issue(details: dict) -> str | None:
-    """Read the primary issue from the persistent sibling marker comment."""
+    """Read the primary issue from the most recent sibling marker comment.
+
+    The marker is a permanent comment, so an issue can carry one per queueing
+    primary. The newest marker is the current relationship; an older one may
+    point at a primary that already finished, and treating that as stale would
+    make a re-queued sibling run as a primary and queue its own primary.
+    """
     comments = details.get("fields", {}).get("comment", {}).get("comments", [])
-    for comment in comments:
+    for comment in reversed(comments):
         body = extract_text_from_adf(comment.get("body", ""))
         _, marker, reference = body.partition("Queued for triage as potential sibling of")
         # Jira may turn the issue key into an ADF inlineCard or HTML smartlink.
         if marker and (match := re.search(r"\bRHEL-\d+\b", reference)):
             return match.group(0)
     return None
+
+
+_CLOSED_ISSUE_STATUSES = frozenset({"Closed", "Done", "Resolved"})
+# A primary carrying one of these has stopped: it either produced a fix, failed
+# permanently, resolved into a non-rebase path, or deferred the fix to a later
+# explicit request. None of them will pick the sibling up, so a link to them is
+# stale.
+_FINISHED_PRIMARY_LABELS = frozenset(
+    {
+        JiraLabels.REBASED.value,
+        JiraLabels.REBASE_ERRORED.value,
+        JiraLabels.NEEDS_ATTENTION.value,
+        JiraLabels.TRIAGE_ERRORED.value,
+        JiraLabels.TRIAGED.value,
+        JiraLabels.TRIAGED_BACKPORT.value,
+        JiraLabels.TRIAGED_REBUILD.value,
+        JiraLabels.TRIAGED_NOT_AFFECTED.value,
+        *JiraLabels.deferred_triage_labels(),
+    }
+)
+
+
+async def sibling_link_is_stale(primary_issue: str, available_tools: list[Tool]) -> bool:
+    """Return whether a sibling link points at a primary that is already finished.
+
+    The sibling marker is a permanent Jira comment, so without this check a later
+    explicit ``ymir_todo`` on a former sibling would defer to a primary that
+    already produced its fix and never run its own.
+
+    Raises if the primary cannot be read: the caller decides whether that means
+    "keep deferring" or "fail the run" for the request that triggered it.
+    """
+    primary_details = await run_tool(
+        "get_jira_details",
+        available_tools=available_tools,
+        issue_key=primary_issue,
+    )
+    fields = primary_details.get("fields", {})
+    status = fields.get("status", {}).get("name", "")
+    labels = fields.get("labels", [])
+    return status in _CLOSED_ISSUE_STATUSES or bool(_FINISHED_PRIMARY_LABELS.intersection(labels))
 
 
 def uses_autochangelog(spec_path: Path) -> bool:
@@ -210,6 +257,7 @@ def build_rebase_siblings_jql(
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBUILD.value,
             JiraLabels.TRIAGED_REBASE.value,
+            *JiraLabels.deferred_triage_labels(),
             JiraLabels.TRIAGED_POSTPONED.value,
             JiraLabels.TRIAGED.value,  # Open-ended-analysis, no automated follow-up
             # Completion labels (non-retriable - work successfully finished)
@@ -256,6 +304,10 @@ class SiblingRebaseAnalysis(BaseModel):
         return self
 
 
+class SiblingLabelsUnreadableError(Exception):
+    """Raised when a sibling's labels cannot be read, so discovery is incomplete."""
+
+
 async def queue_siblings_for_triage(
     primary_issue: str,
     rebase_data: RebaseData,
@@ -280,6 +332,11 @@ async def queue_siblings_for_triage(
 
     Returns:
         Number of siblings queued for triage (or would be queued in dry-run)
+
+    Raises:
+        SiblingLabelsUnreadableError: When a candidate's labels cannot be read.
+            Discovery is then incomplete, so the run must retry rather than let
+            the primary rebase without a potential sibling.
     """
     if not rebase_data.fix_version:
         logger.info(f"No fix_version for {primary_issue}, skipping sibling queue")
@@ -332,12 +389,18 @@ async def queue_siblings_for_triage(
             # Defensive check for non-retriable terminal labels (should already be filtered by JQL,
             # but check again in case of Jira indexing delays or race conditions).
             # Per jira_label_workflow_routing.md: FAILED labels are retriable, ERRORED block retry.
-            candidate_labels, _ = await tasks.get_jira_issue_metadata(candidate_key)
+            try:
+                candidate_labels, _ = await tasks.get_jira_issue_metadata(candidate_key, raise_on_error=True)
+            except Exception as e:
+                # Skipping would let the primary rebase without this sibling and
+                # split a shared rebase, so retry the whole triage instead.
+                raise SiblingLabelsUnreadableError(candidate_key) from e
             terminal_labels = {
                 JiraLabels.REBASE_SIBLING.value,
                 JiraLabels.TRIAGED_REBASE.value,
                 JiraLabels.TRIAGED_BACKPORT.value,
                 JiraLabels.TRIAGED_REBUILD.value,
+                *JiraLabels.deferred_triage_labels(),
                 JiraLabels.TRIAGED_NOT_AFFECTED.value,
                 JiraLabels.TRIAGED_POSTPONED.value,
                 JiraLabels.TRIAGED.value,
@@ -408,8 +471,14 @@ async def queue_siblings_for_triage(
                     continue
 
                 # Queue for triage AFTER label AND comment
-                # Inherit user_triggered from primary to preserve priority
-                task = Task.from_issue(candidate_key, user_triggered=user_triggered)
+                # Inherit user_triggered from primary to preserve priority. Keep the
+                # sibling's own triage-only marker, which must not be overridden by
+                # the trigger flag it inherited.
+                task = Task.from_issue(
+                    candidate_key,
+                    user_triggered=user_triggered,
+                    triage_only=JiraLabels.TRIAGE_ONLY.value in candidate_labels,
+                )
                 # Use priority queue for user-triggered tasks
                 queue = (
                     RedisQueues.TRIAGE_QUEUE_TODO.value if user_triggered else RedisQueues.TRIAGE_QUEUE.value
@@ -424,6 +493,8 @@ async def queue_siblings_for_triage(
                 f"{'[DRY-RUN] Would queue' if dry_run else 'Queued'} sibling {candidate_key} for triage"
             )
 
+        except SiblingLabelsUnreadableError:
+            raise
         except Exception as e:
             import traceback
 
@@ -557,6 +628,7 @@ async def check_and_queue_primary_if_ready(
             JiraLabels.TRIAGED_REBASE.value,
             JiraLabels.TRIAGED_BACKPORT.value,
             JiraLabels.TRIAGED_REBUILD.value,
+            *JiraLabels.deferred_triage_labels(),
             JiraLabels.TRIAGED_NOT_AFFECTED.value,
             JiraLabels.TRIAGED_POSTPONED.value,
             # Completions
@@ -593,12 +665,12 @@ async def check_and_queue_primary_if_ready(
         for candidate in pending_siblings:
             candidate_key = candidate.get("key", "")
             # If it has ymir_rebase_sibling, it's definitely a sibling (not started yet)
-            labels = candidate.get("fields", {}).get("labels", [])
-            if JiraLabels.REBASE_SIBLING.value in labels:
+            candidate_labels = candidate.get("fields", {}).get("labels", [])
+            if JiraLabels.REBASE_SIBLING.value in candidate_labels:
                 actual_siblings.append(candidate_key)
                 continue
             # If it has ymir_triage_in_progress, check if it's a sibling of THIS primary
-            if JiraLabels.TRIAGE_IN_PROGRESS.value in labels:
+            if JiraLabels.TRIAGE_IN_PROGRESS.value in candidate_labels:
                 comments = candidate.get("fields", {}).get("comment", {}).get("comments", [])
                 for comment in comments:
                     # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
@@ -638,7 +710,13 @@ async def check_and_queue_primary_if_ready(
             # queue for rebase with proper full state (Task.metadata = state.model_dump()).
             # The ymir_triaged_rebase label will be removed by triage when it sees
             # ymir_rebase_waiting_for_siblings was present (non-terminal state for re-triaging).
-            task = Task.from_issue(primary_issue, user_triggered=user_triggered)
+            # Carry the primary's own intent: a per-issue triage-only request must
+            # survive the trigger flag the siblings inherited from it.
+            task = Task.from_issue(
+                primary_issue,
+                user_triggered=user_triggered,
+                triage_only=JiraLabels.TRIAGE_ONLY.value in labels,
+            )
             async with redis_client(os.environ["REDIS_URL"]) as redis:
                 await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
             logger.info(f"Re-queued {primary_issue} to triage (will re-triage and queue to rebase)")

@@ -13,7 +13,6 @@ import sentry_sdk
 from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
-from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field
 
@@ -188,7 +187,6 @@ def create_reproducer_agent(gateway_tools, local_tool_options=None, extra_middle
         tool_call_checker=get_tool_call_checker_config(),
         enable_context_management=True,
         tools=[
-            ThinkTool(),
             RunShellCommandTool(options=local_tool_options) if local_tool_options else RunShellCommandTool(),
             VersionMapperTool(),
             CreateTool(options=local_tool_options) if local_tool_options else CreateTool(),

@@ -10,7 +10,12 @@ from beeai_framework.adapters.mcp.serve.server import (
 
 from ymir.common.mock_repos import apply_zstream_override_from_env
 from ymir.tools.gateway_utils import get_log_detective_mcp, setup_logging
-from ymir.tools.privileged.copr import BuildPackageTool, DownloadArtifactsTool
+from ymir.tools.privileged.copr import (
+    BuildPackageTool,
+    DownloadArtifactsTool,
+    ModularCoprBuildTool,
+    ModularCoprDownloadTool,
+)
 from ymir.tools.privileged.distgit import CreateZstreamBranchTool
 from ymir.tools.privileged.errata import (
     ErratumAddCommentTool,
@@ -111,10 +116,12 @@ logger = logging.getLogger(__name__)
 
 
 def _select_build_tools(tool_options: dict) -> list:
-    """Return the (build_package, download_artifacts) tools for the configured backend.
+    """Return the build and artifact-download tools for the configured backend.
 
-    Both backends register the same tool names so the agents stay backend-agnostic.
-    Selected by BUILD_BACKEND (default: copr).
+    Both backends register ``build_package`` and ``download_artifacts`` so
+    non-modular builds stay backend-agnostic. Selected by BUILD_BACKEND
+    (default: copr). Konflux cannot enable a module stream, so that backend
+    also registers Copr as ``build_package_copr`` for modular packages.
     """
     backend = os.getenv("BUILD_BACKEND", "copr").strip().lower()
     if backend == "konflux":
@@ -122,16 +129,18 @@ def _select_build_tools(tool_options: dict) -> list:
         # SA token file (e.g. the rotation CronJob has not populated it yet) or
         # any other misconfiguration refuses the process rather than surfacing
         # only on the first build. _load_config raises on an empty/unreadable
-        # token file and on missing API URLs / GITLAB_TOKEN.
+        # token file and on missing GITLAB_TOKEN. Konflux URLs have defaults.
         try:
             _load_config()
         except Exception as e:
             logger.critical("Konflux build backend is misconfigured; refusing to start: %s", e)
             raise
-        logger.info("Build backend: konflux")
+        logger.info("Build backend: konflux (modular packages stay on Copr)")
         return [
             KonfluxBuildTool(options=tool_options),
             KonfluxDownloadArtifactsTool(options=tool_options),
+            ModularCoprBuildTool(options=tool_options),
+            ModularCoprDownloadTool(options=tool_options),
         ]
     if backend not in ("copr", ""):
         logger.warning("Unknown BUILD_BACKEND=%r, falling back to copr", backend)

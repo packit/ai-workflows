@@ -23,6 +23,14 @@ backport: fix the patch(es), regenerate them, and regenerate the SRPM. A
 separate build step then rebuilds your fix. If the build still fails you will be
 called again with the new build error, so make ONE focused fix attempt per
 invocation.
+{% if module_stream %}
+This is a modular package. The workflow's build step is the only build, and it
+passes `module_stream="{{ module_stream }}"` so Copr enables that stream in the
+buildroot. Do not call a build tool yourself. Do not edit the backport to work
+around BuildRequires that this stream provides — those resolve on the rebuild,
+and with `BUILD_BACKEND=konflux` a build tool you called would not enable the
+stream at all.
+{% endif %}
 
 CRITICAL CONSTRAINTS:
 - The upstream repository at {{ local_clone }}-upstream has all your previous work intact.

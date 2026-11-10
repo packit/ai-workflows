@@ -15,7 +15,6 @@ from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
-from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 from opentelemetry import trace as trace_api
 from pydantic import Field
@@ -121,7 +120,6 @@ async def create_consolidation_agent(
 ) -> ReasoningAgent:
     """Create the LLM agent that combines two MR changesets."""
     base_tools = [
-        ThinkTool(),
         RunShellCommandTool(options=local_tool_options),
         CreateTool(options=local_tool_options),
         ViewTool(options=local_tool_options),

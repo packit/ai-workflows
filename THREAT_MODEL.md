@@ -24,7 +24,8 @@ Security-relevant assumptions this system makes about its environment:
 - **Build validation can trigger a Konflux build directly.** With
   `BUILD_BACKEND=konflux`, agents call `build_package` through the privileged
   MCP gateway, which creates and polls a scratch PipelineRun from a pushed
-  fork commit. The default backend is Copr. The human-applied MR label
+  fork commit. Local Compose and production OpenShift deployments select
+  Konflux by default; Copr remains an explicit option. The human-applied MR label
   `feature::draft-builds::enabled` gates the separate GitLab CI draft/release
   build path, not agent build validation. Agents can automatically apply
   build-*target* labels (`target::zstream`, added by
@@ -104,11 +105,11 @@ redirects and other caller-supplied URLs before making a request.
 | entry_point | description | trust_boundary | reachable_assets |
 |---|---|---|---|
 | Jira issue content (title/description/comments) | Ingested by `jira-issue-fetcher` cronjobs and the triage agent via JQL search | untrusted Jira reporter content → LLM agent context / privileged tool arguments | Dist-git write access, GitLab PAT, Kerberos keytabs, source/patch integrity |
-| `ymir_todo` Jira label | Maintainer-facing trigger to enqueue processing of a specific issue | Jira user → triage queue enqueue (gated by Red Hat-employee group check) | Redis/Valkey task queues, Jira API token |
+| `ymir_todo` / `ymir_todo_triage` Jira label | Maintainer-facing trigger to enqueue processing of a specific issue (`ymir_todo_triage` requests a run that stops after triage) | Jira user → triage queue enqueue (gated by Red Hat-employee group check) | Redis/Valkey task queues, Jira API token |
 | Jira webhook bot-mention commands | `POST /api/jira/webhook` accepts Jira Cloud comment webhooks; a bot-mention in the comment body triggers command dispatch (e.g. `consolidate`) | Jira commenter → Redis merge-consolidation queue enqueue (gated by HMAC signature + Red Hat-employee group check on comment author) | Redis/Valkey task queues |
 | GitLab MR comments / CI pipeline logs | Read by agents during iterate/fix loops on open MRs | untrusted GitLab.com commenter / CI log content → LLM agent context | Dist-git write access, GitLab PAT |
 | `GetPatchFromUrlTool` `patch_url` parameter | Tool argument that can originate from Jira issue text | attacker-influenceable input → outbound HTTP fetch (SSRF-shaped) | Internal network reachability within egress allow-list |
-| `AGENTS.md` content (`get_maintainer_rules`, `get_shared_rules`) | Free-text guidance fetched from `gitlab.com/redhat/centos-stream/rules/<package>` and, as of the shared-rules registry, `rules/shared-rules/<rule_set>/AGENTS.md` — one shared rule set can apply to every package listed in the registry, not just one | maintainer-authored content → LLM agent context | Source, patches, and spec-file changes produced by agents |
+| `AGENTS.md` / `ymir.yaml` content (`get_maintainer_rules`, `get_shared_rules`) | Free-text guidance fetched from `gitlab.com/redhat/centos-stream/rules/<package>` and, as of the shared-rules registry, `rules/shared-rules/<rule_set>/AGENTS.md` — one shared rule set can apply to every package listed in the registry, not just one. The same repo's machine-parsed `rules/<package>/ymir.yaml` (branch creation, reproducer, consolidation, release bumping, `auto_processing.mode`) steers agent control flow rather than LLM context | maintainer-authored content → LLM agent context / agent control flow | Source, patches, and spec-file changes produced by agents; pipeline dispatch |
 | Konflux Kubernetes/Tekton API | `mcp-gateway` submits scratch PipelineRuns and a temporary git-auth Secret; status and task logs are read back | privileged gateway → external build cluster; build status → agent validation decision | Konflux token, GitLab token, build-validation result |
 | KubeArchive API | Archived PipelineRun/TaskRun status and pod-log reads after a live API 404 | external archive data → gateway and, for failed logs, build-failure analyst context | Build-validation result, agent diagnosis |
 | RPM pipeline repository | `main` is resolved at build time and its pinned SHA is used by the Tekton Git resolver | remote repository code → executable pipeline in Konflux | GitLab token in git-auth Secret, build-validation result |

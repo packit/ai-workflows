@@ -2,12 +2,40 @@
 
 import pytest
 from beeai_framework.agents import AgentExecutionConfig
-from beeai_framework.tools.think import ThinkTool
+from beeai_framework.context import RunContext
+from beeai_framework.emitter import Emitter
+from beeai_framework.tools import StringToolOutput, Tool, ToolRunOptions
 from flexmock import flexmock
+from pydantic import BaseModel
 
 from ymir.agents import backport_agent
 from ymir.agents.reasoning_agent._runner import ReasoningAgentRunner
 from ymir.agents.reasoning_agent.context_management import ManageContextTool
+
+
+class _NoInput(BaseModel):
+    pass
+
+
+class _NamedTool(Tool[_NoInput, ToolRunOptions, StringToolOutput]):
+    name = "placeholder"
+    description = "Placeholder gateway tool."
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+    @property
+    def input_schema(self) -> type[BaseModel]:
+        return _NoInput
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", self.name], creator=self)
+
+    async def _run(
+        self, input: _NoInput, options: ToolRunOptions | None, context: RunContext
+    ) -> StringToolOutput:
+        return StringToolOutput("")
 
 
 def _render_system(agent) -> str:
@@ -32,18 +60,17 @@ async def _create(monkeypatch, *, enabled, parallel, reasoning=False, older=Fals
         return older
 
     flexmock(backport_agent).should_receive("is_older_zstream").replace_with(is_older)
-    tools = []
-    for name in [
-        "get_shared_rules",
-        "get_maintainer_rules",
-        "clone_repository",
-        "build_package",
-        "download_artifacts",
-        "extract_log_snippets",
-    ]:
-        tool = ThinkTool()
-        tool.name = name
-        tools.append(tool)
+    tools = [
+        _NamedTool(name)
+        for name in [
+            "get_shared_rules",
+            "get_maintainer_rules",
+            "clone_repository",
+            "build_package",
+            "download_artifacts",
+            "extract_log_snippets",
+        ]
+    ]
     return await backport_agent.create_backport_agent(
         tools,
         {"working_directory": "/tmp"},
@@ -71,7 +98,7 @@ async def test_factory_preserves_model_and_gates_context(monkeypatch, enabled, p
     prompt = _render_system(agent)
     assert prompt.count("CUMULATIVE DURABLE SUMMARY") == (1 if enabled else 0)
     assert ("multiple independent tool calls" in prompt) is parallel
-    assert any(tool.name == "think" for tool in agent._tools) is (not reasoning)
+    assert not any(tool.name == "think" for tool in agent._tools)
 
 
 @pytest.mark.parametrize("older", [False, True])

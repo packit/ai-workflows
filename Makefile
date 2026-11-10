@@ -46,7 +46,8 @@ build-and-push: build push
 
 .PHONY: konflux-token
 # Refresh the local Konflux backend token from your current `oc` login.
-# Run this before local konflux builds, and again whenever a build 401s.
+# Start and e2e targets run this automatically when their selected backend is Konflux.
+# Run it manually for other local Konflux builds or after a build 401s.
 konflux-token:
 	scripts/refresh-konflux-token.sh
 
@@ -74,18 +75,19 @@ run-triage-agent-e2e-tests:
 	else \
 		touch .tmt/results.yaml; \
 	fi
+	# TMT installs .env and .secrets above; select the backend after that setup.
 	# SAFETY: MOCK_JIRA=true and DRY_RUN=true prevent writes to production Jira.
 	# These are REQUIRED — tests use real issue keys and would otherwise post
 	# comments to production. Setting them in the environment (not just -e flags)
 	# ensures dependent services like mcp-gateway pick them up via ${VAR:-default}.
 	# The conftest.py enforces this in the test container itself.
-	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true scripts/run-compose-with-backend.py $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		triage-agent-e2e-tests
 
 list-triage-agent-e2e-tests:
-	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true scripts/run-compose-with-backend.py $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		triage-agent-e2e-tests pytest ymir/agents/tests/e2e/test_triage.py --collect-only
@@ -94,7 +96,8 @@ list-triage-agent-e2e-tests:
 run-backport-agent-e2e-tests:
 	# SAFETY: MOCK_JIRA=true and DRY_RUN=true prevent writes to production Jira.
 	# Setting them in the environment ensures mcp-gateway picks them up.
-	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	# Konflux still pushes temporary fork refs and submits real scratch builds.
+	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true scripts/run-compose-with-backend.py $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
@@ -102,7 +105,7 @@ run-backport-agent-e2e-tests:
 		backport-agent-e2e-tests
 
 .PHONY: run-backport-agent-konflux-e2e-tests
-run-backport-agent-konflux-e2e-tests:
+run-backport-agent-konflux-e2e-tests: konflux-token
 	# Konflux build backend variant of the backport e2e. Unlike Copr (which
 	# builds from a local SRPM), Konflux builds from a real pushed fork ref:
 	# even under DRY_RUN the workflow creates the fork under FORK_NAMESPACE,
@@ -115,7 +118,6 @@ run-backport-agent-konflux-e2e-tests:
 		$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
-		-e BUILD_BACKEND="konflux" \
 		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
 		-e BACKPORT_E2E_EXCLUDE_ISSUES="$(BACKPORT_E2E_EXCLUDE_ISSUES)" \
 		backport-agent-e2e-tests
@@ -123,7 +125,7 @@ run-backport-agent-konflux-e2e-tests:
 
 .PHONY: run-reproducer-agent-e2e-tests
 run-reproducer-agent-e2e-tests:
-	ALLOW_RHEL_CONFIG_OVERRIDE=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	ALLOW_RHEL_CONFIG_OVERRIDE=true scripts/run-compose-with-backend.py $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		-e TESTING_FARM_DRY_RUN="false" \
@@ -262,7 +264,8 @@ run-mr-consolidation-agent-standalone:
 
 .PHONY: run-mr-consolidation-agent-e2e-tests
 run-mr-consolidation-agent-e2e-tests:
-	ALLOW_RHEL_CONFIG_OVERRIDE=true $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	# Konflux still pushes temporary fork refs and submits real scratch builds.
+	ALLOW_RHEL_CONFIG_OVERRIDE=true scripts/run-compose-with-backend.py $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
@@ -270,7 +273,7 @@ run-mr-consolidation-agent-e2e-tests:
 
 
 .PHONY: run-mr-consolidation-agent-konflux-e2e-tests
-run-mr-consolidation-agent-konflux-e2e-tests:
+run-mr-consolidation-agent-konflux-e2e-tests: konflux-token
 	# Konflux build backend variant of the MR-consolidation e2e. Unlike Copr
 	# (which builds from a local SRPM), Konflux builds from a real pushed fork
 	# ref: even under DRY_RUN the workflow creates the fork under FORK_NAMESPACE,
@@ -283,7 +286,6 @@ run-mr-consolidation-agent-konflux-e2e-tests:
 		$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
-		-e BUILD_BACKEND="konflux" \
 		-e RUN_LLM_JUDGE=$(RUN_LLM_JUDGE) \
 		mr-consolidation-agent-e2e-tests
 
@@ -363,11 +365,11 @@ run-mr-cleanup:
 
 .PHONY: start
 start:
-	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) JIRA_ALLOW_STATUS_CHANGES=$(JIRA_ALLOW_STATUS_CHANGES) ERRATA_ALLOW_STATUS_CHANGES=$(ERRATA_ALLOW_STATUS_CHANGES) AUTO_CHAIN=$(AUTO_CHAIN) SHARED_RULES_ENABLED=$(SHARED_RULES_ENABLED) $(COMPOSE_AGENTS) up
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) JIRA_ALLOW_STATUS_CHANGES=$(JIRA_ALLOW_STATUS_CHANGES) ERRATA_ALLOW_STATUS_CHANGES=$(ERRATA_ALLOW_STATUS_CHANGES) AUTO_CHAIN=$(AUTO_CHAIN) SHARED_RULES_ENABLED=$(SHARED_RULES_ENABLED) scripts/run-compose-with-backend.py $(COMPOSE_AGENTS) up
 
 .PHONY: start-detached
 start-detached:
-	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) JIRA_ALLOW_STATUS_CHANGES=$(JIRA_ALLOW_STATUS_CHANGES) ERRATA_ALLOW_STATUS_CHANGES=$(ERRATA_ALLOW_STATUS_CHANGES) AUTO_CHAIN=$(AUTO_CHAIN) SHARED_RULES_ENABLED=$(SHARED_RULES_ENABLED) $(COMPOSE_AGENTS) up -d
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) JIRA_ALLOW_STATUS_CHANGES=$(JIRA_ALLOW_STATUS_CHANGES) ERRATA_ALLOW_STATUS_CHANGES=$(ERRATA_ALLOW_STATUS_CHANGES) AUTO_CHAIN=$(AUTO_CHAIN) SHARED_RULES_ENABLED=$(SHARED_RULES_ENABLED) scripts/run-compose-with-backend.py $(COMPOSE_AGENTS) up -d
 
 .PHONY: stop
 stop:

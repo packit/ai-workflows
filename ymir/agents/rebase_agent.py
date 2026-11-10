@@ -8,19 +8,15 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from beeai_framework.agents.requirement.requirements.conditional import (
-    ConditionalRequirement,
-)
 from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
-from beeai_framework.tools.think import ThinkTool
 from beeai_framework.workflows import Workflow
 from pydantic import Field
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import is_konflux_backend, run_build
+from ymir.agents.build_agent import build_tool_name, run_build, use_konflux_backend
 from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
@@ -31,7 +27,7 @@ from ymir.agents.constants import (
 from ymir.agents.log_agent import create_log_agent
 from ymir.agents.log_agent import get_prompt as get_log_prompt
 from ymir.agents.observability import setup_observability
-from ymir.agents.package_update_steps import PackageUpdateState
+from ymir.agents.package_update_steps import PackageUpdateState, build_mr_note
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
@@ -76,7 +72,7 @@ from ymir.common.models import (
     TitleOutputSchema,
 )
 from ymir.common.utils import extract_text_from_adf, init_sentry
-from ymir.common.version_utils import detect_modular_issue
+from ymir.common.version_utils import detect_modular_issue, parse_module_stream
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
 from ymir.tools.unprivileged.text import (
@@ -134,7 +130,6 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
         unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
-            ThinkTool(),
             RunShellCommandTool(options=local_tool_options),
             CreateTool(options=local_tool_options),
             ViewTool(options=local_tool_options),
@@ -149,15 +144,6 @@ def create_rebase_agent(mcp_tools: list[Tool], local_tool_options: dict[str, Any
         ]
         + [t for t in mcp_tools if t.name in ["upload_sources", "get_maintainer_rules", "get_shared_rules"]],
         memory=UnconstrainedMemory(),
-        requirements=[
-            ConditionalRequirement(
-                ThinkTool,
-                force_at_step=1,
-                force_after=Tool,
-                consecutive_allowed=False,
-                only_success_invocations=False,
-            ),
-        ],
         middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat Enterprise Linux developer",
         instructions=get_instructions(),
@@ -300,6 +286,7 @@ async def run_workflow(
     dist_git_namespace=None,
     workspace_id: UUID | None = None,
     is_modular_issue=False,
+    module_stream=None,
     dry_run: bool = False,
     max_build_attempts: int = 10,
 ):
@@ -443,9 +430,6 @@ async def run_workflow(
                 # Accumulate files from this rebase iteration
                 if state.rebase_result.files_to_git_add:
                     state.all_files_git_to_add.update(state.rebase_result.files_to_git_add)
-                if is_modular_issue:
-                    logger.info(f"Skipping build for modular issue {state.jira_issue}")
-                    return "update_release"
                 return "run_build_agent"
             return "comment_in_jira"
 
@@ -476,12 +460,15 @@ async def run_workflow(
             )
 
         async def run_build_agent(state):
-            if is_konflux_backend():
+            # Modular packages stay on Copr: Konflux cannot enable a module stream.
+            konflux_build = use_konflux_backend(modular=is_modular_issue)
+            if konflux_build:
                 revision = await _prepare_konflux_rebase_ref(state)
                 build_input = BuildInputSchema(
                     srpm_path=state.rebase_result.srpm_path,
                     dist_git_branch=state.dist_git_branch,
                     jira_issue=state.jira_issue,
+                    module_stream=module_stream if is_modular_issue else None,
                     git_url=state.fork_url,
                     revision=revision,
                     package_name=state.package,
@@ -493,22 +480,26 @@ async def run_workflow(
                     srpm_path=state.rebase_result.srpm_path,
                     dist_git_branch=state.dist_git_branch,
                     jira_issue=state.jira_issue,
+                    module_stream=module_stream if is_modular_issue else None,
                 )
-            if is_konflux_backend():
-                async with tasks.scratch_build_branch(
-                    state.local_clone, state.fork_url, state.update_branch, revision, gateway_tools
-                ):
-                    build_result = await run_build(
-                        build_input=build_input,
-                        available_tools=gateway_tools,
-                        local_tool_options=local_tool_options,
-                    )
-            else:
-                build_result = await run_build(
+
+            async def _submit_build():
+                return await run_build(
                     build_input=build_input,
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
+                    tool_name=build_tool_name(modular=is_modular_issue),
                 )
+
+            if konflux_build:
+                async with tasks.scratch_build_branch(
+                    state.local_clone, state.fork_url, state.update_branch, revision, gateway_tools
+                ):
+                    build_result = await _submit_build()
+            else:
+                build_result = await _submit_build()
+            if build_result.build_url:
+                state.build_url = build_result.build_url
             if build_result.success:
                 return "update_release"
             if build_result.is_timeout:
@@ -642,7 +633,7 @@ async def run_workflow(
 
         async def commit_push_and_open_mr(state):
             try:
-                if is_konflux_backend() and state.rebase_base_head:
+                if use_konflux_backend(modular=is_modular_issue) and state.rebase_base_head:
                     # Collapse the Konflux build-candidate commit into the
                     # final MR commit: soft-reset to the pristine base so the
                     # already-staged tree commits as a single commit.
@@ -661,6 +652,12 @@ async def run_workflow(
                     if state.consolidation_summary
                     else ""
                 )
+                build_section = build_mr_note(
+                    build_url=state.build_url,
+                    is_modular_issue=is_modular_issue,
+                    module_stream=module_stream,
+                )
+                build_section_block = f"{build_section}\n\n" if build_section else ""
                 (
                     state.merge_request_url,
                     state.merge_request_newly_created,
@@ -684,6 +681,7 @@ async def run_workflow(
                         f"{wrap_details('Rebase status', state.rebase_log[-1])}"
                         f"{consolidation_text}"
                         f"\n\n{branch_note}"
+                        f"{build_section_block}"
                         f"{mr_description_footer(state.package, all_issues)}"
                     ),
                     available_tools=gateway_tools,
@@ -710,12 +708,6 @@ async def run_workflow(
                 comment_text = (
                     state.merge_request_url if state.merge_request_url else state.rebase_result.status
                 )
-                if is_modular_issue:
-                    comment_text += (
-                        "\n\n*Note:* Modular package support is in development. "
-                        "No build was performed — please verify the MR and trigger "
-                        "a build manually."
-                    )
                 # Post same success message to all issues in parallel with per-issue error handling
                 await post_comments_to_all_issues(
                     primary_issue=state.jira_issue,
@@ -862,6 +854,23 @@ async def main() -> None:
                 raw_downstream_component=triage_state.get("raw_downstream_component"),
                 downstream_component=triage_state.get("downstream_component"),
             )
+            _module_stream = None
+            if _modular:
+                parsed_module = parse_module_stream(
+                    triage_state.get("jira_summary"),
+                    triage_state.get("downstream_component"),
+                )
+                if parsed_module:
+                    _module_stream = f"{parsed_module[0]}:{parsed_module[1]}"
+                else:
+                    logger.warning(
+                        "Issue %s detected as modular but module:stream could not be parsed "
+                        "from summary=%r, downstream_component=%r — build will proceed "
+                        "without enabling a module in the buildroot",
+                        rebase_data.jira_issue,
+                        triage_state.get("jira_summary"),
+                        triage_state.get("downstream_component"),
+                    )
             logger.info(
                 f"Processing rebase for package: {rebase_data.package}, "
                 f"version: {rebase_data.version}, JIRA: {rebase_data.jira_issue}, "
@@ -963,6 +972,7 @@ async def main() -> None:
                         dist_git_namespace=dist_git_namespace,
                         workspace_id=task.execution_id,
                         is_modular_issue=_modular,
+                        module_stream=_module_stream,
                         dry_run=dry_run,
                         max_build_attempts=max_build_attempts,
                     )

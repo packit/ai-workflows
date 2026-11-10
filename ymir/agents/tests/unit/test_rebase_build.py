@@ -169,6 +169,7 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(monkeypatch, 
         "srpm_path": "/git-repos/package/package-2-1.src.rpm",
         "dist_git_branch": "c10s",
         "jira_issue": "RHEL-12345",
+        "module_stream": None,
         "git_url": fork_url,
         "revision": revision,
         "package_name": package,
@@ -176,3 +177,119 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(monkeypatch, 
         "specfile": "renamed.spec",
     }
     assert state.rebase_result.success is True
+
+
+@pytest.mark.asyncio
+async def test_modular_rebase_stays_on_copr_when_backend_is_konflux(monkeypatch):
+    """Modular rebases do not push a Konflux scratch ref; they call the Copr tool."""
+    package = "postgresql"
+    fork_url = "https://fork.invalid/postgresql.git"
+    update_branch = "rebase-update"
+
+    monkeypatch.setenv("BUILD_BACKEND", "konflux")
+
+    call_tool_args = []
+
+    async def _mock_call_tool(*_args, **_kwargs):
+        call_tool_args.append((_args, _kwargs))
+        return CallToolResult(content=[TextContent(type="text", text=json.dumps({"success": True}))])
+
+    _mock_session = flexmock()
+    _mock_session.should_receive("call_tool").replace_with(_mock_call_tool)
+    tool = MCPTool(
+        _mock_session,
+        MCPToolInfo(
+            name="build_package_copr",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "srpm_path": {"type": "string"},
+                    "dist_git_branch": {"type": "string"},
+                    "jira_issue": {"type": "string"},
+                    "module_stream": {"type": "string"},
+                },
+                "required": ["srpm_path", "dist_git_branch", "jira_issue"],
+                "additionalProperties": True,
+            },
+        ),
+    )
+
+    @contextlib.asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield [tool]
+
+    flexmock(rebase_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(rebase_agent).should_receive("create_rebase_agent").and_return(flexmock())
+    flexmock(rebase_agent).should_receive("create_log_agent").and_return(flexmock())
+    flexmock(rebase_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+
+    push_calls = []
+
+    async def _mock_push_changes(*args, **_kwargs):
+        push_calls.append(args)
+
+    monkeypatch.setattr(rebase_agent.tasks, "push_changes", _mock_push_changes)
+    monkeypatch.setattr(rebase_agent.tasks, "stage_changes", lambda *_a, **_k: _async_none())
+    monkeypatch.setattr(rebase_agent.tasks, "commit_changes", lambda *_a, **_k: _async_value("deadbeef"))
+
+    async def _mock_check_subprocess(*_args, **_kwargs):
+        raise AssertionError("modular Copr build must not prepare a Konflux git ref")
+
+    monkeypatch.setattr(rebase_agent, "check_subprocess", _mock_check_subprocess)
+
+    run_workflow = Workflow.run
+    completed = []
+
+    def stop(state):
+        completed.append(state)
+        return Workflow.END
+
+    def start_at_build(workflow, state, options=None):
+        if workflow.name == "RebaseWorkflow":
+            state.local_clone = Path("/git-repos/postgresql")
+            state.fork_url = fork_url
+            state.update_branch = update_branch
+            state.spec_name = "postgresql.spec"
+            state.rebase_base_head = "0000000000000000000000000000000000000000"  # pragma: allowlist secret
+            state.all_files_git_to_add = set()
+            state.rebase_result = RebaseOutputSchema(
+                success=True,
+                status="Rebased",
+                srpm_path=Path("/git-repos/postgresql/postgresql-16-1.src.rpm"),
+                files_to_git_add=None,
+                error=None,
+            )
+            workflow.set_start("run_build_agent")
+            workflow.steps["update_release"].handler = stop
+            workflow.steps["comment_in_jira"].handler = stop
+        return run_workflow(workflow, state, options)
+
+    monkeypatch.setattr(Workflow, "run", start_at_build)
+
+    await rebase_agent.run_workflow(
+        package=package,
+        dist_git_branch="c10s",
+        version="16",
+        jira_issue="RHEL-999",
+        dry_run=True,
+        is_modular_issue=True,
+        module_stream="postgresql:16",
+    )
+
+    assert len(completed) == 1
+    assert push_calls == []
+    assert len(call_tool_args) == 1
+    _, build_kwargs = call_tool_args[0]
+    assert build_kwargs["arguments"]["module_stream"] == "postgresql:16"
+    assert build_kwargs["arguments"]["git_url"] is None
+    assert build_kwargs["arguments"]["revision"] is None
+    assert completed[0].rebase_result.success is True
+
+
+async def _async_none():
+    return None
+
+
+async def _async_value(value):
+    return value

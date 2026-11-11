@@ -1006,6 +1006,23 @@ def validate_triage_output(
     return normalized
 
 
+def _request_clarification(state, findings: str, additional_info_needed: str) -> None:
+    """Replace the triage result with a clarification, preserving confidence.
+
+    Every verification dead-end in the workflow routes through here so the
+    OutputSchema construction stays in one place.
+    """
+    state.triage_result = OutputSchema(
+        confidence=state.triage_result.confidence,
+        resolution=Resolution.CLARIFICATION_NEEDED,
+        data=ClarificationNeededData(
+            findings=findings,
+            additional_info_needed=additional_info_needed,
+            jira_issue=state.jira_issue,
+        ),
+    )
+
+
 def _jira_issue_not_accessible(error: Exception) -> bool:
     """Whether a Jira lookup failed because the issue is gone or forbidden.
 
@@ -1654,22 +1671,18 @@ async def run_workflow(
                         f"Model fix version {fix_version!r} disagrees with ticket fix "
                         f"version {ticket_fix_version!r} for {state.jira_issue}"
                     )
-                    state.triage_result = OutputSchema(
-                        confidence=state.triage_result.confidence,
-                        resolution=Resolution.CLARIFICATION_NEEDED,
-                        data=ClarificationNeededData(
-                            findings=(
-                                f"The already-fixed answer names fix version {fix_version}, "
-                                f"but this ticket's fix version is {ticket_fix_version}. "
-                                f"This inconsistency prevents automated verification."
-                            ),
-                            additional_info_needed=(
-                                "Please verify the fix version of this ticket and whether "
-                                "the named build belongs to it, or confirm a "
-                                "rebase/backport is required."
-                            ),
-                            jira_issue=state.jira_issue,
-                        ),
+                    _request_clarification(
+                        state,
+                        (
+                                    f"The already-fixed answer names fix version {fix_version}, "
+                                    f"but this ticket's fix version is {ticket_fix_version}. "
+                                    f"This inconsistency prevents automated verification."
+                                ),
+                        (
+                                    "Please verify the fix version of this ticket and whether "
+                                    "the named build belongs to it, or confirm a "
+                                    "rebase/backport is required."
+                                ),
                     )
                     return "comment_in_jira"
                 fix_version = ticket_fix_version
@@ -1687,22 +1700,18 @@ async def run_workflow(
                     f"Model package {package!r} disagrees with ticket component "
                     f"{ticket_downstream_component!r} for {state.jira_issue}"
                 )
-                state.triage_result = OutputSchema(
-                    confidence=state.triage_result.confidence,
-                    resolution=Resolution.CLARIFICATION_NEEDED,
-                    data=ClarificationNeededData(
-                        findings=(
-                            f"The already-fixed answer names package {package}, but this "
-                            f"ticket's Downstream Component is {ticket_downstream_component}. "
-                            f"This inconsistency prevents automated verification."
-                        ),
-                        additional_info_needed=(
-                            "Please verify which package this ticket tracks and whether the "
-                            "named build belongs to it, or confirm a rebase/backport "
-                            "is required."
-                        ),
-                        jira_issue=state.jira_issue,
-                    ),
+                _request_clarification(
+                    state,
+                    (
+                                f"The already-fixed answer names package {package}, but this "
+                                f"ticket's Downstream Component is {ticket_downstream_component}. "
+                                f"This inconsistency prevents automated verification."
+                            ),
+                    (
+                                "Please verify which package this ticket tracks and whether the "
+                                "named build belongs to it, or confirm a rebase/backport "
+                                "is required."
+                            ),
                 )
                 return "comment_in_jira"
             # The Downstream Component field is optional on tickets: when it is
@@ -1728,14 +1737,10 @@ async def run_workflow(
                 logger.info(
                     f"already-fixed build {package_nvr!r} for {state.jira_issue} not verified: {findings}"
                 )
-                state.triage_result = OutputSchema(
-                    confidence=state.triage_result.confidence,
-                    resolution=Resolution.CLARIFICATION_NEEDED,
-                    data=ClarificationNeededData(
-                        findings=findings,
-                        additional_info_needed=additional_info_needed,
-                        jira_issue=state.jira_issue,
-                    ),
+                _request_clarification(
+                    state,
+                    findings,
+                    additional_info_needed,
                 )
                 return "comment_in_jira"
 
@@ -2018,20 +2023,16 @@ async def run_workflow(
                     # A wrong dependency issue key is a data problem: clarify
                     # instead of retrying until the task errors out.
                     logger.warning("Dependency issue %s is not accessible: %s", dep_issue_key, error)
-                    state.triage_result = OutputSchema(
-                        confidence=state.triage_result.confidence,
-                        resolution=Resolution.CLARIFICATION_NEEDED,
-                        data=ClarificationNeededData(
-                            findings=(
-                                f"The dependency issue {dep_issue_key} could not be found or "
-                                f"accessed in Jira, so its Fixed in Build cannot be verified."
-                            ),
-                            additional_info_needed=(
-                                "Please verify the dependency issue key for this ticket and "
-                                "correct it, then re-run triage."
-                            ),
-                            jira_issue=state.jira_issue,
-                        ),
+                    _request_clarification(
+                        state,
+                        (
+                                    f"The dependency issue {dep_issue_key} could not be found or "
+                                    f"accessed in Jira, so its Fixed in Build cannot be verified."
+                                ),
+                        (
+                                    "Please verify the dependency issue key for this ticket and "
+                                    "correct it, then re-run triage."
+                                ),
                     )
                     return comment_result()
                 # A Jira/gateway outage is transient: retry with backoff.
@@ -2054,40 +2055,33 @@ async def run_workflow(
                     f"Failed to resolve 'Fixed in Build' field for dependency {dep_issue_key}: "
                     f"{fixed_in_build!r} — {e}"
                 )
-                state.triage_result = OutputSchema(
-                    confidence=state.triage_result.confidence,
-                    resolution=Resolution.CLARIFICATION_NEEDED,
-                    data=ClarificationNeededData(
-                        findings=(
-                            f"The dependency issue {dep_issue_key} has a malformed value in the "
-                            f"'Fixed in Build' field: {fixed_in_build!r}. This value cannot be parsed "
-                            f"as a valid Brew build identifier."
-                        ),
-                        additional_info_needed=(
-                            f"Please correct the 'Fixed in Build' field on {dep_issue_key} to contain "
-                            f"a valid Brew NVR (e.g., 'package-1.2.3-4.el9'). "
-                            f"Once corrected, re-run the triage to verify whether rebuild is still needed."
-                        ),
-                        jira_issue=state.jira_issue,
-                    ),
+                _request_clarification(
+                    state,
+                    (
+                                f"The dependency issue {dep_issue_key} has a malformed value in the "
+                                f"'Fixed in Build' field: {fixed_in_build!r}. This value cannot be parsed "
+                                f"as a valid Brew build identifier."
+                            ),
+                    (
+                                f"Please correct the 'Fixed in Build' field on {dep_issue_key} to contain "
+                                f"a valid Brew NVR (e.g., 'package-1.2.3-4.el9'). "
+                                f"Once corrected, re-run the triage to verify whether rebuild is "
+                                f"still needed."
+                            ),
                 )
                 return comment_result()
             if fixed_dep_build is None:
                 logger.warning("Dependency %s Fixed in Build was not found in Brew", dep_issue_key)
-                state.triage_result = OutputSchema(
-                    confidence=state.triage_result.confidence,
-                    resolution=Resolution.CLARIFICATION_NEEDED,
-                    data=ClarificationNeededData(
-                        findings=(
-                            f"The dependency issue {dep_issue_key} references Fixed in Build "
-                            f"{fixed_in_build}, but Brew could not resolve that build."
-                        ),
-                        additional_info_needed=(
-                            "Please correct the Fixed in Build field or confirm the dependency build "
-                            "exists in Brew, then re-run triage."
-                        ),
-                        jira_issue=state.jira_issue,
-                    ),
+                _request_clarification(
+                    state,
+                    (
+                                f"The dependency issue {dep_issue_key} references Fixed in Build "
+                                f"{fixed_in_build}, but Brew could not resolve that build."
+                            ),
+                    (
+                                "Please correct the Fixed in Build field or confirm the dependency build "
+                                "exists in Brew, then re-run triage."
+                            ),
                 )
                 return comment_result()
             # Cross-validate the LLM-provided dependency component against the
@@ -2099,28 +2093,24 @@ async def run_workflow(
                     f"Invalid dependency data: {dep_component} resolves to "
                     f"{fixed_dep_build.nevr.name}. Requesting clarification."
                 )
-                state.triage_result = OutputSchema(
-                    confidence=state.triage_result.confidence,
-                    resolution=Resolution.CLARIFICATION_NEEDED,
-                    data=ClarificationNeededData(
-                        findings=(
-                            f"The dependency component {dep_component} (from issue "
-                            f"{dep_issue_key}, Fixed in Build: {fixed_in_build}) resolves "
-                            f"to a different package name in Brew "
-                            f"({fixed_dep_build.nevr.name}). This inconsistency between the Jira "
-                            f"dependency information and the actual Brew package data prevents "
-                            f"automated verification of whether the package was rebuilt with "
-                            f"the fixed dependency."
-                        ),
-                        additional_info_needed=(
-                            f"Please verify the dependency information for {dep_component}. "
-                            f"If the dependency component name in Jira is incorrect, update the "
-                            f"dependency link. If the Brew package name mapping is correct but "
-                            f"unexpected, please manually verify whether the package needs to be "
-                            f"rebuilt with the fixed dependency."
-                        ),
-                        jira_issue=state.jira_issue,
-                    ),
+                _request_clarification(
+                    state,
+                    (
+                                f"The dependency component {dep_component} (from issue "
+                                f"{dep_issue_key}, Fixed in Build: {fixed_in_build}) resolves "
+                                f"to a different package name in Brew "
+                                f"({fixed_dep_build.nevr.name}). This inconsistency between the Jira "
+                                f"dependency information and the actual Brew package data prevents "
+                                f"automated verification of whether the package was rebuilt with "
+                                f"the fixed dependency."
+                            ),
+                    (
+                                f"Please verify the dependency information for {dep_component}. "
+                                f"If the dependency component name in Jira is incorrect, update the "
+                                f"dependency link. If the Brew package name mapping is correct but "
+                                f"unexpected, please manually verify whether the package needs to be "
+                                f"rebuilt with the fixed dependency."
+                            ),
                 )
                 return comment_result()
             # fix_version is already normalized by run_triage_analysis (e.g. rhel-9.8 → rhel-9.8.z)
@@ -2147,24 +2137,20 @@ async def run_workflow(
                     if isinstance(reason, BuildVerificationReport):
                         verification_report = reason
                         if reason.reason is None:
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"Could not determine whether {package} in {fix_version} was "
-                                        f"already rebuilt with the fixed {dep_component} dependency "
-                                        f"(issue {dep_issue_key}, Fixed in Build: {fixed_in_build})."
-                                    ),
-                                    additional_info_needed=(
-                                        "Please verify every referenced build below and whether any "
-                                        "was created with the fixed dependency or newer. Correct missing "
-                                        "or inconsistent Jira/Brew data, and confirm the active issues' "
-                                        "status. If a build already contains the fix, use that build for "
-                                        "errata processing; otherwise confirm a rebuild is required."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"Could not determine whether {package} in {fix_version} was "
+                                            f"already rebuilt with the fixed {dep_component} dependency "
+                                            f"(issue {dep_issue_key}, Fixed in Build: {fixed_in_build})."
+                                        ),
+                                (
+                                            "Please verify every referenced build below and whether any "
+                                            "was created with the fixed dependency or newer. Correct missing "
+                                            "or inconsistent Jira/Brew data, and confirm the active issues' "
+                                            "status. If a build already contains the fix, use that build for "
+                                            "errata processing; otherwise confirm a rebuild is required."
+                                        ),
                             )
                             return comment_result()
                         reason = reason.reason
@@ -2210,26 +2196,22 @@ async def run_workflow(
                                 f"Completion timestamps unavailable for {package} ({pkg_nvr}) "
                                 f"vs {dep_component}; requesting manual verification"
                             )
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"The completion timestamps of the latest build of {package} "
-                                        f"(Fixed in Build: {pkg_nvr} from {pkg_issue_key}) or of the "
-                                        f"fixed {dep_component} build (Fixed in Build: "
-                                        f"{fixed_in_build}) are missing in Brew, and the "
-                                        f"installed_pkgs.log is unavailable, so the build order "
-                                        f"cannot be determined automatically."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please verify manually whether build {pkg_nvr} was created "
-                                        f"with {dep_component} {fixed_in_build} or newer. If it was, "
-                                        f"use that build for errata processing; otherwise confirm a "
-                                        f"rebuild is required."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"The completion timestamps of the latest build of {package} "
+                                            f"(Fixed in Build: {pkg_nvr} from {pkg_issue_key}) or of the "
+                                            f"fixed {dep_component} build (Fixed in Build: "
+                                            f"{fixed_in_build}) are missing in Brew, and the "
+                                            f"installed_pkgs.log is unavailable, so the build order "
+                                            f"cannot be determined automatically."
+                                        ),
+                                (
+                                            f"Please verify manually whether build {pkg_nvr} was created "
+                                            f"with {dep_component} {fixed_in_build} or newer. If it was, "
+                                            f"use that build for errata processing; otherwise confirm a "
+                                            f"rebuild is required."
+                                        ),
                             )
                             return comment_result()
                         if reason == "built_after_fix_no_installed_pkgs_log":
@@ -2238,28 +2220,26 @@ async def run_workflow(
                                 f"{package} build {pkg_nvr} completed after {dep_component} fix "
                                 "but installed_pkgs.log is unavailable. Requesting manual verification."
                             )
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
-                                        f"{pkg_issue_key}) was completed after the {dep_component} fix "
-                                        f"(dependency issue {dep_issue_key}, Fixed in Build: "
-                                        f"{fixed_in_build}). This suggests the package likely already "
-                                        f"has the fix, but build logs are unavailable to confirm which "
-                                        f"dependency version was actually used. Overlapping builds or "
-                                        f"buildroot tagging delays could mean an older version was used "
-                                        f"despite the later build time."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please verify whether build {pkg_nvr} was created with "
-                                        f"{dep_component} {fixed_in_build} or newer. If confirmed, mark as "
-                                        f"Already Fixed and add build {pkg_nvr} to the errata. If the old "
-                                        f"version was used, proceed with rebuild."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
+                                            f"{pkg_issue_key}) was completed after the {dep_component} fix "
+                                            f"(dependency issue {dep_issue_key}, Fixed in Build: "
+                                            f"{fixed_in_build}). This suggests the package likely already "
+                                            f"has the fix, but build logs are unavailable to confirm which "
+                                            f"dependency version was actually used. Overlapping builds or "
+                                            f"buildroot tagging delays could mean an older version was used "
+                                            f"despite the later build time."
+                                        ),
+                                (
+                                            f"Please verify whether build {pkg_nvr} was created with "
+                                            f"{dep_component} {fixed_in_build} or newer. If confirmed, "
+                                 f"mark as "
+                                            f"Already Fixed and add build {pkg_nvr} to the errata. If the "
+                                 f"old "
+                                            f"version was used, proceed with rebuild."
+                                        ),
                             )
                             return comment_result()
                         if reason and reason.startswith("active_builds_not_closed:"):
@@ -2269,46 +2249,40 @@ async def run_workflow(
                                 f"Active builds found for {package} ({active_issues}) but not closed. "
                                 f"Requesting clarification."
                             )
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"Found active (not yet closed) builds for {package} with "
-                                        f"'Fixed in Build' set: {active_issues}. These builds exist "
-                                        f"in Jira but have not been closed/resolved yet, so they may "
-                                        f"still be rejected or abandoned."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please verify whether any of these builds ({active_issues}) "
-                                        f"actually shipped with {dep_component} {fixed_in_build} or newer. "
-                                        f"If yes and the build is valid, close the issue and mark as "
-                                        f"Already Fixed. If the builds are invalid or won't ship, "
-                                        f"proceed with rebuild."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"Found active (not yet closed) builds for {package} with "
+                                            f"'Fixed in Build' set: {active_issues}. These builds exist "
+                                            f"in Jira but have not been closed/resolved yet, so they may "
+                                            f"still be rejected or abandoned."
+                                        ),
+                                (
+                                            f"Please verify whether any of these builds ({active_issues}) "
+                                            f"actually shipped with {dep_component} {fixed_in_build} or "
+                                 f"newer. "
+                                            f"If yes and the build is valid, close the issue and mark as "
+                                            f"Already Fixed. If the builds are invalid or won't ship, "
+                                            f"proceed with rebuild."
+                                        ),
                             )
                             return comment_result()
                         if reason and reason.startswith("unresolved_subpackage_needs_verification:"):
                             subpkg_list = reason.split(":", 1)[1]
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
-                                        f"{pkg_issue_key}) contains installed packages from {dep_component} "
-                                        f"that Brew could not resolve: {subpkg_list}. The installed "
-                                        "dependency version could not be determined automatically."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please verify the installed version of {dep_component} in "
-                                        f"{subpkg_list} for build {pkg_nvr}. If it is {fixed_in_build} "
-                                        "or newer, mark as Already Fixed; otherwise proceed with rebuild."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
+                                            f"{pkg_issue_key}) contains installed packages from "
+                                 f"{dep_component} "
+                                            f"that Brew could not resolve: {subpkg_list}. The installed "
+                                            "dependency version could not be determined automatically."
+                                        ),
+                                (
+                                            f"Please verify the installed version of {dep_component} in "
+                                            f"{subpkg_list} for build {pkg_nvr}. If it is {fixed_in_build} "
+                                            "or newer, mark as Already Fixed; otherwise proceed with rebuild."
+                                        ),
                             )
                             return comment_result()
                         if reason and reason.startswith("subpackage_match_needs_verification:"):
@@ -2318,29 +2292,26 @@ async def run_workflow(
                                 f"but matched via subpackage(s): {subpkg_list}. "
                                 f"Requesting manual verification."
                             )
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
-                                        f"{pkg_issue_key}) was built with {dep_component} at the required "
-                                        f"version or newer ({fixed_in_build}). The {dep_component} "
-                                        f"component produces multiple binary packages. The following "
-                                        f"installed packages from this source RPM were found: "
-                                        f"{subpkg_list}. We cannot automatically determine which of "
-                                        f"these packages carry the fixed code."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please verify whether the installed packages ({subpkg_list}) "
-                                        f"from {dep_component} {fixed_in_build} contain the fix "
-                                        f"for this issue. If confirmed, mark as Already Fixed and add "
-                                        f"build {pkg_nvr} to the errata. If the fix is in a different "
-                                        f"binary package from {dep_component} that was not installed, "
-                                        f"proceed with rebuild."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
+                                            f"{pkg_issue_key}) was built with {dep_component} at the "
+                                 f"required "
+                                            f"version or newer ({fixed_in_build}). The {dep_component} "
+                                            f"component produces multiple binary packages. The following "
+                                            f"installed packages from this source RPM were found: "
+                                            f"{subpkg_list}. We cannot automatically determine which of "
+                                            f"these packages carry the fixed code."
+                                        ),
+                                (
+                                            f"Please verify whether the installed packages ({subpkg_list}) "
+                                            f"from {dep_component} {fixed_in_build} contain the fix "
+                                            f"for this issue. If confirmed, mark as Already Fixed and add "
+                                            f"build {pkg_nvr} to the errata. If the fix is in a different "
+                                            f"binary package from {dep_component} that was not installed, "
+                                            f"proceed with rebuild."
+                                        ),
                             )
                             return comment_result()
                         if reason == "partial_architecture_coverage":
@@ -2349,25 +2320,23 @@ async def run_workflow(
                                 f"Partial architecture coverage for {package} build {pkg_nvr}. "
                                 f"Dependency missing from some arch logs."
                             )
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
-                                        f"{pkg_issue_key}) has {dep_component} dependency in some "
-                                        "installed_pkgs.log files but not others. This could indicate "
-                                        f"parsing issues, different build configurations per arch, or "
-                                        f"incomplete build logs."
-                                    ),
-                                    additional_info_needed=(
-                                        "Please manually inspect installed_pkgs.log for all architectures of "
-                                        f"{pkg_nvr} to verify which {dep_component} version was actually "
-                                        f"used across all architectures. If all archs used {fixed_in_build} "
-                                        f"or newer, mark as Already Fixed. Otherwise, rebuild."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
+                                            f"{pkg_issue_key}) has {dep_component} dependency in some "
+                                            "installed_pkgs.log files but not others. This could indicate "
+                                            f"parsing issues, different build configurations per arch, or "
+                                            f"incomplete build logs."
+                                        ),
+                                (
+                                            "Please manually inspect installed_pkgs.log for all "
+                                 f"architectures of "
+                                            f"{pkg_nvr} to verify which {dep_component} version was actually "
+                                            f"used across all architectures. If all archs used "
+                                 f"{fixed_in_build} "
+                                            f"or newer, mark as Already Fixed. Otherwise, rebuild."
+                                        ),
                             )
                             return comment_result()
                         if reason == "architecture_dependency_conflict":
@@ -2376,25 +2345,21 @@ async def run_workflow(
                                 f"Architecture dependency conflict for {package} build {pkg_nvr}. "
                                 f"Different buildroots used."
                             )
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
-                                        f"{pkg_issue_key}) shows different {dep_component} versions "
-                                        f"across architectures. This indicates different buildroots were "
-                                        f"used, which can happen with long builds or buildroot updates."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please inspect installed_pkgs.log for {pkg_nvr} across "
-                                        f"architectures to determine which {dep_component} version was "
-                                        f"used. Mark as Already Fixed only if ALL architectures used "
-                                        f"{fixed_in_build} or newer. If any architecture used an older "
-                                        f"version, rebuild the affected architectures."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"The latest build of {package} (Fixed in Build: {pkg_nvr} from "
+                                            f"{pkg_issue_key}) shows different {dep_component} versions "
+                                            f"across architectures. This indicates different buildroots were "
+                                            f"used, which can happen with long builds or buildroot updates."
+                                        ),
+                                (
+                                            f"Please inspect installed_pkgs.log for {pkg_nvr} across "
+                                            f"architectures to determine which {dep_component} version was "
+                                            f"used. Mark as Already Fixed only if ALL architectures used "
+                                            f"{fixed_in_build} or newer. If any architecture used an older "
+                                            f"version, rebuild the affected architectures."
+                                        ),
                             )
                             return comment_result()
                         if reason == "no_builds_found":
@@ -2402,24 +2367,20 @@ async def run_workflow(
                                 f"No builds found for {package} in {fix_version}. "
                                 f"All builds belonged to other packages after filtering."
                             )
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"No valid builds found for {package} in {fix_version}. "
-                                        f"All builds referenced in Jira belonged to other packages "
-                                        f"when verified in Brew, suggesting a data inconsistency or "
-                                        f"incorrect component naming."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please verify if {package} has a valid completed build "
-                                        f"in {fix_version}. If no build exists, proceed with rebuild. "
-                                        f"If builds exist but are misattributed in Jira, correct the "
-                                        f"Jira records and re-run triage."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"No valid builds found for {package} in {fix_version}. "
+                                            f"All builds referenced in Jira belonged to other packages "
+                                            f"when verified in Brew, suggesting a data inconsistency or "
+                                            f"incorrect component naming."
+                                        ),
+                                (
+                                            f"Please verify if {package} has a valid completed build "
+                                            f"in {fix_version}. If no build exists, proceed with rebuild. "
+                                            f"If builds exist but are misattributed in Jira, correct the "
+                                            f"Jira records and re-run triage."
+                                        ),
                             )
                             return comment_result()
                         if reason and reason.startswith("invalid_build_records:"):
@@ -2428,24 +2389,20 @@ async def run_workflow(
                                 f"Closed builds for {package} in Jira have mismatched "
                                 f"package names in Brew: {rejected_issues}"
                             )
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"Found closed builds for {package} in Jira "
-                                        f"({rejected_issues}), but their NVRs resolve to a "
-                                        f"different package name in Brew. This data inconsistency "
-                                        f"prevents automated rebuild verification."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please verify the builds referenced in {rejected_issues} "
-                                        f"and confirm whether {package} has a valid completed build "
-                                        f"with {dep_component} {fixed_in_build} or newer. If the "
-                                        f"build records are incorrect, proceed with rebuild."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"Found closed builds for {package} in Jira "
+                                            f"({rejected_issues}), but their NVRs resolve to a "
+                                            f"different package name in Brew. This data inconsistency "
+                                            f"prevents automated rebuild verification."
+                                        ),
+                                (
+                                            f"Please verify the builds referenced in {rejected_issues} "
+                                            f"and confirm whether {package} has a valid completed build "
+                                            f"with {dep_component} {fixed_in_build} or newer. If the "
+                                            f"build records are incorrect, proceed with rebuild."
+                                        ),
                             )
                             return comment_result()
                         if reason and reason.startswith("build_not_tagged_in_stream:"):
@@ -2456,24 +2413,20 @@ async def run_workflow(
                                 f"Already-fixed build for {package} carries no tag of the "
                                 f"{branch} stream; requesting clarification"
                             )
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"The latest completed build of {package} in {fix_version} "
-                                        f"carries no tag of the {branch} Brew stream, so it "
-                                        f"is not part of that stream and cannot prove the fix "
-                                        f"shipped there."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please verify the Fixed in Build references for "
-                                        f"{package} in {fix_version} and provide a build "
-                                        f"tagged into the {branch} stream, or confirm a "
-                                        f"rebuild is required."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"The latest completed build of {package} in {fix_version} "
+                                            f"carries no tag of the {branch} Brew stream, so it "
+                                            f"is not part of that stream and cannot prove the fix "
+                                            f"shipped there."
+                                        ),
+                                (
+                                            f"Please verify the Fixed in Build references for "
+                                            f"{package} in {fix_version} and provide a build "
+                                            f"tagged into the {branch} stream, or confirm a "
+                                            f"rebuild is required."
+                                        ),
                             )
                             return comment_result()
                         if reason and reason.startswith("fix_in_progress_in_stream:"):
@@ -2485,23 +2438,19 @@ async def run_workflow(
                                 f"Fix for {package} appears in progress in {fix_version} "
                                 f"({tags}); requesting clarification"
                             )
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"The latest completed build of {package} in {fix_version} "
-                                        f"is only tagged into {tags}: the fix appears to be "
-                                        f"in progress in that stream, not shipped."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please verify whether {package} should wait for that "
-                                        f"build to reach a pending/release tag; you may have "
-                                        f"to update the referencing issue or its errata once "
-                                        f"the fix ships."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"The latest completed build of {package} in {fix_version} "
+                                            f"is only tagged into {tags}: the fix appears to be "
+                                            f"in progress in that stream, not shipped."
+                                        ),
+                                (
+                                            f"Please verify whether {package} should wait for that "
+                                            f"build to reach a pending/release tag; you may have "
+                                            f"to update the referencing issue or its errata once "
+                                            f"the fix ships."
+                                        ),
                             )
                             return comment_result()
                         if reason == "renamed_binary_lookup_failed":
@@ -2512,54 +2461,46 @@ async def run_workflow(
                                 f"Renamed binary RPM lookup failed for {dep_component} while "
                                 f"verifying {package}; requesting clarification"
                             )
-                            state.triage_result = OutputSchema(
-                                confidence=state.triage_result.confidence,
-                                resolution=Resolution.CLARIFICATION_NEEDED,
-                                data=ClarificationNeededData(
-                                    findings=(
-                                        f"Brew could not list the binary RPMs of newer "
-                                        f"{dep_component} builds while verifying whether {package} "
-                                        f"in {fix_version} was rebuilt with the fixed dependency "
-                                        f"(issue {dep_issue_key}, Fixed in Build: {fixed_in_build}). "
-                                        f"The dependency was not found under the fixed build's "
-                                        f"binary RPM names in "
-                                        f"{pkg_nvr or 'the package build'}'s installed_pkgs.log, "
-                                        f"but a renamed binary RPM cannot be ruled out."
-                                    ),
-                                    additional_info_needed=(
-                                        f"Please check the installed_pkgs.log of "
-                                        f"{pkg_nvr or 'the package build'} for any {dep_component} "
-                                        f"binary RPM (the name may have changed between builds) and "
-                                        f"confirm whether its version is {fixed_in_build} or newer. "
-                                        f"If it is, use that build for errata processing; otherwise "
-                                        f"confirm a rebuild is required."
-                                    ),
-                                    jira_issue=state.jira_issue,
-                                ),
+                            _request_clarification(
+                                state,
+                                (
+                                            f"Brew could not list the binary RPMs of newer "
+                                            f"{dep_component} builds while verifying whether {package} "
+                                            f"in {fix_version} was rebuilt with the fixed dependency "
+                                            f"(issue {dep_issue_key}, Fixed in Build: {fixed_in_build}). "
+                                            f"The dependency was not found under the fixed build's "
+                                            f"binary RPM names in "
+                                            f"{pkg_nvr or 'the package build'}'s installed_pkgs.log, "
+                                            f"but a renamed binary RPM cannot be ruled out."
+                                        ),
+                                (
+                                            f"Please check the installed_pkgs.log of "
+                                            f"{pkg_nvr or 'the package build'} for any {dep_component} "
+                                            f"binary RPM (the name may have changed between builds) and "
+                                            f"confirm whether its version is {fixed_in_build} or newer. "
+                                            f"If it is, use that build for errata processing; otherwise "
+                                            f"confirm a rebuild is required."
+                                        ),
                             )
                             return comment_result()
                         # Any other None result carries a reason we do not
                         # specifically handle. Never default to a rebuild
                         # verdict from an unhandled outcome.
                         logger.error(f"Unexpected None result with reason={reason} for {package}")
-                        state.triage_result = OutputSchema(
-                            confidence=state.triage_result.confidence,
-                            resolution=Resolution.CLARIFICATION_NEEDED,
-                            data=ClarificationNeededData(
-                                findings=(
-                                    f"Verification of whether {package} in {fix_version} was "
-                                    f"already rebuilt with the fixed {dep_component} dependency "
-                                    f"(issue {dep_issue_key}, Fixed in Build: {fixed_in_build}) "
-                                    f"returned an unhandled outcome: {reason}."
-                                ),
-                                additional_info_needed=(
-                                    f"Please verify the existing builds of {package} in "
-                                    f"{fix_version} and whether any already contains "
-                                    f"{dep_component} {fixed_in_build} or newer before "
-                                    f"proceeding with another rebuild."
-                                ),
-                                jira_issue=state.jira_issue,
-                            ),
+                        _request_clarification(
+                            state,
+                            (
+                                        f"Verification of whether {package} in {fix_version} was "
+                                        f"already rebuilt with the fixed {dep_component} dependency "
+                                        f"(issue {dep_issue_key}, Fixed in Build: {fixed_in_build}) "
+                                        f"returned an unhandled outcome: {reason}."
+                                    ),
+                            (
+                                        f"Please verify the existing builds of {package} in "
+                                        f"{fix_version} and whether any already contains "
+                                        f"{dep_component} {fixed_in_build} or newer before "
+                                        f"proceeding with another rebuild."
+                                    ),
                         )
                         return comment_result()
                 except TransientInfrastructureError:
@@ -2567,21 +2508,17 @@ async def run_workflow(
                     raise
                 except Exception as e:
                     logger.exception("Cannot verify whether %s has already been rebuilt", package)
-                    state.triage_result = OutputSchema(
-                        confidence=state.triage_result.confidence,
-                        resolution=Resolution.CLARIFICATION_NEEDED,
-                        data=ClarificationNeededData(
-                            findings=(
-                                f"Verification of {package} in {fix_version} failed: {e}. "
-                                f"Dependency: {dep_component}, issue {dep_issue_key}, "
-                                f"Fixed in Build: {fixed_in_build}."
-                            ),
-                            additional_info_needed=(
-                                "Please verify the existing builds and whether any already contains "
-                                "the fixed dependency before proceeding with another rebuild."
-                            ),
-                            jira_issue=state.jira_issue,
-                        ),
+                    _request_clarification(
+                        state,
+                        (
+                                    f"Verification of {package} in {fix_version} failed: {e}. "
+                                    f"Dependency: {dep_component}, issue {dep_issue_key}, "
+                                    f"Fixed in Build: {fixed_in_build}."
+                                ),
+                        (
+                                    "Please verify the existing builds and whether any already contains "
+                                    "the fixed dependency before proceeding with another rebuild."
+                                ),
                     )
                     return comment_result()
 
@@ -2594,17 +2531,13 @@ async def run_workflow(
                 )
             except InvalidDependencyDataError as e:
                 logger.warning(f"Mismatched dependency metadata for {dep_component}: {e}")
-                state.triage_result = OutputSchema(
-                    confidence=state.triage_result.confidence,
-                    resolution=Resolution.CLARIFICATION_NEEDED,
-                    data=ClarificationNeededData(
-                        findings=(f"Buildroot check for {dep_component} found mismatched metadata: {e}"),
-                        additional_info_needed=(
-                            f"Brew returned build metadata naming a different package than "
-                            f"expected ({dep_component}). Manual verification required."
-                        ),
-                        jira_issue=state.jira_issue,
-                    ),
+                _request_clarification(
+                    state,
+                    (f"Buildroot check for {dep_component} found mismatched metadata: {e}"),
+                    (
+                                f"Brew returned build metadata naming a different package than "
+                                f"expected ({dep_component}). Manual verification required."
+                            ),
                 )
                 return comment_result()
             except TransientInfrastructureError:
@@ -2612,20 +2545,17 @@ async def run_workflow(
                 raise
             except Exception as e:
                 logger.exception("Brew buildroot check failed for %s (%s)", dep_component, fixed_in_build)
-                state.triage_result = OutputSchema(
-                    confidence=state.triage_result.confidence,
-                    resolution=Resolution.CLARIFICATION_NEEDED,
-                    data=ClarificationNeededData(
-                        findings=(
-                            f"Could not check the {state.target_branch} buildroot for dependency "
-                            f"{dep_component} (issue {dep_issue_key}, Fixed in Build: {fixed_in_build}): {e}"
-                        ),
-                        additional_info_needed=(
-                            "Please verify the dependency build metadata and its buildroot availability "
-                            "before proceeding with a rebuild."
-                        ),
-                        jira_issue=state.jira_issue,
-                    ),
+                _request_clarification(
+                    state,
+                    (
+                                f"Could not check the {state.target_branch} buildroot for dependency "
+                                f"{dep_component} (issue {dep_issue_key}, Fixed in Build: "
+                                f"{fixed_in_build}): {e}"
+                            ),
+                    (
+                                "Please verify the dependency build metadata and its buildroot availability "
+                                "before proceeding with a rebuild."
+                            ),
                 )
                 return comment_result()
 

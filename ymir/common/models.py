@@ -94,6 +94,11 @@ class TriageInputSchema(BaseModel):
         description="Pre-computed internal RHEL branch to inspect (e.g. 'rhel-10.2') "
         "when needs_internal_fix is true",
     )
+    inherited_dependency_fix_version: str | None = Field(
+        default=None,
+        description="Previous minor's Z-stream fixVersion (e.g. 'rhel-9.9.z' for a rhel-9.10 issue) "
+        "also accepted on a dependency issue, because its fix is inherited through CentOS Stream",
+    )
 
 
 class Task(BaseModel):
@@ -464,6 +469,23 @@ class ClarificationNeededData(BaseModel):
         'that fixes this issue, or a patch file, is required to proceed."'
     )
     jira_issue: str = Field(description="Jira issue identifier")
+    package: str | None = Field(
+        default=None,
+        description="Package name; set for dependency-rebuild CVEs so the applicability check can run",
+    )
+    cve_id: str | None = Field(
+        default=None,
+        description="CVE identifier(s); set for dependency-rebuild CVEs "
+        "(include ALL CVE IDs when the issue covers multiple CVEs)",
+    )
+    fix_version: str | None = Field(
+        default=None,
+        description="Fix version in Jira (e.g., 'rhel-9.10'); set for dependency-rebuild CVEs",
+    )
+    dependency_component: str | None = Field(
+        default=None,
+        description="Dependency component name for a rebuild CVE (e.g. 'golang')",
+    )
 
 
 class OpenEndedAnalysisData(BaseModel):
@@ -741,10 +763,17 @@ class TriageOutputSchema(BaseModel):
                 )
 
             case ClarificationNeededData():
+                package_text = f"\n*Package*: {self.data.package}" if self.data.package else ""
+                dep_comp_text = (
+                    f"\n*Dependency Component*: {self.data.dependency_component}"
+                    if self.data.dependency_component
+                    else ""
+                )
                 return (
                     f"{resolution}"
                     f"*Findings*: {self.data.findings}\n"
                     f"*Additional info needed*: {self.data.additional_info_needed}"
+                    f"{package_text}{dep_comp_text}"
                     f"{confidence_text}{TRIAGE_DISCLAIMER}"
                 )
 

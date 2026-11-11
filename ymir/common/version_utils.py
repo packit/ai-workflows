@@ -226,6 +226,24 @@ def normalize_fix_version(fix_version: str, rhel_config: dict) -> str:
     return f"rhel-{major}.{minor}.z"
 
 
+def get_inherited_dependency_fix_version(fix_version: str, rhel_config: dict) -> str | None:
+    """Return the previous minor's Z-stream whose fixes this Y-stream inherits.
+
+    A Y-stream dependency fix is often tracked only against the previous
+    minor's Z-stream (e.g. rhel-9.9.z for rhel-9.10) and reaches the Y-stream
+    through CentOS Stream. Returns None for Z-streams (including stale
+    Y-stream fixVersions after GA), minor 0, and unparseable input.
+    """
+    parsed = parse_rhel_version(normalize_fix_version(fix_version, rhel_config))
+    if not parsed:
+        return None
+
+    major, minor, is_zstream = parsed
+    if is_zstream or int(minor) == 0:
+        return None
+    return f"rhel-{major}.{int(minor) - 1}.z"
+
+
 def get_maintenance_majors(rhel_config: dict) -> set[str]:
     """Major versions with a Z-stream but no Y-stream (maintenance phase)."""
     current_z_streams = rhel_config.get("current_z_streams", {})

@@ -5,6 +5,7 @@ Common utility functions shared across the BeeAI system.
 import asyncio
 import logging
 import os
+import re
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -227,6 +228,30 @@ def _evr_from_build(build: dict) -> EVR:
     )
 
 
+_YSTREAM_RELEASE_RE = re.compile(r"^(?P<base>.+)\.el(?P<major>\d+)$")
+_ZSTREAM_RELEASE_RE = re.compile(r"^(?P<base>.+)\.el(?P<major>\d+)_\d+$")
+
+
+def _is_inherited_ystream_build(latest: EVR, fixed: EVR) -> bool:
+    """Whether a Y-stream build is the same build as a Z-stream fixed build.
+
+    True only when *latest* carries a plain Y-stream dist tag (``.el9``, used by
+    CentOS Stream and the Brew Y-stream), *fixed* carries a Z-stream dist tag
+    (``.el9_9``) for the same major, and epoch, version and the release base
+    (``1`` in ``1.el9``) are identical.
+    """
+    latest_match = _YSTREAM_RELEASE_RE.match(latest.release)
+    fixed_match = _ZSTREAM_RELEASE_RE.match(fixed.release)
+    return bool(
+        latest_match
+        and fixed_match
+        and latest.epoch == fixed.epoch
+        and latest.version == fixed.version
+        and latest_match["major"] == fixed_match["major"]
+        and latest_match["base"] == fixed_match["base"]
+    )
+
+
 def get_all_sources(spec: Specfile) -> Sources:
     parsed_sections = spec.parsed_sections
     sourcelists = [Sourcelist.parse(s, context=spec) for s in parsed_sections if s.id == "sourcelist"]
@@ -393,6 +418,14 @@ async def check_build_in_buildroot(
 
         if latest_evr >= fixed_evr:
             logger.info(f"{dep_component} in {build_tag}: {latest['nvr']} >= {fixed_in_build_nvr}")
+        elif not build_tag.endswith("-z-build") and _is_inherited_ystream_build(latest_evr, fixed_evr):
+            # The Y-stream build (e.g. .el9) is the same build the Z-stream fix
+            # (e.g. .el9_9) was made from. Z-stream buildroots keep the strict
+            # comparison.
+            logger.info(
+                f"{dep_component} in {build_tag}: {latest['nvr']} is the same "
+                f"version-release as {fixed_in_build_nvr} (inherited build)"
+            )
         else:
             logger.info(
                 f"{dep_component} in {build_tag}: "

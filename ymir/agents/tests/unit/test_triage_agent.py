@@ -16,6 +16,7 @@ from ymir.agents import (
     triage_agent as t_agent,
 )
 from ymir.agents.constants import JIRA_COMMENT_TEMPLATE
+from ymir.agents.cve_applicability_agent import build_applicability_prompt
 from ymir.agents.triage_agent import (
     TriageState,
     _build_reproducer_input,
@@ -40,6 +41,7 @@ from ymir.common.models import (
     AssessedApplicabilityResult,
     AutoProcessingMode,
     BackportData,
+    ClarificationNeededData,
     ConfidenceAssessment,
     ConsolidatedIssue,
     CVEEligibilityResult,
@@ -836,6 +838,24 @@ async def test_render_prompt_modular_rhel9_has_internal_fix():
         downstream_component="squid",
     )
     assert "stream-squid-4-rhel-9.8.0" in prompt
+
+
+@pytest.mark.asyncio
+async def test_render_prompt_includes_inherited_dependency_fix_version():
+    """A Y-stream rebuild may accept a tracker for the previous minor's Z-stream."""
+
+    async def _mock_load_rhel_config(*_args, **_kwargs):
+        return {
+            "current_y_streams": {"9": "rhel-9.10"},
+            "current_z_streams": {"9": "rhel-9.9.z"},
+        }
+
+    flexmock(t_agent).should_receive("is_older_zstream").replace_with(_older_zstream_false)
+    flexmock(t_agent).should_receive("load_rhel_config").replace_with(_mock_load_rhel_config)
+
+    prompt = await render_prompt(TriageInputSchema(issue="RHEL-999"), fix_version="rhel-9.10")
+
+    assert "a dependency issue with fixVersion rhel-9.9.z" in prompt
 
 
 @pytest.mark.asyncio
@@ -1930,3 +1950,193 @@ async def test_is_rebase_sibling_fails_when_own_details_unreadable(monkeypatch, 
     state = TriageState(jira_issue="RHEL-200")
     with pytest.raises(RuntimeError, match="RHEL-200"):
         await _is_rebase_sibling(state, [], user_triggered=user_triggered)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scenario", "expected_resolution"),
+    [
+        ("not_affected", Resolution.NOT_AFFECTED),
+        ("affected", Resolution.CLARIFICATION_NEEDED),
+        ("clone_failure", Resolution.CLARIFICATION_NEEDED),
+        ("no_branch", Resolution.CLARIFICATION_NEEDED),
+        ("no_cve_fields", Resolution.CLARIFICATION_NEEDED),
+        ("no_dependency_component", Resolution.CLARIFICATION_NEEDED),
+    ],
+)
+async def test_rebuild_cve_clarification_runs_applicability_check(
+    scenario, expected_resolution, _mock_env_vars, monkeypatch, tmp_path
+):
+    """A rebuild CVE with no usable dependency ticket still gets the applicability check."""
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+
+    data_fields = {
+        "findings": "No usable dependency ticket found.",
+        "additional_info_needed": "A golang tracker inherited into rhel-9.10.",
+        "jira_issue": "RHEL-99999",
+    }
+    if scenario != "no_cve_fields":
+        data_fields.update(
+            package="some-package",
+            cve_id="CVE-2025-1234",
+            fix_version="rhel-9.10",
+        )
+    if scenario not in ("no_cve_fields", "no_dependency_component"):
+        data_fields["dependency_component"] = "golang"
+    output = TriageOutputSchema(
+        resolution=Resolution.CLARIFICATION_NEEDED,
+        data=ClarificationNeededData(**data_fields),
+    )
+    eligibility = CVEEligibilityResult(
+        is_cve=True, eligibility=TriageEligibility.IMMEDIATELY, reason="Eligible"
+    )
+
+    is_affected = scenario != "not_affected"
+    explanation = (
+        "The package calls the vulnerable Go API."
+        if is_affected
+        else "The package does not call the vulnerable Go API."
+    )
+    applicability = AssessedApplicabilityResult(
+        is_affected=is_affected,
+        justification_category=None if is_affected else "Vulnerable Code not Present",
+        explanation=explanation,
+        confidence=ConfidenceAssessment(level="high", reason="Inspected the package imports."),
+    )
+
+    @asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    async def _mock_run_tool(name, **_kwargs):
+        if name == "check_cve_triage_eligibility":
+            return eligibility.model_dump()
+        if name == "get_jira_details":
+            return {
+                "fields": {
+                    "summary": "CVE-2025-1234 some-package: issue [rhel-9.10]",
+                    "fixVersions": [{"name": "rhel-9.10"}],
+                    "labels": [],
+                }
+            }
+        if name == "get_internal_rhel_branches":
+            return []
+        raise AssertionError(f"Unexpected tool: {name}")
+
+    async def _mock_rules(name, **_kwargs):
+        assert name == "get_maintainer_rules"
+        return ""
+
+    async def _mock_clone_and_prep(**_kwargs):
+        if scenario == "clone_failure":
+            raise RuntimeError("clone failed")
+        return tmp_path, tmp_path, True, None
+
+    branch_calls = []
+
+    async def _mock_determine_target_branch(**kwargs):
+        branch_calls.append(kwargs)
+        if scenario == "no_branch":
+            return None, None
+        return "c9s", None
+
+    applicability_calls = []
+
+    async def _mock_applicability_run(*args, **_kwargs):
+        applicability_calls.append(args)
+        return flexmock(last_message=flexmock(text=applicability.model_dump_json()))
+
+    applicability_agent = flexmock()
+    applicability_agent.should_receive("run").replace_with(_mock_applicability_run)
+
+    async def _mock_triage_run(*_args, **_kwargs):
+        return flexmock(last_message=flexmock(text=output.model_dump_json()))
+
+    triage_agent = flexmock()
+    triage_agent.should_receive("run").replace_with(_mock_triage_run)
+
+    async def _mock_rhel_config(*_args, **_kwargs):
+        return {"current_y_streams": {"9": "rhel-9.10"}}
+
+    async def _mock_prompt(*_args, **_kwargs):
+        return "triage prompt"
+
+    async def _mock_metadata(*_args, raise_on_error=False, **_kwargs):
+        # The triage-only lookup is the only caller that raises on error.
+        assert not raise_on_error, "clarification-needed must not look up the triage-only policy"
+        return [], "New"
+
+    async def _unexpected_policy_lookup(*_args, **_kwargs):
+        raise AssertionError("clarification-needed must not look up package policies")
+
+    comments = []
+
+    async def _record_comment(**kwargs):
+        comments.append(kwargs["comment_text"])
+
+    monkeypatch.setattr(t_agent, "mcp_tools", _mock_mcp_tools)
+    monkeypatch.setattr(t_agent, "run_tool", _mock_run_tool)
+    monkeypatch.setattr(t_agent, "get_mock_local_tool_env", lambda *_: None)
+    monkeypatch.setattr(t_agent, "get_agent_execution_config", dict)
+    monkeypatch.setattr(t_agent, "render_template", lambda *_: "output format")
+    monkeypatch.setattr(t_agent, "render_prompt", _mock_prompt)
+    monkeypatch.setattr(t_agent, "load_rhel_config", _mock_rhel_config)
+    monkeypatch.setattr(t_agent, "determine_target_branch", _mock_determine_target_branch)
+    monkeypatch.setattr(t_agent, "create_applicability_agent", lambda *_: applicability_agent)
+    monkeypatch.setattr(t_agent, "label_applicability_confidence", _async_noop)
+    monkeypatch.setattr(agent_tasks, "run_tool", _mock_rules)
+    monkeypatch.setattr(agent_tasks, "clone_and_prep_sources", _mock_clone_and_prep)
+    monkeypatch.setattr(agent_tasks, "get_jira_issue_metadata", _mock_metadata)
+    monkeypatch.setattr(agent_tasks, "fetch_auto_processing_config", _unexpected_policy_lookup)
+    monkeypatch.setattr(agent_tasks, "fetch_branch_creation_config", _unexpected_policy_lookup)
+    monkeypatch.setattr(agent_tasks, "set_jira_labels", _async_noop)
+    monkeypatch.setattr(agent_tasks, "comment_in_jira", _record_comment)
+
+    state = await run_workflow(
+        "RHEL-99999",
+        dry_run=False,
+        triage_agent_factory=lambda *_: triage_agent,
+        auto_chain=False,
+    )
+
+    assert state.triage_result.resolution == expected_resolution
+    assert comments
+
+    if scenario in ("no_cve_fields", "no_dependency_component"):
+        assert not branch_calls
+        assert not applicability_calls
+        assert "CVE applicability" not in comments[0]
+        return
+
+    assert branch_calls
+    if scenario == "not_affected":
+        assert applicability_calls
+        assert state.triage_result.data.justification_category == "Vulnerable Code not Present"
+        assert "Vulnerable Code not Present" in comments[0]
+    elif scenario == "affected":
+        assert applicability_calls
+        assert state.applicability_findings == explanation
+        assert f"*CVE applicability findings*: {explanation}" in comments[0]
+        assert "manual applicability review is needed" not in comments[0]
+    else:
+        assert not applicability_calls
+        assert state.applicability_check_skipped is True
+        assert "manual applicability review is needed" in comments[0]
+
+
+def test_applicability_prompt_includes_rebuild_context_for_clarification(tmp_path):
+    prompt = build_applicability_prompt(
+        jira_issue="RHEL-99999",
+        package="some-package",
+        target_branch="c9s",
+        resolution=Resolution.CLARIFICATION_NEEDED,
+        cve_id="CVE-2025-1234",
+        dep_component="golang",
+        dep_issue_key="RHEL-1234",
+        patch_files=[],
+        unpacked_sources=tmp_path,
+        prep_ok=True,
+    )
+
+    assert "dependency rebuild against updated 'golang'" in prompt
+    assert "Dependency Jira issue: RHEL-1234" in prompt

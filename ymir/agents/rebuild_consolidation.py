@@ -16,6 +16,7 @@ from ymir.agents.utils import (
     is_reasoning_enabled,
     run_tool,
 )
+from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels
 from ymir.common.cve import extract_cve_ids
 from ymir.common.models import (
@@ -27,6 +28,7 @@ from ymir.common.models import (
     TriageEligibility,
 )
 from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD, check_build_in_buildroot
+from ymir.common.version_utils import get_inherited_dependency_fix_version
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +105,9 @@ async def find_rebuild_siblings(
         return [], ""
 
     try:
+        inherited_fix_version = get_inherited_dependency_fix_version(
+            rebuild_data.fix_version, await load_rhel_config()
+        )
         jql = build_rebuild_siblings_jql(
             issue_key=jira_issue,
             component=rebuild_data.package,
@@ -164,6 +169,7 @@ async def find_rebuild_siblings(
                 jira_issue=jira_issue,
                 package=rebuild_data.package,
                 dependency_component=rebuild_data.dependency_component,
+                inherited_dependency_fix_version=inherited_fix_version,
             )
             response = await analysis_agent.run(
                 prompt,
@@ -266,8 +272,17 @@ def _build_sibling_analysis_prompt(
     jira_issue: str,
     package: str,
     dependency_component: str | None,
+    inherited_dependency_fix_version: str | None = None,
 ) -> str:
     dep_context = f" against updated dependency '{dependency_component}'" if dependency_component else ""
+    inherited_exception = ""
+    if inherited_dependency_fix_version:
+        inherited_exception = (
+            "\n           - Exception: a dependency issue with fixVersion "
+            f"{inherited_dependency_fix_version}\n"
+            "             is also accepted. That fix is inherited into this\n"
+            "             issue's stream through CentOS Stream."
+        )
     return dedent(f"""\
         Analyze Jira issue {candidate_key} to determine if it requires
         a dependency rebuild.
@@ -292,7 +307,7 @@ def _build_sibling_analysis_prompt(
              fixVersion stream as {candidate_key} (same major.minor).
              If multiple results are returned, pick only the one
              matching the same stream. Never use a tracker from a
-             different stream (e.g. rhel-10.0.z for a rhel-10.3 issue).
+             different stream (e.g. rhel-10.0.z for a rhel-10.3 issue).{inherited_exception}
            - If no matching CVE tracker found, look for a rebase/update
              ticket on the dependency component with a matching
              fixVersion that includes the CVE fix. Only use it if you

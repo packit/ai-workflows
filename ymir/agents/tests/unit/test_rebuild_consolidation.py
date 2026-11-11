@@ -1,8 +1,13 @@
 import pytest
 from flexmock import flexmock
 
+from ymir.agents import rebuild_consolidation
 from ymir.agents.rebuild_agent import _clear_rebuild_resolved_errors
-from ymir.agents.rebuild_consolidation import build_rebuild_siblings_jql
+from ymir.agents.rebuild_consolidation import (
+    _build_sibling_analysis_prompt,
+    build_rebuild_siblings_jql,
+    find_rebuild_siblings,
+)
 from ymir.common.models import ConsolidatedIssue, RebuildData
 
 
@@ -72,3 +77,83 @@ def test_build_rebuild_siblings_jql_escapes_component_quotes():
     jql = build_rebuild_siblings_jql("RHEL-100", 'comp"name', "rhel-9.8.z")
     assert r'component = "comp\"name"' in jql
     assert 'fixVersion in ("rhel-9.8", "rhel-9.8.z")' in jql
+
+
+def test_sibling_analysis_prompt_accepts_inherited_fix_version():
+    prompt = _build_sibling_analysis_prompt(
+        candidate_key="RHEL-200",
+        jira_issue="RHEL-100",
+        package="git-lfs",
+        dependency_component="golang",
+        inherited_dependency_fix_version="rhel-9.9.z",
+    )
+    assert "Exception: a dependency issue with fixVersion rhel-9.9.z" in prompt
+    # Rendered at the same indentation as the neighbouring list items.
+    assert "\n   - Exception:" in prompt
+    assert "\n   - If no matching CVE tracker found" in prompt
+
+
+def test_sibling_analysis_prompt_without_inherited_fix_version():
+    prompt = _build_sibling_analysis_prompt(
+        candidate_key="RHEL-200",
+        jira_issue="RHEL-100",
+        package="git-lfs",
+        dependency_component="golang",
+    )
+    assert "Exception:" not in prompt
+
+
+def _mock_sibling_search(rhel_config):
+    async def mock_run_tool(name, **_kwargs):
+        if name == "search_jira_issues":
+            return [{"key": "RHEL-200", "fields": {"summary": "CVE-2026-1234 git-lfs"}}]
+        if name == "check_cve_triage_eligibility":
+            return {"is_cve": True, "eligibility": "immediately", "reason": "ok"}
+        raise AssertionError(f"unexpected tool call {name}")
+
+    async def mock_load_rhel_config():
+        if isinstance(rhel_config, Exception):
+            raise rhel_config
+        return rhel_config
+
+    flexmock(rebuild_consolidation).should_receive("run_tool").replace_with(mock_run_tool)
+    flexmock(rebuild_consolidation).should_receive("load_rhel_config").replace_with(mock_load_rhel_config)
+
+
+def _rebuild_data():
+    return RebuildData(
+        package="git-lfs",
+        jira_issue="RHEL-100",
+        fix_version="rhel-9.10",
+        dependency_component="golang",
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_rebuild_siblings_passes_inherited_fix_version():
+    _mock_sibling_search({"current_y_streams": {"9": "rhel-9.10"}})
+    captured = {}
+
+    def mock_build_prompt(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop after the prompt inputs are captured")
+
+    flexmock(rebuild_consolidation).should_receive("ReasoningAgent").and_return(flexmock())
+    flexmock(rebuild_consolidation).should_receive("get_chat_model").and_return(flexmock())
+    flexmock(rebuild_consolidation).should_receive("_build_sibling_analysis_prompt").replace_with(
+        mock_build_prompt
+    )
+
+    consolidated, summary = await find_rebuild_siblings("RHEL-100", _rebuild_data(), available_tools=[])
+
+    assert captured["inherited_dependency_fix_version"] == "rhel-9.9.z"
+    assert consolidated == []
+    assert "RHEL-200 — excluded (analysis failed)" in summary
+
+
+@pytest.mark.asyncio
+async def test_find_rebuild_siblings_skips_consolidation_when_config_fails():
+    _mock_sibling_search(RuntimeError("config unavailable"))
+    flexmock(rebuild_consolidation).should_receive("_build_sibling_analysis_prompt").never()
+
+    assert await find_rebuild_siblings("RHEL-100", _rebuild_data(), available_tools=[]) == ([], "")

@@ -4,6 +4,38 @@ Your final answer MUST be a JSON object with two keys: `resolution` (a string)
 and `data` (an object — NOT a stringified JSON string). The `data` object must
 match the schema for the chosen resolution.
 
+**Check both JSON layers before calling `final_answer`.** Its `response`
+argument is a string containing the answer JSON. The tool-call arguments are
+also JSON. The answer must still be valid JSON after the tool-call arguments
+have been decoded.
+
+- In the answer JSON, escape line breaks, double quotes, and backslashes
+  inside string values as `\n`, `\"`, and `\\`. Never put a literal newline,
+  tab, or other control character inside a quoted value such as
+  `triage_summary` or `justification`. Keep the answer JSON on one physical
+  line so formatting line breaks do not need escaping in the tool-call JSON.
+- When writing the tool-call JSON, encode the entire answer as the `response`
+  string. Escape its ordinary quotes as `\"` and escape each backslash from
+  the answer JSON again: `\n` becomes `\\n`, `\"` becomes `\\\"`, and
+  `\\` becomes `\\\\`.
+- Pass `data` as an object in the answer JSON, not a quoted JSON string.
+  Include no Markdown code fences, comments, trailing commas, or explanatory
+  text outside the JSON.
+- If `final_answer` rejects the JSON, correct the complete object and call it
+  again.
+
+For example, the `response` value below is valid answer JSON:
+
+```text
+{"resolution":"error","data":{"details":"line 1\nquoted \"word\" and C:\\tmp","jira_issue":"RHEL-1"}}
+```
+
+Its JSON-encoded tool-call arguments are:
+
+```text
+{"response":"{\"resolution\":\"error\",\"data\":{\"details\":\"line 1\\nquoted \\\"word\\\" and C:\\\\tmp\",\"jira_issue\":\"RHEL-1\"}}"}
+```
+
 Examples:
 
 Backport resolution:

@@ -399,6 +399,11 @@ You must decide between one of the following actions. Follow these guidelines to
      whose fixVersion matches this issue's stream. NEVER use a dependency tracker
      from a different stream (e.g. do not use a rhel-10.0.z tracker for a
      rhel-10.3 issue — that is a completely different release).
+   {% if inherited_dependency_fix_version %}
+     Exception: a dependency issue with fixVersion {{ inherited_dependency_fix_version }}
+     is also accepted. That fix is inherited into this issue's stream through
+     CentOS Stream, and the buildroot is verified automatically after triage.
+   {% endif %}
    * Once found (with matching fixVersion), call get_jira_details on the dependency
      issue and thoroughly verify it was actually fixed:
      - Check if 'Fixed in Build' field is set (non-null/non-empty)
@@ -422,7 +427,7 @@ You must decide between one of the following actions. Follow these guidelines to
      exists for this version stream, search for a rebase/update ticket on the
      dependency component that may include the CVE fix (e.g. a golang rebase
      that bumps to a version containing the fix). Use JQL like:
-     - project = RHEL AND component = "<dependency>" AND (summary ~ "rebase" OR summary ~ "update") AND fixVersion in ("<fixVersion>", "<fixVersion>.z")
+     - project = RHEL AND component = "<dependency>" AND (summary ~ "rebase" OR summary ~ "update") AND fixVersion in ("<fixVersion>", "<fixVersion>.z"{% if inherited_dependency_fix_version %}, "{{ inherited_dependency_fix_version }}"{% endif %})
      If a rebase ticket is found, verify with certainty that the rebase target
      version actually includes the fix for this CVE (check upstream release
      notes or changelogs). Only use the rebase ticket as the dependency_issue
@@ -431,6 +436,8 @@ You must decide between one of the following actions. Follow these guidelines to
      or you are not certain that a found ticket resolves the CVE, use
      "clarification-needed" resolution — do NOT fall back to using a tracker
      from a different version stream.
+     When returning clarification-needed for a rebuild CVE, also set package,
+     cve_id, fix_version and dependency_component in the data.
    3.3. You must provide a clear justification explaining why a rebuild is needed
         and how it addresses the issue.
    3.4. If rebuild: set Jira fields as per the instructions below.

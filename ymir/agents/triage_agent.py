@@ -90,6 +90,7 @@ from ymir.common.version_utils import (
     construct_internal_branch_name,
     detect_modular_issue,
     extract_downstream_package,
+    get_inherited_dependency_fix_version,
     get_maintenance_majors,
     is_modular,
     is_older_zstream,
@@ -560,6 +561,11 @@ async def render_prompt(
 
     updates: dict = {"is_older_zstream": older_zstream}
 
+    if fix_version:
+        updates["inherited_dependency_fix_version"] = get_inherited_dependency_fix_version(
+            fix_version, await load_rhel_config()
+        )
+
     cve_needs_internal_fix = bool(
         cve_eligibility_result and cve_eligibility_result.is_cve and cve_eligibility_result.needs_internal_fix
     )
@@ -634,6 +640,13 @@ class TriageState(BaseModel):
     applicability_unpacked_sources: Path | None = Field(default=None)
     applicability_used_fallback: bool = Field(default=False)
     applicability_check_skipped: bool = Field(default=False)
+    applicability_findings: str | None = Field(
+        default=None,
+        description=(
+            "Applicability agent explanation when a clarification-needed CVE was "
+            "confirmed affected; surfaced in the Jira comment."
+        ),
+    )
     rebase_waiting_for_siblings: bool = Field(
         default=False,
         description=(
@@ -1217,8 +1230,24 @@ async def run_workflow(
                 Resolution.REBUILD,
             ]:
                 return "determine_target_branch"
+            if state.triage_result.resolution == Resolution.CLARIFICATION_NEEDED:
+                # A dependency-rebuild CVE with no usable dependency ticket still
+                # needs the applicability check: the CVE may not affect the package
+                # at all. Other clarifications (eligibility errors, author
+                # verification, backports without a patch) go straight to the
+                # comment. cve_id is filled from the summary for every CVE, so
+                # dependency_component is what marks a dependency rebuild.
+                clarification_data = state.triage_result.data
+                if (
+                    state.cve_eligibility_result
+                    and state.cve_eligibility_result.is_cve
+                    and getattr(clarification_data, "package", None)
+                    and getattr(clarification_data, "cve_id", None)
+                    and getattr(clarification_data, "dependency_component", None)
+                ):
+                    return "determine_target_branch"
+                return "comment_in_jira"
             if state.triage_result.resolution in [
-                Resolution.CLARIFICATION_NEEDED,
                 Resolution.OPEN_ENDED_ANALYSIS,
                 Resolution.NOT_AFFECTED,
             ]:
@@ -1261,16 +1290,26 @@ async def run_workflow(
                     await _record_target_branch_existence(state, package, gateway_tools)
                 except Exception as e:
                     logger.warning(f"Failed to check branches for {package}: {e}")
-                await _record_branch_creation_policy(state, package, gateway_tools)
-                await _record_auto_processing_policy(
-                    state, package, gateway_tools, user_triggered, triage_only_requested
-                )
+                # Clarification-needed only passes through here for the applicability
+                # check; it never creates branches or starts the fix pipeline, so the
+                # policy lookups would only add ways for the run to fail.
+                if state.triage_result.resolution != Resolution.CLARIFICATION_NEEDED:
+                    await _record_branch_creation_policy(state, package, gateway_tools)
+                    await _record_auto_processing_policy(
+                        state, package, gateway_tools, user_triggered, triage_only_requested
+                    )
 
             if (
                 state.cve_eligibility_result
                 and state.cve_eligibility_result.is_cve
                 and state.triage_result.resolution
-                in (Resolution.BACKPORT, Resolution.REBUILD, Resolution.REBASE, *POSTPONED_RESOLUTIONS)
+                in (
+                    Resolution.BACKPORT,
+                    Resolution.REBUILD,
+                    Resolution.REBASE,
+                    Resolution.CLARIFICATION_NEEDED,
+                    *POSTPONED_RESOLUTIONS,
+                )
             ):
                 return "check_cve_applicability"
 
@@ -1333,6 +1372,8 @@ async def run_workflow(
 
             if not state.target_branch:
                 logger.warning("No target branch — skipping applicability check")
+                if resolution == Resolution.CLARIFICATION_NEEDED:
+                    state.applicability_check_skipped = True
                 return "comment_in_jira"
 
             data = state.triage_result.data
@@ -1360,7 +1401,11 @@ async def run_workflow(
                 except Exception as e:
                     logger.warning(f"Failed to recheck branches for {package}: {e}")
 
-            if state.target_branch_exists is False and state.automatic_branch_creation_disabled is None:
+            if (
+                state.target_branch_exists is False
+                and state.automatic_branch_creation_disabled is None
+                and resolution != Resolution.CLARIFICATION_NEEDED
+            ):
                 await _record_branch_creation_policy(state, package, gateway_tools)
 
             if parsed and state.target_branch_exists is False:
@@ -1498,6 +1543,8 @@ async def run_workflow(
                 logger.info(
                     f"CVE confirmed applicable for {state.jira_issue}: {applicability.explanation[:100]}"
                 )
+                if resolution == Resolution.CLARIFICATION_NEEDED:
+                    state.applicability_findings = applicability.explanation
             except Exception as e:
                 logger.warning(f"Applicability check failed: {e}")
                 state.applicability_check_skipped = True
@@ -1649,7 +1696,15 @@ async def run_workflow(
                 auto_chain=auto_chain,
                 triage_only=_defers_fix(state.triage_result.resolution, state.triage_only),
             )
-            if state.applicability_check_skipped:
+            if state.triage_result.resolution == Resolution.CLARIFICATION_NEEDED:
+                if state.applicability_findings:
+                    comment_text += f"\n\n*CVE applicability findings*: {state.applicability_findings}"
+                if state.applicability_check_skipped:
+                    comment_text += (
+                        "\n\n_Note: CVE applicability check could not be performed; "
+                        "manual applicability review is needed._"
+                    )
+            elif state.applicability_check_skipped:
                 comment_text += (
                     "\n\n_Note: CVE applicability check could not be performed (source preparation failed)._"
                 )

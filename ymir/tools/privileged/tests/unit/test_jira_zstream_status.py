@@ -308,6 +308,7 @@ async def test_check_zstream_pending_triage_excludes_terminal_labels_in_jql():
     assert 'labels != "ymir_triaged_not_affected"' in jql
     assert 'labels != "ymir_triaged_rebuild"' in jql
 
+
 @pytest.mark.asyncio
 async def test_check_zstream_pending_triage_none_found():
     """No pending Z-stream clones exist."""

@@ -222,8 +222,7 @@ async def find_rebuild_siblings(
                                 "Sibling %s: dependency build %s was not found in Brew", candidate_key, fib
                             )
                             summary_lines.append(
-                                f"* {candidate_key} — excluded "
-                                f"(dependency build {fib} was not found in Brew)"
+                                f"* {candidate_key} — excluded (dependency build {fib} was not found in Brew)"
                             )
                             continue
                         if fib_build and not await check_build_in_buildroot(

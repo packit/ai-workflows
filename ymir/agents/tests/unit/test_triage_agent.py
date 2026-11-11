@@ -2174,9 +2174,8 @@ async def test_verify_already_fixed_accepts_case_only_fix_version_difference(mon
         return {}
 
     flexmock(t_agent).should_receive("load_rhel_config").replace_with(_config)
-    flexmock(t_agent).should_receive("normalize_fix_version").replace_with(
-        lambda version, _config: version
-    )
+    flexmock(t_agent).should_receive("normalize_fix_version").replace_with(lambda version, _config: version)
+
     # The case-only difference must not block the verification.
     async def _verify(**kwargs):
         return None
@@ -2237,9 +2236,7 @@ async def test_verify_already_fixed_rejects_model_ticket_fix_version_mismatch(mo
         return {}
 
     flexmock(t_agent).should_receive("load_rhel_config").replace_with(_config)
-    flexmock(t_agent).should_receive("normalize_fix_version").replace_with(
-        lambda version, _config: version
-    )
+    flexmock(t_agent).should_receive("normalize_fix_version").replace_with(lambda version, _config: version)
     # The build verification must never run on inconsistent input.
     flexmock(t_agent).should_receive("verify_already_fixed_build").never()
     monkeypatch.setattr(t_agent.Workflow, "run", run_verification)
@@ -2298,9 +2295,7 @@ async def test_verify_already_fixed_rejects_model_package_mismatch(monkeypatch, 
         return {}
 
     flexmock(t_agent).should_receive("load_rhel_config").replace_with(_config)
-    flexmock(t_agent).should_receive("normalize_fix_version").replace_with(
-        lambda version, _config: version
-    )
+    flexmock(t_agent).should_receive("normalize_fix_version").replace_with(lambda version, _config: version)
     flexmock(t_agent).should_receive("verify_already_fixed_build").never()
     monkeypatch.setattr(t_agent.Workflow, "run", run_verification)
     monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
@@ -2887,6 +2882,7 @@ async def test_is_rebase_sibling_fails_when_own_details_unreadable(monkeypatch, 
     with pytest.raises(RuntimeError, match="RHEL-200"):
         await _is_rebase_sibling(state, [], user_triggered=user_triggered)
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["final", "transient_verification", "transient_buildroot"])
 async def test_rebuild_verification_distinguishes_transient_and_final_errors(monkeypatch, tmp_path, outcome):
@@ -3000,9 +2996,7 @@ async def test_rebuild_verification_rejects_mismatched_dependency_component(monk
 
     async def resolve(_nvr):
         # Resolves to a different package name than the LLM-reported component.
-        return common_utils.BrewBuild(
-            {"name": "actual-dep", "epoch": 0, "version": "1", "release": "1.el9"}
-        )
+        return common_utils.BrewBuild({"name": "actual-dep", "epoch": 0, "version": "1", "release": "1.el9"})
 
     monkeypatch.setattr(t_agent, "resolve_brew_build", resolve)
     monkeypatch.setattr(t_agent.Workflow, "run", run_verification)

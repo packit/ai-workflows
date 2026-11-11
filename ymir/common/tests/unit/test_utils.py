@@ -1956,9 +1956,7 @@ other-package-1.0-1.el10.x86_64 1 2 abc installed
     flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(mock_get_build)
 
     # Mock _get_known_package_names to return only "bash" (filtered list without debuginfo/debugsource)
-    flexmock(_ymir_utils).should_receive("_get_known_package_names").and_return(
-        _coro((["bash"], 1, "bash"))
-    )
+    flexmock(_ymir_utils).should_receive("_get_known_package_names").and_return(_coro((["bash"], 1, "bash")))
 
     already_fixed, issue_key, nvr, reason, _pd, _pr = await check_package_built_with_fixed_dependency(
         package="build-tool",
@@ -2974,8 +2972,6 @@ async def test_parse_dependency_conflicting_versions_returns_none(parser_koji_me
     assert set(matched) == {"golang", "golang-bin"}
 
 
-
-
 def _brew_build_metadata(name, version, release, completion_time):
     return {
         "name": name,
@@ -3032,9 +3028,7 @@ async def test_compare_build_timestamps_same_time():
     from ymir.common.utils import _compare_build_timestamps
 
     same_time = datetime(2026, 8, 24, 15, 0, 0)
-    package_build = _ymir_utils.BrewBuild(
-        _brew_build_metadata("git-lfs", "3.4.1", "12.el8_10", same_time)
-    )
+    package_build = _ymir_utils.BrewBuild(_brew_build_metadata("git-lfs", "3.4.1", "12.el8_10", same_time))
     fixed_dep_build = _ymir_utils.BrewBuild(_brew_build_metadata("golang", "1.26.7", "1.el10", same_time))
 
     result = await _compare_build_timestamps(fixed_dep_build, package_build)
@@ -3055,9 +3049,7 @@ async def test_compare_build_timestamps_missing_package_build():
 
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(None)
 
-    result = await _compare_build_timestamps(
-        fixed_dep_build, NEVR.from_string("git-lfs-3.4.1-12.el8_10")
-    )
+    result = await _compare_build_timestamps(fixed_dep_build, NEVR.from_string("git-lfs-3.4.1-12.el8_10"))
 
     assert result is None
 
@@ -3067,9 +3059,7 @@ async def test_compare_build_timestamps_missing_completion_time():
     """Test _compare_build_timestamps returns None when completion_time missing."""
     from ymir.common.utils import _compare_build_timestamps
 
-    package_build = _ymir_utils.BrewBuild(
-        _brew_build_metadata("git-lfs", "3.4.1", "12.el8_10", None)
-    )
+    package_build = _ymir_utils.BrewBuild(_brew_build_metadata("git-lfs", "3.4.1", "12.el8_10", None))
     fixed_dep_build = _ymir_utils.BrewBuild(_brew_build_metadata("golang", "1.26.7", "1.el10", None))
 
     result = await _compare_build_timestamps(fixed_dep_build, package_build)
@@ -3092,9 +3082,7 @@ async def test_compare_build_timestamps_wrong_package_name():
 
     flexmock(_ymir_utils).should_receive("_get_koji_build").and_return(resolved)
 
-    result = await _compare_build_timestamps(
-        fixed_dep_build, NEVR.from_string("git-lfs-3.4.1-12.el8_10")
-    )
+    result = await _compare_build_timestamps(fixed_dep_build, NEVR.from_string("git-lfs-3.4.1-12.el8_10"))
 
     assert result is None
 
@@ -3563,9 +3551,7 @@ async def test_check_package_built_with_fixed_dependency_active_query_failed_wit
     # must surface as a transient failure.
     flexmock(_ymir_utils).should_receive("_get_koji_build").with_args(
         _ymir_utils.BREWHUB_URL, "test-app-3.0-1.el10"
-    ).and_return(
-        {"name": "test-app", "epoch": 0, "version": "3.0", "release": "1.el10", "build_id": 7}
-    )
+    ).and_return({"name": "test-app", "epoch": 0, "version": "3.0", "release": "1.el10", "build_id": 7})
 
     with pytest.raises(_ymir_utils.TransientInfrastructureError, match="Active-build Jira query failed"):
         await check_package_built_with_fixed_dependency(
@@ -4100,9 +4086,7 @@ async def test_missing_closed_brew_build_requires_clarification(second_nvr):
 
     async def search(*args, **kwargs):
         if "status in (Closed, Done, Resolved)" in kwargs.get("jql", ""):
-            return [
-                {"key": key, "fields": {"customfield_10578": nvr}} for key, nvr in candidates
-            ]
+            return [{"key": key, "fields": {"customfield_10578": nvr}} for key, nvr in candidates]
         return []
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(search)
@@ -4155,9 +4139,11 @@ async def test_completed_build_search_is_scoped_to_modular_stream(stream):
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(search)
     flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(
-        lambda _url, nvr: {"name": "postgis", "epoch": 0, "version": "3.3", "release": "1.module15"}
-        if "module15" in nvr
-        else {"name": "postgis", "epoch": 0, "version": "3.4", "release": "1.module16"}
+        lambda _url, nvr: (
+            {"name": "postgis", "epoch": 0, "version": "3.3", "release": "1.module15"}
+            if "module15" in nvr
+            else {"name": "postgis", "epoch": 0, "version": "3.4", "release": "1.module16"}
+        )
     )
     closed, active = await _ymir_utils._find_completed_builds_jira(
         "postgis", "rhel-9.8.z", [], downstream_component=stream
@@ -4197,14 +4183,10 @@ async def test_higher_cross_stream_build_does_not_hide_valid_build():
         return "rhel-9.8.0", ["rhel-9.8.0-z-pending"], []
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(search)
-    flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(
-        lambda _url, nvr: builds[nvr]
-    )
+    flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(lambda _url, nvr: builds[nvr])
     flexmock(_ymir_utils).should_receive("build_tags_in_stream").replace_with(tags_in_stream)
     session = flexmock()
-    session.should_receive("listRPMs").replace_with(
-        lambda buildID: [{"name": "pkg", "arch": "x86_64"}]
-    )
+    session.should_receive("listRPMs").replace_with(lambda buildID: [{"name": "pkg", "arch": "x86_64"}])
     flexmock(koji).should_receive("ClientSession").and_return(session)
     flexmock(_ymir_utils).should_receive("_fetch_installed_pkgs_log").replace_with(
         lambda *_a, **_kw: _coro(
@@ -4227,9 +4209,7 @@ async def test_higher_cross_stream_build_does_not_hide_valid_build():
         {"name": "dep", "epoch": 0, "version": "2", "release": "1.el9_8", "build_id": 200}
     )
 
-    outcome = await check_package_built_with_fixed_dependency(
-        "pkg", "rhel-9.8.z", fixed_dep_build, []
-    )
+    outcome = await check_package_built_with_fixed_dependency("pkg", "rhel-9.8.z", fixed_dep_build, [])
 
     # The valid in-stream build was selected and verified, not hidden behind
     # a stream clarification for the higher cross-stream reference.
@@ -4608,9 +4588,7 @@ async def test_check_incomplete_renamed_binary_rpm_lookup_requests_verification(
         return None
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(search)
-    flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(
-        lambda _url, nvr: builds.get(nvr)
-    )
+    flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(lambda _url, nvr: builds.get(nvr))
     flexmock(_ymir_utils).should_receive("_fetch_installed_pkgs_log").replace_with(logs)
     flexmock(_ymir_utils).should_receive("_get_known_package_names").replace_with(names)
     flexmock(_ymir_utils).should_receive("_parse_dependency_from_installed_pkgs_log").replace_with(parse)
@@ -4661,7 +4639,6 @@ async def test_check_reparse_with_renamed_binary_rpm_names_on_no_match():
     async def logs(*args, **kwargs):
         return [("https://brew/logs/x86_64/installed_pkgs.log", log_content)]
 
-
     async def names(*args, **kwargs):
         return ["dep"], 1, "dep"
 
@@ -4677,9 +4654,7 @@ async def test_check_reparse_with_renamed_binary_rpm_names_on_no_match():
         return ["dep-new"]
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(search)
-    flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(
-        lambda _url, nvr: builds.get(nvr)
-    )
+    flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(lambda _url, nvr: builds.get(nvr))
     flexmock(_ymir_utils).should_receive("_fetch_installed_pkgs_log").replace_with(logs)
     flexmock(_ymir_utils).should_receive("_get_known_package_names").replace_with(names)
     flexmock(_ymir_utils).should_receive("_parse_dependency_from_installed_pkgs_log").replace_with(parse)

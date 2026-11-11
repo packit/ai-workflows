@@ -333,9 +333,7 @@ class BuildVerificationReport:
         return text[:max_chars]
 
 
-async def build_tags_in_stream(
-    build: BrewBuild, fix_version: str
-) -> tuple[str, list[str], list[str]] | None:
+async def build_tags_in_stream(build: BrewBuild, fix_version: str) -> tuple[str, list[str], list[str]] | None:
     """Return the build's tags that belong to the fix version's stream.
 
     The dist tag is a convention; tag membership is the authoritative signal.
@@ -368,11 +366,7 @@ async def build_tags_in_stream(
         return None
     names = [tag.get("name") for tag in tags or [] if isinstance(tag.get("name"), str)]
     matched = sorted(name for name in names if name == branch or name.startswith(f"{branch}-"))
-    shipped = sorted(
-        name
-        for name in matched
-        if name == branch or name.endswith(("-pending", "-z-pending"))
-    )
+    shipped = sorted(name for name in matched if name == branch or name.endswith(("-pending", "-z-pending")))
     in_progress = [name for name in matched if name not in shipped]
     return branch, shipped, in_progress
 
@@ -390,13 +384,9 @@ async def resolve_brew_build(nvr: str) -> BrewBuild | None:
     try:
         nevr = NEVR.from_string(nvr)
     except (SpecfileException, ValueError) as error:
-        raise PermanentValidationError(
-            f"Not a valid Brew NVR: {nvr!r} ({error})"
-        ) from error
+        raise PermanentValidationError(f"Not a valid Brew NVR: {nvr!r} ({error})") from error
     try:
-        metadata = await asyncio.to_thread(
-            _get_koji_build, BREWHUB_URL, get_epochless_nvr_string(nevr)
-        )
+        metadata = await asyncio.to_thread(_get_koji_build, BREWHUB_URL, get_epochless_nvr_string(nevr))
     except (koji.GenericError, httpx.HTTPError, ConnectionError, OSError, TimeoutError) as error:
         raise TransientInfrastructureError(f"Brew build lookup failed for {nvr}: {error}") from error
     if metadata is None:
@@ -803,9 +793,7 @@ async def _find_completed_builds_jira(
             if not issue_key:
                 continue
             if not isinstance(nvr_raw, str):
-                logger.warning(
-                    f"Active issue {issue_key} (status: {status}) has non-string Fixed in Build"
-                )
+                logger.warning(f"Active issue {issue_key} (status: {status}) has non-string Fixed in Build")
                 if report is not None:
                     report.active_problems.append(
                         f"{issue_key}: Fixed in Build is not a string ({type(nvr_raw).__name__})"
@@ -1667,9 +1655,7 @@ class BuildVerifier:
             # Preserve the existing task retry behavior for infrastructure failures.
             raise
         except (PermanentValidationError, KeyError, TypeError, ValueError) as error:
-            logger.warning(
-                "Invalid build metadata for %s in %s: %s", self.package, self.fix_version, error
-            )
+            logger.warning("Invalid build metadata for %s in %s: %s", self.package, self.fix_version, error)
             self.report.problems.append(str(error))
             outcome = self._clarify(None)
         except Exception as error:
@@ -1728,9 +1714,7 @@ class BuildVerifier:
 
         # Handle case where active query failed.
         if active_candidates is None:
-            logger.warning(
-                "Active-build Jira query failed for %s in %s", self.package, self.fix_version
-            )
+            logger.warning("Active-build Jira query failed for %s in %s", self.package, self.fix_version)
             raise TransientInfrastructureError(
                 f"Active-build Jira query failed for {self.package} in {self.fix_version}"
             )
@@ -1777,9 +1761,7 @@ class BuildVerifier:
 
         return await self._verify_from_logs(active_candidates)
 
-    def _filter_target_stream(
-        self, candidates: list[tuple[str, str | NEVR]]
-    ) -> list[tuple[str, str | NEVR]]:
+    def _filter_target_stream(self, candidates: list[tuple[str, str | NEVR]]) -> list[tuple[str, str | NEVR]]:
         """Keep only candidates whose NVR belongs to the fix version's stream.
 
         Jira matches both the Y-stream (rhel-9.8) and Z-stream (rhel-9.8.z)
@@ -1822,9 +1804,7 @@ class BuildVerifier:
     def _drop_out_of_stream_problems(self) -> None:
         """Remove report problems of candidates from another release stream."""
         out_of_stream_keys = {
-            key
-            for key, nvr, _status in self.report.candidates
-            if self._nvr_is_out_of_stream(nvr)
+            key for key, nvr, _status in self.report.candidates if self._nvr_is_out_of_stream(nvr)
         }
         if out_of_stream_keys:
             self.report.problems = [
@@ -1838,9 +1818,7 @@ class BuildVerifier:
                 if not any(problem.startswith(f"{key} (") for key in out_of_stream_keys)
             ]
 
-    def _filter_active_package(
-        self, active_candidates: list[tuple[str, NEVR]]
-    ) -> list[tuple[str, NEVR]]:
+    def _filter_active_package(self, active_candidates: list[tuple[str, NEVR]]) -> list[tuple[str, NEVR]]:
         """Drop active builds that resolve to a different package."""
         filtered = []
         for active_key, active_nevr in active_candidates:
@@ -1922,9 +1900,7 @@ class BuildVerifier:
             candidate_build = self.report.resolved_builds[get_epochless_nvr_string(selected_nevr)]
             return SelectedBuild(candidate_build, package_issue_key), active_candidates
 
-        logger.warning(
-            f"No valid closed builds found in Brew for {self.package} in {self.fix_version}"
-        )
+        logger.warning(f"No valid closed builds found in Brew for {self.package} in {self.fix_version}")
         if self.report.problems:
             # Closed builds that could not be resolved are reported for clarification.
             return self._clarify(None)
@@ -1972,26 +1948,18 @@ class BuildVerifier:
             return None
         branch, shipped_tags, in_progress_tags = tags_in_stream
         if not shipped_tags and not in_progress_tags:
-            logger.warning(
-                "Selected build %s carries no tag of the %s stream", self.latest_nevr, branch
-            )
-            return self._clarify(
-                VerificationReason.BUILD_NOT_TAGGED_IN_STREAM, branch=branch
-            )
+            logger.warning("Selected build %s carries no tag of the %s stream", self.latest_nevr, branch)
+            return self._clarify(VerificationReason.BUILD_NOT_TAGGED_IN_STREAM, branch=branch)
         if not shipped_tags:
             logger.info(
                 "Selected build %s is still in progress (%s)",
                 self.latest_nevr,
                 ", ".join(in_progress_tags),
             )
-            return self._clarify(
-                VerificationReason.FIX_IN_PROGRESS_IN_STREAM, tags=in_progress_tags
-            )
+            return self._clarify(VerificationReason.FIX_IN_PROGRESS_IN_STREAM, tags=in_progress_tags)
         return None
 
-    async def _verify_from_logs(
-        self, active_candidates: list[tuple[str, NEVR]]
-    ) -> VerificationOutcome:
+    async def _verify_from_logs(self, active_candidates: list[tuple[str, NEVR]]) -> VerificationOutcome:
         """Verify the selected build from its installed_pkgs.log."""
         package_build = self.selected_build.metadata
 
@@ -2017,9 +1985,7 @@ class BuildVerifier:
             noarch_build = not built_archs
             if noarch_build:
                 # Noarch builds have installed_pkgs.log under noarch/ directory.
-                logger.info(
-                    f"Noarch-only build {self.package_nvr}, fetching from noarch directory"
-                )
+                logger.info(f"Noarch-only build {self.package_nvr}, fetching from noarch directory")
                 built_archs = {"noarch"}
         except TransientInfrastructureError:
             raise
@@ -2058,9 +2024,7 @@ class BuildVerifier:
             else:
                 partial_logs_error = True
                 missing_archs_from_error = e.missing_architectures
-                logger.warning(
-                    f"Partial installed_pkgs.log availability for {self.package_nvr}: {e}"
-                )
+                logger.warning(f"Partial installed_pkgs.log availability for {self.package_nvr}: {e}")
 
         if not installed_pkgs_logs:
             # If partial logs were available but not all architectures, request
@@ -2084,9 +2048,13 @@ class BuildVerifier:
         known_names, real_binary_rpm_count, _build_name = known_names_result
 
         # Parse all architectures concurrently, sharing the resolution cache.
-        dep_nevrs, matched_pkg_names, missing_archs, unresolved_subpackage_match, unresolved_subpkg_names = (
-            await self._parse_all_logs(known_names, installed_pkgs_logs, missing_archs_from_error)
-        )
+        (
+            dep_nevrs,
+            matched_pkg_names,
+            missing_archs,
+            unresolved_subpackage_match,
+            unresolved_subpkg_names,
+        ) = await self._parse_all_logs(known_names, installed_pkgs_logs, missing_archs_from_error)
         if self.report.problems:
             return self._clarify(None)
 
@@ -2095,9 +2063,7 @@ class BuildVerifier:
             # concluding a rebuild is needed, check whether a newer build of
             # the dependency renamed one of its binary RPMs and re-parse with
             # those names. (Lazy and bounded: this only runs on the no-match path.)
-            renamed_names = await _get_renamed_binary_rpm_names(
-                self.fixed_dep_build, set(known_names)
-            )
+            renamed_names = await _get_renamed_binary_rpm_names(self.fixed_dep_build, set(known_names))
             if renamed_names is None:
                 # Incomplete binary RPM name coverage: a failed Brew lookup (or
                 # missing build metadata) means we cannot rule out that a
@@ -2114,8 +2080,12 @@ class BuildVerifier:
                     f"Re-parsing installed_pkgs.log for {self.package_nvr} with renamed "
                     f"binary RPM names from newer {self.dep_component} builds: {renamed_names}"
                 )
-                dep_nevrs, matched_pkg_names, missing_archs, unresolved_subpackage_match, (
-                    unresolved_subpkg_names
+                (
+                    dep_nevrs,
+                    matched_pkg_names,
+                    missing_archs,
+                    unresolved_subpackage_match,
+                    (unresolved_subpkg_names),
                 ) = await self._parse_all_logs(
                     known_names + renamed_names, installed_pkgs_logs, missing_archs_from_error
                 )
@@ -2250,17 +2220,13 @@ class BuildVerifier:
             nevr=self.latest_nevr,
         )
 
-    async def _timestamp_fallback(
-        self, active_candidates: list[tuple[str, NEVR]]
-    ) -> VerificationOutcome:
+    async def _timestamp_fallback(self, active_candidates: list[tuple[str, NEVR]]) -> VerificationOutcome:
         """Compare build completion timestamps when installed_pkgs.log is unavailable."""
         logger.info(
             f"installed_pkgs.log unavailable for {self.package_nvr}; "
             "checking timestamps to determine next action"
         )
-        built_after_fix = await _compare_build_timestamps(
-            self.fixed_dep_build, self.selected_build
-        )
+        built_after_fix = await _compare_build_timestamps(self.fixed_dep_build, self.selected_build)
         if built_after_fix is True:
             # Package built after fix - likely has it, but need manual verification.
             logger.info(
@@ -2270,9 +2236,7 @@ class BuildVerifier:
             return self._clarify(VerificationReason.BUILT_AFTER_FIX_NO_INSTALLED_PKGS_LOG)
         if built_after_fix is False:
             # Package built before fix - but check if active builds exist.
-            logger.info(
-                f"{self.package} ({self.package_nvr}) was built before {self.dep_component} fix"
-            )
+            logger.info(f"{self.package} ({self.package_nvr}) was built before {self.dep_component} fix")
             if active_candidates:
                 logger.warning(
                     f"Closed build {self.package_nvr} built before fix, but "

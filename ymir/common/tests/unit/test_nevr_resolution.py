@@ -119,22 +119,26 @@ async def test_active_candidates_reuse_metadata_and_preserve_unknown_builds(acti
     if active_state in ("older", "wrong_package", "incomplete"):
         # An active build that resolves to an older build must not block the
         # verified closed-build result.
-        assert result == (False, "RHEL-1", result[2], None)
+        assert result[:4] == (False, "RHEL-1", result[2], None)
     else:
         # A newer active build, an outage, or an active build that could not be
         # resolved in Brew ("missing") all require clarification instead of a
         # potentially duplicate rebuild.
         assert result[:3] == (None, "RHEL-1", result[2])
-        assert isinstance(result[3], utils.BuildVerificationReport)
-        assert "RHEL-2" in result[3].describe()
-        assert "pkg-9-1.el9" in result[3].describe()
+        if active_state == "missing":
+            assert result.reason is None
+        else:
+            assert result.reason == "active_builds_not_closed"
+        assert "RHEL-2" in result.report.describe()
+        assert "pkg-9-1.el9" in result.report.describe()
         if active_state == "missing":
             # The active build could not be resolved in Brew; the report carries
             # the problem instead of a resolved active-build reason.
-            assert result[3].reason is None
-            assert result[3].active_problems
+            assert result.report.reason is None
+            assert result.report.active_problems
         else:
-            assert result[3].reason == "active_builds_not_closed:RHEL-2"
+            assert result.reason == "active_builds_not_closed"
+            assert result.data["issues"] == ["RHEL-2"]
 
 
 @pytest.mark.asyncio

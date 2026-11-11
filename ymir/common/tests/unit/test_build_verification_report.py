@@ -34,7 +34,7 @@ async def test_candidate_failures_are_collected_before_requesting_clarification(
     result = await utils.check_package_built_with_fixed_dependency("pkg", "rhel-9.z", fixed_build, [])
 
     assert result[0] is None
-    report = result[3]
+    report = result.report
     assert isinstance(report, utils.BuildVerificationReport)
     details = report.describe()
     for key, nvr in closed + active:
@@ -206,4 +206,4 @@ async def test_broken_cross_stream_candidate_does_not_block_rebuild():
 
     result = await utils.check_package_built_with_fixed_dependency("pkg", "rhel-10.0.z", fixed, [])
 
-    assert result == (False, "RHEL-1", utils._nevr_from_build(builds["pkg-1-1.el10_0"]), None)
+    assert result[:4] == (False, "RHEL-1", utils._nevr_from_build(builds["pkg-1-1.el10_0"]), None)

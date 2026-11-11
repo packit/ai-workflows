@@ -62,6 +62,7 @@ _FINISHED_PRIMARY_LABELS = frozenset(
         JiraLabels.TRIAGED_BACKPORT.value,
         JiraLabels.TRIAGED_REBUILD.value,
         JiraLabels.TRIAGED_NOT_AFFECTED.value,
+        JiraLabels.TRIAGED_ALREADY_FIXED.value,
         *JiraLabels.deferred_triage_labels(),
     }
 )

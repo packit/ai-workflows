@@ -713,6 +713,9 @@ async def test_find_triaged_rebase_siblings_requires_exact_primary_key(monkeypat
         ("New", [JiraLabels.TRIAGED.value], True),
         ("New", [JiraLabels.TRIAGED_BACKPORT.value], True),
         ("New", [JiraLabels.TRIAGED_REBUILD.value], True),
+        # A primary triaged as already-fixed is finished: it will not pick the
+        # sibling up, so the link to it is stale.
+        ("New", [JiraLabels.TRIAGED_ALREADY_FIXED.value], True),
         ("New", [JiraLabels.WAITING_FOR_SIBLINGS.value], False),
     ],
 )

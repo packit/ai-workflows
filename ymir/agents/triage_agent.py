@@ -87,10 +87,10 @@ from ymir.common.models import (
 from ymir.common.utils import (
     DOWNSTREAM_COMPONENT_CUSTOM_FIELD,
     FIXED_IN_BUILD_CUSTOM_FIELD,
-    BuildVerificationReport,
     InvalidDependencyDataError,
     PermanentValidationError,
     TransientInfrastructureError,
+    VerificationReason,
     build_tags_in_stream,
     check_build_in_buildroot,
     check_package_built_with_fixed_dependency,
@@ -107,7 +107,6 @@ from ymir.common.version_utils import (
     get_maintenance_majors,
     is_modular,
     is_older_zstream,
-    nevr_matches_fix_version_stream,
     normalize_fix_version,
     parse_module_stream,
     parse_rhel_version,
@@ -1106,18 +1105,6 @@ async def verify_already_fixed_build(
             "rebase/backport is required.",
         )
 
-    # The build must ship in this ticket's release stream. For a z-stream fix version
-    # this means the dist tag must carry the minor (.el9_8): the fix ships exclusively
-    # through the rhel-9.8.0 maintenance branch, so a higher-EVR .el9 build cannot
-    # prove the fix is present there.
-    if fix_version and not nevr_matches_fix_version_stream(brew_build.nevr, fix_version):
-        return (
-            f"The already-fixed build {brew_build.nevr} does not belong to the release stream "
-            f"of fix version {fix_version}.",
-            "Please provide the completed build that ships in this ticket's release stream, or "
-            "confirm a rebase/backport is required.",
-        )
-
     # The release stream cannot be verified without a fix version; an
     # already-fixed claim must not pass on a Brew-existence check alone.
     if not fix_version:
@@ -1666,7 +1653,10 @@ async def run_workflow(
             if ticket_fix_version:
                 rhel_config = await load_rhel_config()
                 ticket_fix_version = normalize_fix_version(ticket_fix_version, rhel_config)
-                if fix_version and fix_version != ticket_fix_version:
+                # The model value is normalized in run_triage_analysis; compare
+                # case-insensitively so a differently-cased but equal release
+                # (e.g. RHEL-9.8 vs rhel-9.8) is not a data inconsistency.
+                if fix_version and fix_version.lower() != ticket_fix_version.lower():
                     logger.warning(
                         f"Model fix version {fix_version!r} disagrees with ticket fix "
                         f"version {ticket_fix_version!r} for {state.jira_issue}"
@@ -2120,12 +2110,7 @@ async def run_workflow(
             # Check if package was already built with the fixed dependency by inspecting installed_pkgs.log
             if package and fix_version:
                 try:
-                    (
-                        already_fixed,
-                        pkg_issue_key,
-                        pkg_nevr,
-                        reason,
-                    ) = await check_package_built_with_fixed_dependency(
+                    outcome = await check_package_built_with_fixed_dependency(
                         package=package,
                         fix_version=fix_version,
                         fixed_dep_build=fixed_dep_build,
@@ -2133,27 +2118,31 @@ async def run_workflow(
                         jira_issue=state.jira_issue,
                         downstream_component=state.raw_downstream_component,
                     )
+                    already_fixed = outcome.already_fixed
+                    pkg_issue_key = outcome.issue_key
+                    pkg_nevr = outcome.nevr
+                    verification_report = outcome.report
                     pkg_nvr = get_epochless_nvr_string(pkg_nevr) if pkg_nevr is not None else None
-                    if isinstance(reason, BuildVerificationReport):
-                        verification_report = reason
-                        if reason.reason is None:
-                            _request_clarification(
-                                state,
-                                (
-                                            f"Could not determine whether {package} in {fix_version} was "
-                                            f"already rebuilt with the fixed {dep_component} dependency "
-                                            f"(issue {dep_issue_key}, Fixed in Build: {fixed_in_build})."
-                                        ),
-                                (
-                                            "Please verify every referenced build below and whether any "
-                                            "was created with the fixed dependency or newer. Correct missing "
-                                            "or inconsistent Jira/Brew data, and confirm the active issues' "
-                                            "status. If a build already contains the fix, use that build for "
-                                            "errata processing; otherwise confirm a rebuild is required."
-                                        ),
-                            )
-                            return comment_result()
-                        reason = reason.reason
+                    reason = outcome.reason
+                    if already_fixed is None and reason is None:
+                        # The report itself is the clarification: unresolved
+                        # candidates or recorded problems need human review.
+                        _request_clarification(
+                            state,
+                            (
+                                f"Could not determine whether {package} in {fix_version} was "
+                                f"already rebuilt with the fixed {dep_component} dependency "
+                                f"(issue {dep_issue_key}, Fixed in Build: {fixed_in_build})."
+                            ),
+                            (
+                                "Please verify every referenced build below and whether any "
+                                "was created with the fixed dependency or newer. Correct missing "
+                                "or inconsistent Jira/Brew data, and confirm the active issues' "
+                                "status. If a build already contains the fix, use that build for "
+                                "errata processing; otherwise confirm a rebuild is required."
+                            ),
+                        )
+                        return comment_result()
                     if already_fixed is True:
                         # Confirmed via installed_pkgs.log that package has the fix
                         logger.info(
@@ -2187,7 +2176,7 @@ async def run_workflow(
                     if already_fixed is None:
                         cve_id = getattr(data, "cve_id", None) or ""
 
-                        if reason == "timestamp_comparison_failed":
+                        if reason == VerificationReason.TIMESTAMP_COMPARISON_FAILED:
                             # Completion metadata is missing on an otherwise
                             # resolved build — a permanent data gap, not an
                             # outage: request manual verification instead of
@@ -2214,7 +2203,7 @@ async def run_workflow(
                                         ),
                             )
                             return comment_result()
-                        if reason == "built_after_fix_no_installed_pkgs_log":
+                        if reason == VerificationReason.BUILT_AFTER_FIX_NO_INSTALLED_PKGS_LOG:
                             # Package built after fix but no installed_pkgs.log - needs manual verification
                             logger.info(
                                 f"{package} build {pkg_nvr} completed after {dep_component} fix "
@@ -2242,9 +2231,9 @@ async def run_workflow(
                                         ),
                             )
                             return comment_result()
-                        if reason and reason.startswith("active_builds_not_closed:"):
+                        if reason == VerificationReason.ACTIVE_BUILDS_NOT_CLOSED:
                             # Active builds exist but not yet closed - can't trust them yet
-                            active_issues = reason.split(":", 1)[1]
+                            active_issues = ", ".join(outcome.data["issues"])
                             logger.warning(
                                 f"Active builds found for {package} ({active_issues}) but not closed. "
                                 f"Requesting clarification."
@@ -2267,8 +2256,8 @@ async def run_workflow(
                                         ),
                             )
                             return comment_result()
-                        if reason and reason.startswith("unresolved_subpackage_needs_verification:"):
-                            subpkg_list = reason.split(":", 1)[1]
+                        if reason == VerificationReason.UNRESOLVED_SUBPACKAGE_NEEDS_VERIFICATION:
+                            subpkg_list = ", ".join(outcome.data["subpackages"])
                             _request_clarification(
                                 state,
                                 (
@@ -2285,8 +2274,8 @@ async def run_workflow(
                                         ),
                             )
                             return comment_result()
-                        if reason and reason.startswith("subpackage_match_needs_verification:"):
-                            subpkg_list = reason.split(":", 1)[1]
+                        if reason == VerificationReason.SUBPACKAGE_MATCH_NEEDS_VERIFICATION:
+                            subpkg_list = ", ".join(outcome.data["subpackages"])
                             logger.info(
                                 f"{package} build {pkg_nvr} has fixed dependency version "
                                 f"but matched via subpackage(s): {subpkg_list}. "
@@ -2314,7 +2303,7 @@ async def run_workflow(
                                         ),
                             )
                             return comment_result()
-                        if reason == "partial_architecture_coverage":
+                        if reason == VerificationReason.PARTIAL_ARCHITECTURE_COVERAGE:
                             # Dependency found in some architectures but not others
                             logger.warning(
                                 f"Partial architecture coverage for {package} build {pkg_nvr}. "
@@ -2339,7 +2328,7 @@ async def run_workflow(
                                         ),
                             )
                             return comment_result()
-                        if reason == "architecture_dependency_conflict":
+                        if reason == VerificationReason.ARCHITECTURE_DEPENDENCY_CONFLICT:
                             # Different architectures have different dependency versions
                             logger.warning(
                                 f"Architecture dependency conflict for {package} build {pkg_nvr}. "
@@ -2362,7 +2351,7 @@ async def run_workflow(
                                         ),
                             )
                             return comment_result()
-                        if reason == "no_builds_found":
+                        if reason == VerificationReason.NO_BUILDS_FOUND:
                             logger.info(
                                 f"No builds found for {package} in {fix_version}. "
                                 f"All builds belonged to other packages after filtering."
@@ -2383,8 +2372,8 @@ async def run_workflow(
                                         ),
                             )
                             return comment_result()
-                        if reason and reason.startswith("invalid_build_records:"):
-                            rejected_issues = reason.split(":", 1)[1]
+                        if reason == VerificationReason.INVALID_BUILD_RECORDS:
+                            rejected_issues = ", ".join(outcome.data["issues"])
                             logger.warning(
                                 f"Closed builds for {package} in Jira have mismatched "
                                 f"package names in Brew: {rejected_issues}"
@@ -2405,10 +2394,10 @@ async def run_workflow(
                                         ),
                             )
                             return comment_result()
-                        if reason and reason.startswith("build_not_tagged_in_stream:"):
+                        if reason == VerificationReason.BUILD_NOT_TAGGED_IN_STREAM:
                             # The referenced build carries no tag of the fix
                             # version's stream — a Jira data problem.
-                            branch = reason.split(":", 1)[1]
+                            branch = outcome.data["branch"]
                             logger.warning(
                                 f"Already-fixed build for {package} carries no tag of the "
                                 f"{branch} stream; requesting clarification"
@@ -2429,11 +2418,11 @@ async def run_workflow(
                                         ),
                             )
                             return comment_result()
-                        if reason and reason.startswith("fix_in_progress_in_stream:"):
+                        if reason == VerificationReason.FIX_IN_PROGRESS_IN_STREAM:
                             # The referenced build is only in candidate/gate-stage
                             # tags: a fix is being worked on in this stream — stop
                             # and tell the user instead of verifying it as shipped.
-                            tags = reason.split(":", 1)[1]
+                            tags = ", ".join(outcome.data["tags"])
                             logger.info(
                                 f"Fix for {package} appears in progress in {fix_version} "
                                 f"({tags}); requesting clarification"
@@ -2453,7 +2442,7 @@ async def run_workflow(
                                         ),
                             )
                             return comment_result()
-                        if reason == "renamed_binary_lookup_failed":
+                        if reason == VerificationReason.RENAMED_BINARY_LOOKUP_FAILED:
                             # Brew could not enumerate the renamed binary RPMs of
                             # the dependency, so binary RPM name coverage was
                             # incomplete — no rebuild conclusion may be drawn.

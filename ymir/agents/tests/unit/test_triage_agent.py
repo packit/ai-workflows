@@ -58,7 +58,7 @@ from ymir.common.models import (
     TriageInputSchema,
     TriageOutputSchema,
 )
-from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD, ToolError
+from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD, ToolError, VerificationOutcome, VerificationReason
 from ymir.common.version_utils import extract_downstream_package, is_modular, parse_module_stream
 
 
@@ -2141,6 +2141,56 @@ async def test_verify_already_fixed_retries_ticket_prefetch_outage(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_verify_already_fixed_accepts_case_only_fix_version_difference(monkeypatch, tmp_path):
+    """A differently-cased but equal release is not a data inconsistency."""
+
+    async def run_verification(workflow, state):
+        state.ticket_fix_version = "rhel-9.8.z"
+        state.downstream_component = "foo"
+        state.triage_result = t_agent.OutputSchema(
+            resolution=t_agent.Resolution.ALREADY_FIXED,
+            data=AlreadyFixedData(
+                explanation="Build foo-1.0-2.el9_8 already contains the fix.",
+                jira_issue=state.jira_issue,
+                package="foo",
+                package_nvr="foo-1.0-2.el9_8",
+                package_issue_key="RHEL-2",
+                target_version="1.0",
+                fix_version="RHEL-9.8.Z",
+            ),
+        )
+        next_step = await workflow.steps["verify_already_fixed"].handler(state)
+        assert next_step == "comment_in_jira"
+        return flexmock(state=state)
+
+    @asynccontextmanager
+    async def tools(*args, **kwargs):
+        yield []
+
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(tools)
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+
+    async def _config():
+        return {}
+
+    flexmock(t_agent).should_receive("load_rhel_config").replace_with(_config)
+    flexmock(t_agent).should_receive("normalize_fix_version").replace_with(
+        lambda version, _config: version
+    )
+    # The case-only difference must not block the verification.
+    async def _verify(**kwargs):
+        return None
+
+    flexmock(t_agent).should_receive("verify_already_fixed_build").replace_with(_verify).once()
+    monkeypatch.setattr(t_agent.Workflow, "run", run_verification)
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+
+    state = await run_workflow("RHEL-ALREADY", True, lambda *_: flexmock())
+
+    assert state.triage_result.resolution == t_agent.Resolution.ALREADY_FIXED
+
+
+@pytest.mark.asyncio
 async def test_verify_already_fixed_rejects_model_ticket_fix_version_mismatch(monkeypatch, tmp_path):
     """A model fix version that disagrees with the ticket is clarified, not trusted."""
 
@@ -2357,12 +2407,23 @@ async def test_verify_already_fixed_build_fails_open_when_tag_check_unavailable(
 
 @pytest.mark.asyncio
 async def test_verify_already_fixed_build_rejects_cross_stream_build():
-    """A Y-stream build does not prove a Z-stream ticket is already fixed."""
+    """A build carrying no tag of the ticket's stream does not prove it fixed.
+
+    Stream membership is decided by Brew tags: a CentOS Stream / Y-stream
+    build (``.el9``) is not tagged into the z-stream's branch, so it cannot
+    prove a ``rhel-9.8.z`` ticket already fixed.
+    """
 
     async def _resolve(_nvr):
         return _brew_build("foo-1.0-2.el9")
 
     flexmock(t_agent).should_receive("resolve_brew_build").replace_with(_resolve)
+
+    async def _tags_in_stream(_build, fix_version):
+        # A Stream build carries no tag under the rhel-9.8.0 branch.
+        return "rhel-9.8.0", [], []
+
+    flexmock(t_agent).should_receive("build_tags_in_stream").replace_with(_tags_in_stream)
 
     result = await t_agent.verify_already_fixed_build(
         package="foo",
@@ -2373,7 +2434,7 @@ async def test_verify_already_fixed_build_rejects_cross_stream_build():
         available_tools=[],
     )
     assert result is not None
-    assert "release stream" in result[0]
+    assert "carries no tag of the rhel-9.8.z stream" in result[0]
 
 
 @pytest.mark.asyncio
@@ -2847,8 +2908,8 @@ async def test_rebuild_verification_distinguishes_transient_and_final_errors(mon
         if outcome == "transient_verification":
             raise common_utils.TransientInfrastructureError("Brew test outage")
         if outcome == "transient_buildroot":
-            return False, None, None, None
-        return None, None, None, report
+            return VerificationOutcome(already_fixed=False)
+        return VerificationOutcome(None, None, None, report=report)
 
     async def run_verification(workflow, state):
         state.raw_downstream_component = "module:16/pkg"
@@ -2967,7 +3028,13 @@ async def test_rebuild_verification_fix_in_progress_requests_clarification(monke
         return {"fields": {FIXED_IN_BUILD_CUSTOM_FIELD: "dep-1-1.el9"}}
 
     async def check(*args, **kwargs):
-        return None, "RHEL-1", None, "fix_in_progress_in_stream:rhel-9.8.0-candidate"
+        return VerificationOutcome(
+            None,
+            "RHEL-1",
+            None,
+            VerificationReason.FIX_IN_PROGRESS_IN_STREAM,
+            {"tags": ["rhel-9.8.0-candidate"]},
+        )
 
     async def run_verification(workflow, state):
         state.raw_downstream_component = None
@@ -3020,7 +3087,9 @@ async def test_rebuild_verification_build_not_tagged_requests_clarification(monk
         return {"fields": {FIXED_IN_BUILD_CUSTOM_FIELD: "dep-1-1.el9"}}
 
     async def check(*args, **kwargs):
-        return None, "RHEL-1", None, "build_not_tagged_in_stream:rhel-9.8.0"
+        return VerificationOutcome(
+            None, "RHEL-1", None, VerificationReason.BUILD_NOT_TAGGED_IN_STREAM, {"branch": "rhel-9.8.0"}
+        )
 
     async def run_verification(workflow, state):
         state.raw_downstream_component = None
@@ -3074,7 +3143,7 @@ async def test_rebuild_verification_renamed_binary_rpm_lookup_failure_requests_c
         return {"fields": {FIXED_IN_BUILD_CUSTOM_FIELD: "dep-1-1.el9"}}
 
     async def check(*args, **kwargs):
-        return None, "RHEL-1", None, "renamed_binary_lookup_failed"
+        return VerificationOutcome(None, "RHEL-1", None, VerificationReason.RENAMED_BINARY_LOOKUP_FAILED)
 
     async def run_verification(workflow, state):
         state.raw_downstream_component = None

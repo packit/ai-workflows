@@ -48,6 +48,14 @@ Before returning "rebuild needed", checks if active (in-progress) builds exist:
 - Verifies all architectures agree on dependency version
 - Requests clarification on conflicts
 
+## Result contract
+
+`check_package_built_with_fixed_dependency` returns a `VerificationOutcome`:
+`already_fixed` (True/False/None), the selected build's issue key and NEVR, a
+`VerificationReason` enum (string-comparable with the reasons below) whose
+details live in a structured `payload` (issue keys, tags, subpackages), and the
+full `BuildVerificationReport` evidence for clarifications.
+
 ## Clarification Reasons
 
 | Reason | When |

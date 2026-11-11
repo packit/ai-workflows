@@ -23,6 +23,7 @@ SKILLS = [
     "preliminary-testing",
     "issue-verification",
     "errata-workflow",
+    "mr-testing-analyst",
     "reproducer",
 ]
 

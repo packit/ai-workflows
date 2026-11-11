@@ -43,9 +43,7 @@ async def test_transient_build_verification_failures_propagate(stage):
     flexmock(utils.koji).should_receive("ClientSession").and_return(session)
 
     with pytest.raises(utils.TransientInfrastructureError, match="test outage"):
-        await utils.check_package_built_with_fixed_dependency(
-            "pkg", "rhel-9.z", utils.BrewBuild(fixed), []
-        )
+        await utils.check_package_built_with_fixed_dependency("pkg", "rhel-9.z", utils.BrewBuild(fixed), [])
 
 
 @pytest.mark.asyncio
@@ -104,6 +102,4 @@ async def test_koji_generic_error_during_candidate_lookup_retries():
     flexmock(utils).should_receive("_get_koji_build").replace_with(build)
 
     with pytest.raises(utils.TransientInfrastructureError, match="brew hub temporarily unavailable"):
-        await utils.check_package_built_with_fixed_dependency(
-            "pkg", "rhel-9.z", utils.BrewBuild(fixed), []
-        )
+        await utils.check_package_built_with_fixed_dependency("pkg", "rhel-9.z", utils.BrewBuild(fixed), [])

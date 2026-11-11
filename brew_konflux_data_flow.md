@@ -48,16 +48,20 @@ A "Fixed in Build" reference may name a build that does not belong to the
 ticket's release stream (the field is only partly automated; humans can enter
 any build). References are verified in two layers:
 
-1. **Dist-tag pre-filter** (free, on the parsed NVR string): for a z-stream
-   fix version (`rhel-9.8.z`) the dist tag must carry the minor (`.el9_8`);
-   y-stream fix versions accept both `.el9` and `.el9_8` builds of the same
-   major. Unclassifiable inputs are kept.
-2. **Brew tag membership** (authoritative, on the resolved build): every tag
+1. **Brew tag membership** (authoritative, on the resolved build): every tag
    of the build under the stream's branch prefix (`rhel-9.8.0` for both the
    `rhel-9.8` and `rhel-9.8.z` fix versions) proves the build is part of that
    stream's pipeline. Tags are split into shipped-stage (the release tag and
    `-pending`/`-z-pending` — committed to compose/errata) and in-progress
    (`-candidate`/`-gate`/override-stage — fix being worked on).
+2. **Dist-tag pre-filter** (on the parsed NVR string, rebuild candidate
+   selection only): for a z-stream fix version the dist tag must carry the
+   minor (`.el9_8`); y-stream fix versions accept both `.el9` and `.el9_8`
+   builds of the same major. This runs before the highest-EVR selection so an
+   out-of-stream reference cannot win it, and classifies candidates that could
+   not be resolved in Brew (where no tag check is possible); it is not the
+   membership decision. The already-fixed verification of a named build relies
+   solely on the tag check.
 
 A build with no tag under the stream's prefix is not part of the stream and
 requires clarification (`build_not_tagged_in_stream`). A build with only

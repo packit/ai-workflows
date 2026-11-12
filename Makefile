@@ -104,6 +104,35 @@ run-backport-agent-e2e-tests:
 		-e BACKPORT_E2E_EXCLUDE_ISSUES="$(BACKPORT_E2E_EXCLUDE_ISSUES)" \
 		backport-agent-e2e-tests
 
+# A/B arm: Amalgamator writes a patch for the same fixtures, without the agent.
+# Point AMALGAMATOR_HOST_PATH and AMALGAMATOR_VENV_HOST_PATH at a checkout and
+# its Python 3.12+ environment; the suite skips when they are absent.
+# AMALGAMATOR_MODEL takes a profile id or a bare model name.
+# AMALGAMATOR_MODELS takes the CONTAINER path of a models.yaml inside the
+# mounted registry (default mount: .secrets -> /home/beeai/amalgamator-models),
+# so AMALGAMATOR_MODELS=/home/beeai/amalgamator-models/models.yaml reads
+# .secrets/models.yaml. Set AMALGAMATOR_MODELS_HOST_PATH to mount another
+# directory. Credentials come from the profile, or from ANTHROPIC_API_KEY, or
+# from OPENAI_API_KEY and OPENAI_BASE_URL for an OpenAI-compatible bare model
+# name, in .secrets/beeai-agent.env.
+.PHONY: run-backport-agent-amalgamator-e2e-tests
+run-backport-agent-amalgamator-e2e-tests:
+	# SAFETY: MOCK_JIRA=true and DRY_RUN=true keep the shared e2e environment
+	# in its no-writes mode; this arm never contacts Jira.
+	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true \
+	AMALGAMATOR_MODELS_HOST_PATH="$(AMALGAMATOR_MODELS_HOST_PATH)" \
+	scripts/run-compose-with-backend.py $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+		-e MOCK_JIRA="true" \
+		-e DRY_RUN="true" \
+		-e AMALGAMATOR_ROOT="/opt/amalgamator" \
+		-e AMALGAMATOR_MODEL="$(AMALGAMATOR_MODEL)" \
+		-e AMALGAMATOR_MODELS="$(AMALGAMATOR_MODELS)" \
+		-e AMALGAMATOR_TIMEOUT="$(or $(AMALGAMATOR_TIMEOUT),21600)" \
+		-e AMALGAMATOR_E2E_INFORMATIONAL="$(or $(AMALGAMATOR_E2E_INFORMATIONAL),true)" \
+		-e BACKPORT_E2E_EXCLUDE_ISSUES="$(BACKPORT_E2E_EXCLUDE_ISSUES)" \
+		-e BACKPORT_E2E_ONLY_ISSUES="$(BACKPORT_E2E_ONLY_ISSUES)" \
+		backport-agent-amalgamator-e2e-tests
+
 .PHONY: run-backport-agent-konflux-e2e-tests
 run-backport-agent-konflux-e2e-tests: konflux-token
 	# Konflux build backend variant of the backport e2e. Unlike Copr (which

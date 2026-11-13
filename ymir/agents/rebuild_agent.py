@@ -606,6 +606,7 @@ async def main() -> None:
                 comment_text=None,
                 rebuild_data=rebuild_data,
                 user_triggered=user_triggered,
+                retryable: bool = True,
             ) -> tuple[str, str] | None:
                 """Handle a failed task by re-queuing or finalizing.
 
@@ -616,7 +617,7 @@ async def main() -> None:
                 """
                 task.attempts += 1
                 retry_queue = rebuild_queue_todo if task.user_triggered else rebuild_queue
-                if task.attempts < max_retries:
+                if retryable and task.attempts < max_retries:
                     logger.warning(
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
                         f"re-queuing for retry: {rebuild_data.jira_issue}"
@@ -624,7 +625,7 @@ async def main() -> None:
                     return (retry_queue, task.model_dump_json())
                 # Final attempt exhausted — mark errored and stop retrying.
                 logger.error(
-                    f"Task failed after {max_retries} attempts, "
+                    f"Task failed after {task.attempts} attempt(s), "
                     f"moving to error list: {rebuild_data.jira_issue}"
                 )
                 for issue_key in dict.fromkeys(rebuild_data.all_jira_issues):
@@ -695,6 +696,14 @@ async def main() -> None:
                         f"success: {state.rebuild_success}"
                     )
 
+            except tasks.ZstreamBranchPolicyRejected as e:
+                logger.warning(f"Z-stream branch creation blocked for {rebuild_data.jira_issue}: {e.message}")
+                return await retry(
+                    task,
+                    ErrorData(details=e.triage_details, jira_issue=rebuild_data.jira_issue),
+                    comment_text=e.message,
+                    retryable=False,
+                )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during rebuild processing for {rebuild_data.jira_issue}: {error}")

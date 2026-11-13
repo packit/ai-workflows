@@ -9,6 +9,7 @@ import tempfile
 import unicodedata
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
@@ -17,7 +18,7 @@ from uuid import UUID, uuid4
 
 import yaml
 from beeai_framework.errors import FrameworkError
-from beeai_framework.tools import Tool
+from beeai_framework.tools import Tool, ToolError
 from specfile import Specfile
 
 from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE, trace_viewer_issue_url
@@ -55,6 +56,7 @@ from ymir.common.version_utils import (
     parse_rhel_version,
     parse_zstream_branch_name,
 )
+from ymir.tools.constants import ZSTREAM_BRANCH_POLICY_REJECTED
 from ymir.tools.privileged.maintainer_rules import RulesOutcome, classify_rules_output
 from ymir.tools.privileged.utils import ACTIVE_WORKSPACE_MARKER, APPLICABILITY_DIR, MERGE_REQUESTS_DIR
 from ymir.tools.unprivileged.specfile import UpdateReleaseTool
@@ -84,6 +86,69 @@ class ManualBranchCreationRequired(FrameworkError):
             manual_branch_creation_comment(package, branch, self.jira_issues[0]),
             is_retryable=False,
         )
+
+
+class ZstreamBranchPolicyRejected(FrameworkError):
+    """A new z-stream branch was rejected by the dist-git check-in policy."""
+
+    def __init__(self, message: str, *, package: str, branch: str, raw_stderr: str = ""):
+        self.package = package
+        self.branch = branch
+        self.raw_stderr = raw_stderr
+        super().__init__(message, is_retryable=False)
+
+    @property
+    def triage_details(self) -> str:
+        """Error-list details with the raw hook output for triage."""
+        if not self.raw_stderr:
+            return self.message
+        return f"{self.message}\n\nRaw hook output:\n{self.raw_stderr}"
+
+
+@dataclass(frozen=True)
+class PolicyRejectionDetails:
+    """Clean message and observability payload for a policy rejection."""
+
+    message: str
+    raw_stderr: str
+
+
+def policy_rejection_details(error: BaseException) -> PolicyRejectionDetails | None:
+    """Return details when *error* is a z-stream branch policy rejection.
+
+    The rejection crosses the MCP boundary as a plain ``ToolError`` whose
+    context carries the error code, the clean message and the raw hook output.
+    """
+    if not isinstance(error, FrameworkError):
+        return None
+    additional_context = (error.context or {}).get("additional_context")
+    if not isinstance(additional_context, dict):
+        return None
+    if additional_context.get("error_code") != ZSTREAM_BRANCH_POLICY_REJECTED:
+        return None
+    message = additional_context.get("user_message")
+    if not message:
+        return None
+    return PolicyRejectionDetails(
+        message=str(message),
+        raw_stderr=str(additional_context.get("raw_stderr") or ""),
+    )
+
+
+def discard_policy_rejection_details(error: BaseException) -> None:
+    """Drop large/private details from an error that is kept as a cause.
+
+    Generic handlers may render ``FrameworkError.explain()`` including every
+    error's context. The wrapped exception carries the message and raw stderr
+    explicitly, so the cause no longer needs them. Tool error events and traces
+    have already recorded the full context by the time this runs.
+    """
+    if not isinstance(error, FrameworkError):
+        return
+    additional_context = (error.context or {}).get("additional_context")
+    if isinstance(additional_context, dict):
+        additional_context.pop("user_message", None)
+        additional_context.pop("raw_stderr", None)
 
 
 async def handle_manual_branch_creation_required(
@@ -266,12 +331,23 @@ async def fork_and_prepare_dist_git(
     # modular stream-* branches already exist in the rhel project.
     zstream_branch_created = None
     if not is_cs_branch(dist_git_branch) and not is_modular_branch(dist_git_branch):
-        result = await run_tool(
-            "create_zstream_branch",
-            package=package,
-            branch=dist_git_branch,
-            available_tools=available_tools,
-        )
+        try:
+            result = await run_tool(
+                "create_zstream_branch",
+                package=package,
+                branch=dist_git_branch,
+                available_tools=available_tools,
+            )
+        except ToolError as e:
+            if details := policy_rejection_details(e):
+                discard_policy_rejection_details(e)
+                raise ZstreamBranchPolicyRejected(
+                    details.message,
+                    package=package,
+                    branch=dist_git_branch,
+                    raw_stderr=details.raw_stderr,
+                ) from e
+            raise
         if "already exists" not in result:
             zstream_branch_created = result
     if await is_older_zstream(dist_git_branch):

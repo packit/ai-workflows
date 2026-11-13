@@ -6,15 +6,10 @@ strings in various formats (e.g., rhel-9.8, rhel-9.7.z, rhel-9.0.0.z).
 """
 
 import asyncio
-import contextvars
 import re
 import subprocess
 
 _DIST_TAG_RE = re.compile(r"\.el(\d+)(_\d+)?")
-
-current_z_streams_override: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
-    "current_z_streams_override", default=None
-)
 
 
 def compare_versions(version1: str, version2: str) -> int:
@@ -305,8 +300,6 @@ async def is_older_zstream(
     Returns:
         True if the version targets an older z-stream, False otherwise.
     """
-    if current_z_streams is None:
-        current_z_streams = current_z_streams_override.get()
     if current_z_streams is None:
         from ymir.common.config import load_rhel_config
 

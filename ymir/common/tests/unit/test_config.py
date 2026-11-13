@@ -6,6 +6,7 @@ from mcp.server.lowlevel.server import request_ctx
 from mcp.types import RequestParams
 
 from ymir.common.config import load_rhel_config, rhel_config_override
+from ymir.common.version_utils import is_older_zstream
 
 # Fixed snapshot based on templates/rhel-config.json, rather than a changing runtime config.
 RHEL_CONFIG = {
@@ -35,16 +36,21 @@ async def test_load_rhel_config_applies_agent_and_gateway_overrides(monkeypatch,
 
     with rhel_config_override(RHEL_10_2_OVERRIDE):
         assert await load_rhel_config() == RHEL_10_2_CONFIG
+        assert not await is_older_zstream("rhel-10.1.z")
+        assert await is_older_zstream("rhel-10.0.z")
 
     # The gateway permission is deliberately independent of Jira mocking.
     monkeypatch.setenv("ALLOW_RHEL_CONFIG_OVERRIDE", "true")
     token = request_ctx.set(SimpleNamespace(meta=RequestParams.Meta(rhel_config_override=RHEL_10_2_OVERRIDE)))
     try:
         assert await load_rhel_config() == RHEL_10_2_CONFIG
+        assert not await is_older_zstream("rhel-10.1.z")
+        assert await is_older_zstream("rhel-10.0.z")
     finally:
         request_ctx.reset(token)
 
     assert await load_rhel_config() == RHEL_CONFIG
+    assert await is_older_zstream("rhel-10.1.z")
 
 
 @pytest.mark.asyncio

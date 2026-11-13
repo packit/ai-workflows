@@ -6,7 +6,6 @@ from beeai_framework.adapters.mcp.serve.server import (
     MCPSettings,
 )
 
-from ymir.common.mock_repos import apply_zstream_override_from_env
 from ymir.tools.gateway_utils import setup_logging
 from ymir.tools.unprivileged.analyze_ewa_testrun import AnalyzeEwaTestRunTool
 from ymir.tools.unprivileged.commands import RunShellCommandTool
@@ -61,7 +60,6 @@ def main():
     config = MCPServerConfig(**config_kwargs)
 
     setup_logging()
-    apply_zstream_override_from_env()
     # Shared options dict so tools can communicate cross-step state
     # (e.g. base_head_commit set by GitPreparePackageSources / ApplyDownstreamPatchesTool,
     # read by GitPatchCreationTool).

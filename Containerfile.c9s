@@ -83,6 +83,7 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
          google-cloud-aiplatform \
          openinference-instrumentation-beeai==0.1.21 \
          arize-phoenix-otel \
+         backoff \
          redis \
          specfile \
          koji \

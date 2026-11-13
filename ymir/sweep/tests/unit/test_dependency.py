@@ -4,7 +4,7 @@ import pytest
 import requests
 from flexmock import flexmock
 
-from ymir.supervisor.supervisor_types import IssueStatus
+from ymir.common.models import IssueStatus
 from ymir.sweep.dependency import DependencySweep, _resolve_target_branch, branch_from_fix_versions
 from ymir.sweep.tests.unit.conftest import make_issue, make_ymir_comment
 
@@ -85,7 +85,7 @@ def test_resolve_target_branch_returns_none_when_undetermined(monkeypatch):
 
 def _make_blocker(fixed_in_build=None, components=None):
     """Build a minimal Issue representing the blocker."""
-    from ymir.supervisor.supervisor_types import Issue
+    from ymir.common.models import Issue
 
     return Issue(
         key="RHEL-67890",

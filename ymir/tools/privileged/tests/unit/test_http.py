@@ -1,12 +1,12 @@
 import asyncio
-import random
 from contextlib import asynccontextmanager
 
 import aiohttp
 import pytest
 from flexmock import flexmock
 
-from ymir.tools.http import aiohttp_get_with_retries
+from ymir.common import http_utils
+from ymir.common.http_utils import aiohttp_get_with_retries
 
 
 def _mock_response(status=200, **kwargs):
@@ -131,7 +131,7 @@ async def test_backoff_delays_increase():
         return
 
     flexmock(asyncio).should_receive("sleep").replace_with(_capture_sleep).twice()
-    flexmock(random).should_receive("uniform").and_return(0.5)
+    flexmock(http_utils.random).should_receive("uniform").and_return(0.5)
     session, _ = _make_session(
         [
             _mock_response(503),

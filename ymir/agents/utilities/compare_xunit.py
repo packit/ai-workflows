@@ -6,7 +6,7 @@ import aiohttp
 import tomli_w
 from pydantic import BaseModel, Field
 
-from ymir.tools.constants import YMIR_USER_AGENT
+from ymir.common.constants import YMIR_USER_AGENT
 
 
 class XUnitComparisonStatus(BaseModel):

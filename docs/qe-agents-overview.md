@@ -2,9 +2,9 @@
 
 ## Current State
 
-Three QE agents were extracted from the old Supervisor into standalone modules. They are fully independent — no imports from `ymir.supervisor`, use MCP gateway tools, and live under the `agents` compose profile. Each is a **one-shot executor** (takes an env var, processes one item, exits). No trigger mechanism is deployed — they can only be run manually via compose.
+Three QE agents were extracted from the old Supervisor into standalone modules. They are fully independent, use MCP gateway tools, and live under the `agents` compose profile. Each is a **one-shot executor** (takes an env var, processes one item, exits). No trigger mechanism is deployed — they can only be run manually via compose.
 
-The old Supervisor code (`ymir/supervisor/`) is dead code: commented out in `deploy-oc.sh`, not deployed. Source files, OpenShift manifests, Containerfile, CI build job, and Makefile targets still exist in the repo.
+The old Supervisor runtime and its repository-managed image, CI, OpenShift, and Make targets have been removed. The QE agents retain the migrated workflow responsibilities.
 
 | Agent | Source | Input | What it does |
 |---|---|---|---|
@@ -174,7 +174,3 @@ Add to `deploy-oc.sh` and the CI image build workflow.
 ### Agent fixes (can be done in parallel)
 
 - **Issue Verification Agent** — Add NEW_FILES guard: skip LLM test analysis if the erratum is still in NEW_FILES state (QE testing hasn't begun yet). Replicated from old Supervisor `issue_handler.py:278-281`.
-
-### Cleanup (after deployment is stable)
-
-- **Remove dead Supervisor code** — `ymir/supervisor/`, `Containerfile.supervisor`, OpenShift manifests, CI build job, Makefile targets. Migrate `scripts/test_jira_cloud_uat.py` imports.

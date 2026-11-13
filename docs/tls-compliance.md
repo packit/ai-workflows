@@ -122,7 +122,6 @@ oc rollout restart deployment/rebase-agent-c9s deployment/rebase-agent-c10s
 oc rollout restart deployment/rebuild-agent-c9s deployment/rebuild-agent-c10s
 oc rollout restart deployment/mr-consolidation-agent-c9s deployment/mr-consolidation-agent-c10s
 oc rollout restart deployment/triage-agent deployment/reproducer-agent
-oc rollout restart deployment/supervisor-processor
 oc rollout restart deployment/mcp-gateway
 ```
 

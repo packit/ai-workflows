@@ -39,10 +39,10 @@ the goal of this workflow is to triage incoming issues for the RHEL project,
 figure which ones are candidates for automatic resolution,
 and create merge requests to merge them.
 
-The second workflow is [**Testing and Release Workflow**](README-supervisor.md) workflow -
-the goal of this workflow is that once a merge request is merged and we have a candidate build attached to the issue,
-we want to move the issue and the associated erratum,
-through testing and the remainder of the RHEL process to the point where the build is ready to be released.
+Quality engineering workflows are handled by standalone agents described in
+[README-agents.md](README-agents.md) and [the QE agents overview](docs/qe-agents-overview.md).
+They manage issue verification, preliminary testing, and errata processing after
+packaging changes are merged.
 
 This project previously used [Goose](https://github.com/block/goose) as an AI agent framework in its early stages. The `goose/` directory and related automation have since been removed. For active development and production use, focus on the main workflows described above.
 
@@ -97,6 +97,13 @@ Then, use the provided stub pyproject.toml file to set up the development enviro
 uv sync --extra test
 uv run make -f Makefile.tests check
 ```
+
+`make check-in-container` builds both `Containerfile.tests` (Fedora) and
+`Containerfile.c9s-tests` (CentOS Stream 9) before running the test groups.
+The BeeAI runtime images (`Containerfile.c9s` and `Containerfile.c10s`) also
+install shared-module dependencies explicitly. Shared imports such as
+`ymir.common.jira_api` need dependencies including `backoff` in both runtime
+images and both test images.
 
 You'll also need to have `python3-rpm` installed on the host system -
 the `rpm` module installed from PyPI is [rpm-shim](https://github.com/packit/rpm-shim)

@@ -7,8 +7,8 @@ from urllib.parse import quote
 import aiohttp
 
 from ymir.common.base_utils import KerberosError, init_kerberos_ticket, run_subprocess
+from ymir.common.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.common.version_utils import parse_branch_name
-from ymir.tools.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 
 logger = logging.getLogger(__name__)
 

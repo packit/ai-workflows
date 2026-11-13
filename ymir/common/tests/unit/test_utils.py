@@ -12,6 +12,8 @@ from ymir.common.base_utils import KerberosError, extract_principal, init_kerber
 from ymir.common.utils import (
     NoBuildFoundError,
     _is_connection_error,
+    _is_inherited_ystream_build,
+    check_build_in_buildroot,
     get_latest_buildroot_build,
     get_latest_candidate_build,
     get_latest_z_pending_build,
@@ -599,3 +601,154 @@ async def test_get_latest_buildroot_build():
 
     assert evr == EVR(epoch=0, version="1.0", release="1.el9")
     assert ref == "abc123"
+
+
+# ============================================================================
+# check_build_in_buildroot
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    ("latest_release", "fixed_release", "expected"),
+    [
+        ("1.el9", "1.el9_9", True),
+        ("1.el10", "1.el10_2", True),
+        # Different release base.
+        ("1.el9", "2.el9_9", False),
+        # Extra Z-stream suffix means a Z-stream-only change.
+        ("1.el9", "1.el9_9.1", False),
+        # Both Z-stream builds: no inheritance.
+        ("1.el9_8", "1.el9_9", False),
+        # Different major.
+        ("1.el10", "1.el9_9", False),
+        # No dist tag.
+        ("1", "1.el9_9", False),
+    ],
+)
+def test_is_inherited_ystream_build(latest_release, fixed_release, expected):
+    latest = EVR(epoch=0, version="1.27.3", release=latest_release)
+    fixed = EVR(epoch=0, version="1.27.3", release=fixed_release)
+    assert _is_inherited_ystream_build(latest, fixed) is expected
+
+
+def test_is_inherited_ystream_build_requires_same_epoch_and_version():
+    fixed = EVR(epoch=0, version="1.27.3", release="1.el9_9")
+    assert not _is_inherited_ystream_build(EVR(epoch=1, version="1.27.3", release="1.el9"), fixed)
+    assert not _is_inherited_ystream_build(EVR(epoch=0, version="1.27.2", release="1.el9"), fixed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fixed_version", "fixed_release", "latest_version", "latest_release", "expected"),
+    [
+        # Same version-release, different dist tag: the CentOS Stream build
+        # inherits the Z-stream fix.
+        ("1.27.3", "1.el9_9", "1.27.3", "1.el9", True),
+        # Same version, lower release: not the same build.
+        ("1.27.3", "2.el9_9", "1.27.3", "1.el9", False),
+        # Newer build satisfies the fixed build.
+        ("1.27.2", "1.el9_9", "1.27.3", "1.el9", True),
+        # Older build does not.
+        ("1.27.3", "1.el9_9", "1.27.2", "1.el9", False),
+    ],
+)
+async def test_check_build_in_buildroot_compares_version_release(
+    monkeypatch,
+    fixed_version,
+    fixed_release,
+    latest_version,
+    latest_release,
+    expected,
+):
+    async def _mock_load_rhel_config():
+        return {"current_y_streams": {"9": "rhel-9.10"}}
+
+    fixed_build = {
+        "epoch": 0,
+        "version": fixed_version,
+        "release": fixed_release,
+        "nvr": f"golang-{fixed_version}-{fixed_release}",
+    }
+    latest_build = {
+        "epoch": 0,
+        "version": latest_version,
+        "release": latest_release,
+        "nvr": f"golang-{latest_version}-{latest_release}",
+    }
+
+    monkeypatch.setattr("ymir.common.config.load_rhel_config", _mock_load_rhel_config)
+    monkeypatch.setattr(_ymir_utils, "_get_koji_build", lambda *_args: fixed_build)
+    monkeypatch.setattr(_ymir_utils, "_get_latest_koji_build", lambda *_args: latest_build)
+
+    assert (
+        await check_build_in_buildroot(
+            "c9s",
+            "golang",
+            fixed_build["nvr"],
+            fix_version="rhel-9.10",
+        )
+        is expected
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_branch", "fix_version", "expected_tags"),
+    [
+        # Internal Z-stream branch: Brew only.
+        ("rhel-9.9.0", "rhel-9.9.z", ["rhel-9.9.0-z-build"]),
+        # CS branch with a Z-stream fix: CS Koji and Brew are both checked.
+        ("c9s", "rhel-9.9.z", ["c9s-build", "rhel-9.9.0-z-build"]),
+    ],
+)
+async def test_check_build_in_buildroot_keeps_zstream_comparison_strict(
+    monkeypatch, target_branch, fix_version, expected_tags
+):
+    """A .el9 build with the same version-release must not satisfy an .el9_9 fix in a Z-stream buildroot."""
+
+    async def _mock_load_rhel_config():
+        return {"current_y_streams": {"9": "rhel-9.10"}}
+
+    fixed_build = {"epoch": 0, "version": "1.2.3", "release": "1.el9_9", "nvr": "dep-1.2.3-1.el9_9"}
+    latest_build = {"epoch": 0, "version": "1.2.3", "release": "1.el9", "nvr": "dep-1.2.3-1.el9"}
+    queried_tags = []
+
+    def _mock_latest(_koji_url, build_tag, _package):
+        queried_tags.append(build_tag)
+        return latest_build
+
+    monkeypatch.setattr("ymir.common.config.load_rhel_config", _mock_load_rhel_config)
+    monkeypatch.setattr(_ymir_utils, "_get_koji_build", lambda *_args: fixed_build)
+    monkeypatch.setattr(_ymir_utils, "_get_latest_koji_build", _mock_latest)
+
+    assert (
+        await check_build_in_buildroot(target_branch, "dep", fixed_build["nvr"], fix_version=fix_version)
+        is False
+    )
+    assert sorted(queried_tags) == sorted(expected_tags)
+
+
+@pytest.mark.asyncio
+async def test_check_build_in_buildroot_accepts_inherited_build_in_brew_ystream(monkeypatch):
+    """The Brew Y-stream buildroot holds .el9 builds, like CentOS Stream."""
+
+    async def _mock_load_rhel_config():
+        return {"current_y_streams": {"9": "rhel-9.10"}}
+
+    fixed_build = {"epoch": 0, "version": "1.27.3", "release": "1.el9_9", "nvr": "golang-1.27.3-1.el9_9"}
+    latest_build = {"epoch": 0, "version": "1.27.3", "release": "1.el9", "nvr": "golang-1.27.3-1.el9"}
+    queried_tags = []
+
+    def _mock_latest(_koji_url, build_tag, _package):
+        queried_tags.append(build_tag)
+        return latest_build
+
+    monkeypatch.setattr("ymir.common.config.load_rhel_config", _mock_load_rhel_config)
+    monkeypatch.setattr(_ymir_utils, "_get_koji_build", lambda *_args: fixed_build)
+    monkeypatch.setattr(_ymir_utils, "_get_latest_koji_build", _mock_latest)
+
+    assert (
+        await check_build_in_buildroot("rhel-9.10.0", "golang", fixed_build["nvr"], fix_version="rhel-9.10")
+        is True
+    )
+    assert queried_tags == ["rhel-9.10.0-build"]

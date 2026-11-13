@@ -125,6 +125,7 @@ except ImportError:
         is_older_zstream: bool = False
         needs_internal_fix: bool = False
         internal_target_branch: str | None = None
+        inherited_dependency_fix_version: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -676,6 +677,19 @@ class TestTriageTemplate:
         )
         assert "centos-stream" in result
         assert "redhat/rhel/rpms" not in result
+
+    def test_renders_inherited_dependency_fix_version(self):
+        result = render_template(
+            "triage/prompt.j2",
+            TriageInputSchema(issue="RHEL-12345", inherited_dependency_fix_version="rhel-9.9.z"),
+        )
+        assert "a dependency issue with fixVersion rhel-9.9.z" in result
+        assert 'fixVersion in ("<fixVersion>", "<fixVersion>.z", "rhel-9.9.z")' in result
+
+    def test_omits_inherited_dependency_fix_version_when_unset(self):
+        result = render_template("triage/prompt.j2", TriageInputSchema(issue="RHEL-12345"))
+        assert "Exception: a dependency issue" not in result
+        assert 'fixVersion in ("<fixVersion>", "<fixVersion>.z")' in result
 
 
 # Lightweight stand-in models to avoid importing modules with heavy deps (nitrate)

@@ -53,7 +53,10 @@ def build_applicability_prompt(
     cve_label = cve_id or "the CVE"
 
     rebuild_context = ""
-    if resolution in (Resolution.REBUILD, *POSTPONED_RESOLUTIONS) and dep_component:
+    if (
+        resolution in (Resolution.REBUILD, Resolution.CLARIFICATION_NEEDED, *POSTPONED_RESOLUTIONS)
+        and dep_component
+    ):
         rebuild_context = f"\nThis is a dependency rebuild against updated '{dep_component}'."
         if dep_issue_key:
             rebuild_context += (

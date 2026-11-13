@@ -72,7 +72,13 @@ def get_chat_model() -> ChatModel:
     # lowering the temperature makes the model stop backporting too soon
     # but should yield more predictable results, similar for top_p (tried 0.5)
     temperature = float(os.getenv("TEMPERATURE", "0.6"))
-    reasoning_effort = os.getenv("REASONING_EFFORT")
+    # REASONING_EFFORT configures Anthropic extended thinking, which is the only
+    # thing is_reasoning_enabled() is about: temperature must be 1 with thinking
+    # on, and parallel tool calls are enabled alongside it. Forwarding the
+    # variable to other providers is wrong — an OpenAI-compatible gateway may
+    # reject reasoning_effort outright, and its temperature stays configurable.
+    reasoning_enabled = is_reasoning_enabled()
+    reasoning_effort = os.getenv("REASONING_EFFORT") if reasoning_enabled else None
 
     settings: dict[str, Any] = {"num_retries": int(os.getenv("LITELLM_NUM_RETRIES", 3))}
 
@@ -93,7 +99,7 @@ def get_chat_model() -> ChatModel:
         # it was changed in beeai 0.1.48
         ChatModelParameters(
             # Anthropic requires temperature=1 when extended thinking is enabled
-            temperature=1 if "claude" in chat_model and reasoning_effort else temperature,
+            temperature=1 if reasoning_enabled else temperature,
             reasoning_effort=reasoning_effort,
         ),
         timeout=int(os.getenv("CHAT_MODEL_TIMEOUT", 1200)),
@@ -101,7 +107,7 @@ def get_chat_model() -> ChatModel:
         # bypasses that and enables litellm's built-in retry with back-off
         # for transient 429 / rate-limit errors from the provider.
         settings=settings,
-        allow_parallel_tool_calls=bool(reasoning_effort),
+        allow_parallel_tool_calls=reasoning_enabled,
         **model_kwargs,
     )
     if "gemini" in chat_model:

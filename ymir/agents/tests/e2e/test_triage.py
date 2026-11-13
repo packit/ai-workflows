@@ -14,7 +14,6 @@ from ymir.agents.observability import setup_observability
 from ymir.agents.triage_agent import TriageState, create_triage_agent, run_workflow
 from ymir.common.config import rhel_config_override
 from ymir.common.mock_repos import (
-    apply_zstream_override,
     cleanup_mock_gitconfig,
     load_all_fixture_configs,
     setup_mock_repos,
@@ -41,16 +40,12 @@ class TriageAgentTestCase:
     metrics: dict | None = None
     finished_state: TriageState | None = None
     error: BaseException | None = None
-    zstream_override: dict[str, str] | None = None
     rhel_config_override: dict[str, Any] | None = None
     skip_reason: str | None = None
 
     async def run(self) -> None:
         if self.skip_reason is not None:
             return
-
-        if self.zstream_override:
-            apply_zstream_override(self.zstream_override)
 
         metrics_middleware = MetricsMiddleware()
 
@@ -373,7 +368,6 @@ def mock_centos_stream_repos(tmp_path_factory):
 
             for tc in test_cases:
                 if tc.input == issue_key:
-                    tc.zstream_override = config.get("zstream_override")
                     tc.rhel_config_override = rhel_override
                     break
 

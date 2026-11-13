@@ -24,7 +24,6 @@ from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.tasks import InvalidReproducerConfigError
 from ymir.agents.tf_cleanup_middleware import TFReservationCleanupMiddleware
 from ymir.agents.utils import (
-    build_agent_factory_with_mock_repos,
     check_subprocess,
     get_agent_execution_config,
     get_chat_model,
@@ -1953,11 +1952,10 @@ async def main() -> None:
     if jira_issue := os.getenv("JIRA_ISSUE", None):
         logger.info("Running in direct mode with environment variable")
         with span_processor.start_transaction(jira_issue, workflow="reproducer"):
-            agent_factory = build_agent_factory_with_mock_repos(create_reproducer_agent, jira_issue)
             state = await run_workflow(
                 jira_issue,
                 dry_run,
-                agent_factory,
+                create_reproducer_agent,
             )
             if state.result is None:
                 logger.error("Direct reproducer run for %s ended without a result", jira_issue)

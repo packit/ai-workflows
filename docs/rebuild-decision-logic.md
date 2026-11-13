@@ -70,6 +70,7 @@ full `BuildVerificationReport` evidence for clarifications.
 | `no_builds_found` | No valid builds found in Jira after filtering (all belonged to other packages) |
 | `active_builds_not_closed` | Builds in progress exist (might be rejected before closure) |
 | `build_not_tagged_in_stream` | The selected build carries no tag of the fix version's stream (scratch, side-tag, or another stream) |
+| `builds_not_in_stream` | Every completed-build reference on the ticket points at another stream while the fix version names this one — whether or not the references resolve in Brew |
 | `fix_in_progress_in_stream` | The selected build is only in candidate/gate-stage tags: a fix is being worked on in the stream, not shipped — the user may have to update the referencing issue or its errata once it ships |
 | `renamed_binary_lookup_failed` | Brew could not enumerate the renamed binary RPMs of the dependency, so binary RPM name coverage was incomplete when the dependency was not found |
 

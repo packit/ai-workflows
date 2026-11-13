@@ -1499,6 +1499,7 @@ class VerificationReason(StrEnum):
     ACTIVE_BUILDS_NOT_CLOSED = "active_builds_not_closed"
     INVALID_BUILD_RECORDS = "invalid_build_records"
     BUILD_NOT_TAGGED_IN_STREAM = "build_not_tagged_in_stream"
+    BUILDS_NOT_IN_STREAM = "builds_not_in_stream"
     FIX_IN_PROGRESS_IN_STREAM = "fix_in_progress_in_stream"
     PARTIAL_ARCHITECTURE_COVERAGE = "partial_architecture_coverage"
     BUILT_AFTER_FIX_NO_INSTALLED_PKGS_LOG = "built_after_fix_no_installed_pkgs_log"
@@ -1720,6 +1721,32 @@ class BuildVerifier:
             )
 
         if not closed_candidates and not active_candidates:
+            # Classify from the report's raw references: unresolvable ones
+            # never became candidates, so the filtered lists alone cannot see
+            # them. Unparseable references stay out (fail open to the generic
+            # problems clarification below).
+            out_of_stream_refs = [
+                (key, nvr)
+                for key, nvr, status in self.report.candidates
+                if status == "closed" and self._nvr_is_out_of_stream(nvr)
+            ]
+            if out_of_stream_refs:
+                # Every completed-build reference on this ticket points at
+                # another stream while its fix version names this one — the
+                # references and the fix version contradict each other, and
+                # nothing in this stream can be verified. Ask a human instead
+                # of silently recommending a rebuild, whether or not the
+                # references resolve in Brew.
+                logger.warning(
+                    "All completed-build references of %s in %s point at another stream: %s",
+                    self.package,
+                    self.fix_version,
+                    ", ".join(f"{key} ({nvr})" for key, nvr in out_of_stream_refs),
+                )
+                return self._clarify(
+                    VerificationReason.BUILDS_NOT_IN_STREAM,
+                    references=[f"{key} ({nvr})" for key, nvr in out_of_stream_refs],
+                )
             if self.report.problems or self.report.active_problems:
                 return self._clarify(None)
             logger.info(f"No builds found for {self.package} in {self.fix_version}")
@@ -1730,9 +1757,10 @@ class BuildVerifier:
         active_candidates = self._filter_active_package(active_candidates)
 
         # Drop lookup problems recorded for candidates whose Jira-recorded NVR
-        # belongs to another release stream: they would have been ignored by
-        # the stream filter anyway, so a broken build from another stream
-        # cannot turn a rebuild decision into a clarification.
+        # belongs to another release stream: a suitable in-stream build was
+        # found (the flow would have clarified otherwise), so the out-of-stream
+        # references cannot contribute to this stream's verdict and must not
+        # block it with their lookup problems.
         self._drop_out_of_stream_problems()
 
         selection = await self._select_build(closed_candidates, active_candidates)
@@ -1761,7 +1789,9 @@ class BuildVerifier:
 
         return await self._verify_from_logs(active_candidates)
 
-    def _filter_target_stream(self, candidates: list[tuple[str, str | NEVR]]) -> list[tuple[str, str | NEVR]]:
+    def _filter_target_stream(
+        self, candidates: list[tuple[str, str | NEVR]]
+    ) -> list[tuple[str, str | NEVR]]:
         """Keep only candidates whose NVR belongs to the fix version's stream.
 
         Jira matches both the Y-stream (rhel-9.8) and Z-stream (rhel-9.8.z)
@@ -1774,6 +1804,9 @@ class BuildVerifier:
         rebuild. The authoritative membership decision is the Brew tag check
         in _verify_stream_tags. Unparseable NVRs are kept so the Brew
         resolution path reports them.
+
+        Returns ``(kept, dropped)``; the caller clarifies when the dropped
+        references were the only completed-build evidence on the ticket.
         """
         kept = []
         for key, nvr in candidates:

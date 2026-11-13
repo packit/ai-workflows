@@ -1233,26 +1233,57 @@ async def test_check_package_built_with_fixed_dependency_no_build_found():
 
     flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
 
-    already_fixed, issue_key, _nvr, _reason, _pd, _pr = await check_package_built_with_fixed_dependency(
+    outcome = await check_package_built_with_fixed_dependency(
         package="go-fdo-client",
         fix_version="rhel-10.2.z",
         fixed_dep_build=_brew_build("golang-1.26.4-1.el10_2"),
         available_tools=[mock_tool],
     )
 
-    assert already_fixed is False
-    assert issue_key is None
-    assert _nvr is None
+    assert outcome.already_fixed is False
+    assert outcome.reason is None
 
 
 @pytest.mark.asyncio
-async def test_check_package_built_with_fixed_dependency_ignores_cross_stream_build():
-    """A Y-stream / CentOS Stream build (.el10) must not satisfy a Z-stream ticket.
+async def test_check_package_built_with_fixed_dependency_clarifies_when_all_refs_cross_stream_unresolvable():
+    """Out-of-stream references that also fail to resolve clarify the same way.
 
-    Jira matches both rhel-10.2 and rhel-10.2.z fixVersions, but a .el10 build lives in a
-    different stream than the rhel-10.2.z ticket. It is resolved against Brew and then
-    dropped by the stream filter so a missing Brew Z-stream build is not masked, which
-    would skip a needed rebuild.
+    Whether the wrong-stream reference resolves in Brew or not must not
+    change the outcome: both are a fix-version/references contradiction with
+    no in-stream evidence.
+    """
+    mock_tool = flexmock()
+
+    async def mock_run_tool(tool, **kwargs):
+        if "status in (Closed, Done, Resolved)" in kwargs.get("jql", ""):
+            return [{"key": "RHEL-778", "fields": {"customfield_10578": "go-fdo-client-9.9.9-1.el10"}}]
+        return []
+
+    flexmock(_ymir_utils).should_receive("run_tool").replace_with(mock_run_tool)
+    # The cross-stream reference does not even resolve in Brew.
+    flexmock(_ymir_utils).should_receive("_get_koji_build").replace_with(lambda _url, _nvr: None)
+
+    outcome = await check_package_built_with_fixed_dependency(
+        package="go-fdo-client",
+        fix_version="rhel-10.2.z",
+        fixed_dep_build=_brew_build("golang-1.26.4-1.el10_2"),
+        available_tools=[mock_tool],
+    )
+
+    assert outcome.already_fixed is None
+    assert outcome.reason == "builds_not_in_stream"
+    assert outcome.data["references"] == ["RHEL-778 (go-fdo-client-9.9.9-1.el10)"]
+
+
+@pytest.mark.asyncio
+async def test_check_package_built_with_fixed_dependency_clarifies_when_all_refs_cross_stream():
+    """References that all point at another stream cannot verify this one.
+
+    Jira matches both rhel-10.2 and rhel-10.2.z fixVersions, but a .el10 build
+    lives in a different stream than the rhel-10.2.z ticket. When such a
+    reference is the only completed-build evidence, the ticket's fix version
+    and its references contradict each other: request a clarification instead
+    of silently recommending a rebuild.
     """
     mock_tool = flexmock()
 
@@ -1274,16 +1305,16 @@ async def test_check_package_built_with_fixed_dependency_ignores_cross_stream_bu
         }
     )
 
-    already_fixed, issue_key, _nvr, _reason, _pd, _pr = await check_package_built_with_fixed_dependency(
+    outcome = await check_package_built_with_fixed_dependency(
         package="go-fdo-client",
         fix_version="rhel-10.2.z",
         fixed_dep_build=_brew_build("golang-1.26.4-1.el10_2"),
         available_tools=[mock_tool],
     )
 
-    assert already_fixed is False
-    assert issue_key is None
-    assert _nvr is None
+    assert outcome.already_fixed is None
+    assert outcome.reason == "builds_not_in_stream"
+    assert outcome.data["references"] == ["RHEL-777 (go-fdo-client-9.9.9-1.el10)"]
 
 
 @pytest.mark.asyncio

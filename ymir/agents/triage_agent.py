@@ -2388,6 +2388,30 @@ async def run_workflow(
                                 ),
                             )
                             return comment_result()
+                        if reason == VerificationReason.BUILDS_NOT_IN_STREAM:
+                            # Every completed-build reference on the ticket
+                            # points at another stream: the fix version and
+                            # the references contradict each other.
+                            references = ", ".join(outcome.data["references"])
+                            logger.warning(
+                                f"All completed-build references of {package} in {fix_version} "
+                                f"point at another stream: {references}; requesting clarification"
+                            )
+                            _request_clarification(
+                                state,
+                                (
+                                    f"The completed-build references of {package} in {fix_version} "
+                                    f"({references}) all point at builds outside this ticket's "
+                                    f"release stream, so none of them can verify whether the fix "
+                                    f"shipped here."
+                                ),
+                                (
+                                    f"Please correct the Fixed in Build references on the issues "
+                                    f"listed above to builds of the {fix_version} stream, or "
+                                    f"confirm a rebuild is required."
+                                ),
+                            )
+                            return comment_result()
                         if reason == VerificationReason.BUILD_NOT_TAGGED_IN_STREAM:
                             # The referenced build carries no tag of the fix
                             # version's stream — a Jira data problem.

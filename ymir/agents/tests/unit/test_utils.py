@@ -85,6 +85,41 @@ def test_reasoning_effort_is_forwarded_to_claude_only(
     assert captured["allow_parallel_tool_calls"] is parallel_tool_calls
 
 
+@pytest.mark.parametrize(
+    ("chat_model", "native_tool_calling"),
+    [
+        # OpenAI-compatible gateway: keep tool_choice="required" and never take
+        # BeeAI's tool-call-as-JSON-schema fallback, which the gateway's guided
+        # decoder rejects (pydantic Path fields carry format="path").
+        ("openai:rits/deepseek-ai/DeepSeek-V4.1-Flash-1017", True),
+        # Everything else must keep BeeAI's defaults.
+        ("vertexai:claude-opus-5-5", False),
+        ("anthropic:claude-opus-4-6", False),
+        ("vertexai:gemini-2.5-pro", False),
+    ],
+)
+def test_only_openai_compatible_models_override_tool_calling(
+    monkeypatch: pytest.MonkeyPatch, chat_model: str, native_tool_calling: bool
+) -> None:
+    captured: dict = {}
+
+    def from_name(*args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(allow_prompt_caching=None, tool_choice_support=None)
+
+    monkeypatch.setenv("CHAT_MODEL", chat_model)
+    monkeypatch.setattr(utils.ChatModel, "from_name", from_name)
+
+    utils.get_chat_model()
+
+    if native_tool_calling:
+        assert "required" in captured["tool_choice_support"]
+        assert captured["tool_call_fallback_via_response_format"] is False
+    else:
+        assert "tool_choice_support" not in captured
+        assert "tool_call_fallback_via_response_format" not in captured
+
+
 def test_vertex_anthropic_request_retains_cache_injection_points(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

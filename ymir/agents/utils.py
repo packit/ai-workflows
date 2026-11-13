@@ -92,6 +92,19 @@ def get_chat_model() -> ChatModel:
     model_kwargs: dict[str, Any] = {}
     if chat_model.lower().startswith("vertexai") and "claude" in chat_model.lower():
         model_kwargs["allow_prompt_caching"] = True
+    if chat_model.lower().startswith("openai:"):
+        # An OpenAI-compatible gateway (e.g. enmaas serving DeepSeek) accepts
+        # tool_choice "required" directly. Without it BeeAI "forces" a tool call
+        # by sending a generated tool-union JSON schema as response_format, and
+        # gateways that decode JSON schemas strictly reject it: the schema
+        # embeds our pydantic models, whose Path fields carry format="path"
+        # ("Grammar error: Unknown format: path"). Keep real tool calling, and
+        # disable the schema fallback for any choice still unsupported so a
+        # request never depends on guided decoding. These must be constructor
+        # kwargs: assigning model.tool_choice_support afterwards only shadows
+        # the class attribute and changes nothing at runtime.
+        model_kwargs["tool_choice_support"] = {"single", "none", "auto", "required"}
+        model_kwargs["tool_call_fallback_via_response_format"] = False
 
     model = ChatModel.from_name(
         chat_model,

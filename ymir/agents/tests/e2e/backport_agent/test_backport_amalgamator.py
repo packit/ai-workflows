@@ -321,11 +321,20 @@ def test_amalgamator_arm(case: AmalgamatorCase, mock_repos, tmp_path):
     except ArmUnavailableError as exc:
         pytest.skip(f"Amalgamator arm not applicable: {exc}")
 
+    # Without build/test commands Amalgamator's verify phase checks nothing.
+    # AMALGAMATOR_BUILD_COMMANDS names a JSON file of per-issue
+    # {"build": ..., "test": ...} commands, run at the upstream repo root.
+    commands: dict = {}
+    if commands_path := os.getenv("AMALGAMATOR_BUILD_COMMANDS"):
+        commands = json.loads(Path(commands_path).read_text()).get(case.jira_issue) or {}
+
     result = run_arm(
         arm,
         amalgamator_root=root,
         model=os.getenv("AMALGAMATOR_MODEL") or None,
         models_path=os.getenv("AMALGAMATOR_MODELS") or None,
+        build_command=commands.get("build", ""),
+        test_command=commands.get("test", ""),
         timeout=int(os.getenv("AMALGAMATOR_TIMEOUT", str(adapter.DEFAULT_TIMEOUT_SECONDS))),
         python=interpreter,
     )

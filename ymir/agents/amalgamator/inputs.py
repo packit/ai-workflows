@@ -89,7 +89,13 @@ def read_spec_version(spec_path: Path | str) -> str | None:
         from specfile import Specfile
 
         with Specfile(str(spec_path)) as spec:
-            return spec.version
+            version = spec.version
+        # `specfile`/rpm leaves shell macros unexpanded in some specs (libexpat
+        # spells it `Version: %(echo %{unversion} | sed 's/_/./g')`). That
+        # string is not a version, so fall through to the literal parser below,
+        # which expands the forms it knows and reports the rest as unresolved.
+        if version and "%" not in version:
+            return version
     except Exception:
         logger.debug("specfile could not read %s; using the literal Version line", spec_path)
 

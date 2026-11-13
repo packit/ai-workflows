@@ -651,11 +651,11 @@ async def check_build_in_buildroot(
 class ReferenceError(StrEnum):
     """Why a Jira build reference could not be used for verification."""
 
-    MALFORMED = "malformed"            # Fixed in Build missing, non-string, or empty
-    UNPARSEABLE = "unparseable"        # not a valid NVR at all
-    NOT_FOUND = "not_found"            # build missing from Brew — data inconsistency
+    MALFORMED = "malformed"  # Fixed in Build missing, non-string, or empty
+    UNPARSEABLE = "unparseable"  # not a valid NVR at all
+    NOT_FOUND = "not_found"  # build missing from Brew — data inconsistency
     INVALID_METADATA = "invalid_metadata"  # Brew metadata cannot be compared
-    OUTAGE = "outage"                  # Brew/Jira lookup failed — transient, retry
+    OUTAGE = "outage"  # Brew/Jira lookup failed — transient, retry
 
 
 @dataclass
@@ -882,9 +882,7 @@ async def _find_completed_builds_jira(
         ) from closed_results
 
     def references_of(results: list[dict], status: str) -> list[JiraBuildReference]:
-        return [
-            ref for issue in results if (ref := JiraBuildReference.from_issue(issue, status)) is not None
-        ]
+        return [ref for issue in results if (ref := JiraBuildReference.from_issue(issue, status)) is not None]
 
     closed_refs = references_of(closed_results, "closed")
     active_refs = None if active_results is None else references_of(active_results, "active")
@@ -1763,9 +1761,7 @@ class BuildVerifier:
 
         # Only resolved active builds can be ordered. Unresolved builds still
         # require clarification.
-        active_candidates = [
-            ref for ref in active_candidates if ref.nevr > self.latest_nevr
-        ]
+        active_candidates = [ref for ref in active_candidates if ref.nevr > self.latest_nevr]
 
         stream_outcome = await self._verify_stream_tags()
         if stream_outcome is not None:
@@ -1773,9 +1769,7 @@ class BuildVerifier:
 
         return await self._verify_from_logs(active_candidates)
 
-    def _classify_stream(
-        self, references: list[JiraBuildReference]
-    ) -> list[JiraBuildReference]:
+    def _classify_stream(self, references: list[JiraBuildReference]) -> list[JiraBuildReference]:
         """Flag each reference's stream and return the in-stream candidates.
 
         The dist tag is a selection pre-filter, not the membership decision:
@@ -1806,9 +1800,7 @@ class BuildVerifier:
                 candidates.append(ref)
         return candidates
 
-    def _filter_active_package(
-        self, active_refs: list[JiraBuildReference]
-    ) -> list[JiraBuildReference]:
+    def _filter_active_package(self, active_refs: list[JiraBuildReference]) -> list[JiraBuildReference]:
         """Drop active references that resolve to a different package."""
         filtered = []
         for ref in active_refs:
@@ -1873,15 +1865,11 @@ class BuildVerifier:
                     ref.stream_tags[0],
                 )
                 continue
-            logger.info(
-                f"Found latest build for {self.package}: {ref.build.nevr} (issue: {ref.issue_key})"
-            )
+            logger.info(f"Found latest build for {self.package}: {ref.build.nevr} (issue: {ref.issue_key})")
             return SelectedBuild(ref.build, ref.issue_key, ref)
         if comparable:
             ref = comparable[0]
-            logger.info(
-                f"Found latest build for {self.package}: {ref.build.nevr} (issue: {ref.issue_key})"
-            )
+            logger.info(f"Found latest build for {self.package}: {ref.build.nevr} (issue: {ref.issue_key})")
             return SelectedBuild(ref.build, ref.issue_key, ref)
 
         logger.warning(f"No valid closed builds found in Brew for {self.package} in {self.fix_version}")
@@ -1936,9 +1924,7 @@ class BuildVerifier:
         def errors(status: str) -> list[str]:
             refs = [ref for ref in self.references if ref.status == status]
             field_errors = [
-                ref.error_detail
-                for ref in refs
-                if ref.error == ReferenceError.MALFORMED and ref.error_detail
+                ref.error_detail for ref in refs if ref.error == ReferenceError.MALFORMED and ref.error_detail
             ]
             resolution_errors = [
                 ref.error_detail
@@ -1966,9 +1952,7 @@ class BuildVerifier:
             return None
         _branch, shipped_tags, in_progress_tags = tags_in_stream
         if not shipped_tags and not in_progress_tags:
-            logger.warning(
-                "Selected build %s carries no tag of the %s stream", self.latest_nevr, _branch
-            )
+            logger.warning("Selected build %s carries no tag of the %s stream", self.latest_nevr, _branch)
             return self._clarify(VerificationReason.BUILD_NOT_TAGGED_IN_STREAM, branch=_branch)
         if not shipped_tags:
             logger.info(

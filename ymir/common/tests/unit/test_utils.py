@@ -43,7 +43,6 @@ async def _noop(*args, **kwargs):
     pass
 
 
-
 def _ref_tuple(refs):
     """Assert-friendly view of JiraBuildReference results: (key, nevr)."""
     return [(r.issue_key, r.nevr) for r in refs]

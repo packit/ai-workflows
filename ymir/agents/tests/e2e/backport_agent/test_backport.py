@@ -24,7 +24,6 @@ from ymir.agents.tests.e2e.backport_agent.artifact_capture import (
 from ymir.agents.tests.e2e.backport_agent.evaluation import BackportEvaluator
 from ymir.common.config import rhel_config_override
 from ymir.common.mock_repos import (
-    apply_zstream_override,
     cleanup_mock_gitconfig,
     get_zstream_build_refs,
     load_all_fixture_configs,
@@ -49,7 +48,6 @@ class BackportAgentTestCase:
         self.finished_state: BackportState | None = None
         self.artifacts: CapturedArtifacts | None = None
         self.error: BaseException | None = None
-        self.zstream_override: dict[str, str] | None = None
         # Used by e2e/conftest.py results.yaml reporting (optional skip note).
         self.skip_reason: str | None = None
 
@@ -57,9 +55,6 @@ class BackportAgentTestCase:
         return f"BackportTestCase({self.jira_issue})"
 
     async def run(self) -> None:
-        if self.zstream_override:
-            apply_zstream_override(self.zstream_override)
-
         metrics_middleware = MetricsMiddleware()
 
         async def testing_factory(gateway_tools, local_tool_options):
@@ -202,11 +197,6 @@ def mock_centos_stream_repos(request):
 
     try:
         for issue_key, config in configs.items():
-            for tc in cases_to_run:
-                if tc.jira_issue == issue_key:
-                    tc.zstream_override = config.get("zstream_override")
-                    break
-
             if not (repos := config.get("repos", [])):
                 continue
 

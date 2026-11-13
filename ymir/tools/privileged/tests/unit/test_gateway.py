@@ -225,7 +225,6 @@ class TestGatewaySharedOptions:
 
         flexmock(gateway_module, MCPServer=lambda config: mock_server)
         flexmock(gateway_module).should_receive("setup_logging").once()
-        flexmock(gateway_module).should_receive("apply_zstream_override_from_env").once()
         flexmock(gateway_module).should_receive("get_log_detective_mcp").once().and_return(
             _create_async_return([flexmock(name="extract_log_snippets", options=None)])
         )
@@ -263,7 +262,6 @@ class TestGatewaySharedOptions:
 
         flexmock(gateway_module, MCPServer=lambda config: mock_server)
         flexmock(gateway_module).should_receive("setup_logging").once()
-        flexmock(gateway_module).should_receive("apply_zstream_override_from_env").once()
         flexmock(gateway_module).should_receive("get_log_detective_mcp").once().and_return(
             _create_async_return([])
         )
@@ -295,7 +293,6 @@ class TestBuildBackendToggle:
 
         flexmock(gateway_module, MCPServer=lambda config: mock_server)
         flexmock(gateway_module).should_receive("setup_logging").once()
-        flexmock(gateway_module).should_receive("apply_zstream_override_from_env").once()
         flexmock(gateway_module).should_receive("get_log_detective_mcp").once().and_return(
             _create_async_return([])
         )
@@ -365,7 +362,6 @@ class TestBuildBackendToggle:
         monkeypatch.setenv("BUILD_BACKEND", "konflux")
         flexmock(gateway_module, MCPServer=lambda config: mock_server)
         flexmock(gateway_module).should_receive("setup_logging")
-        flexmock(gateway_module).should_receive("apply_zstream_override_from_env")
         flexmock(gateway_module).should_receive("get_log_detective_mcp").and_return(_create_async_return([]))
         gateway_module.main()
 

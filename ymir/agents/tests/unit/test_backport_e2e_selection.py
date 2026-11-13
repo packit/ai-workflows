@@ -76,7 +76,6 @@ def test_repository_setup_only_prepares_selected_cases(monkeypatch, tmp_path, se
         issue: {
             "input": {"jira_issue": issue},
             "repos": [{"fixture": issue}],
-            "zstream_override": {"9": "rhel-9.8.z"},
         }
         for issue in ("RHEL-1", "RHEL-2")
     }
@@ -102,8 +101,6 @@ def test_repository_setup_only_prepares_selected_cases(monkeypatch, tmp_path, se
         try:
             assert next(runner) == {"RHEL-1": configs["RHEL-1"]}
             assert prepared == ["RHEL-1"]
-            assert cases[0].zstream_override == {"9": "rhel-9.8.z"}
-            assert cases[1].zstream_override is None
             with pytest.raises(StopIteration):
                 next(runner)
         finally:

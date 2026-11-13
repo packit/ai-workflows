@@ -16,7 +16,6 @@ from ymir.agents.observability import setup_observability
 from ymir.agents.reproducer_agent import ReproducerState, create_reproducer_agent, run_workflow
 from ymir.common.config import rhel_config_override
 from ymir.common.mock_repos import (
-    apply_zstream_override,
     cleanup_mock_gitconfig,
     load_all_fixture_configs,
     setup_mock_repos,
@@ -216,7 +215,6 @@ class ReproducerAgentTestCase:
         self.metrics: dict = None
         self.finished_state: ReproducerState | None = None
         self.error: BaseException | None = None
-        self.zstream_override: dict[str, str] | None = None
         self.verification_results: dict[str, VerificationResult] = {}
         # Used by e2e/conftest.py results.yaml reporting (optional skip note).
         self.skip_reason: str | None = None
@@ -225,9 +223,6 @@ class ReproducerAgentTestCase:
         return f"ReproducerTestCase({self.jira_issue})"
 
     async def run(self) -> None:
-        if self.zstream_override:
-            apply_zstream_override(self.zstream_override)
-
         metrics_middleware = MetricsMiddleware()
 
         def testing_factory(gateway_tools, local_tool_options=None, extra_middlewares=None):
@@ -382,11 +377,6 @@ def mock_repos():
                 filter_file = compose_filter_base / f".compose_filter_{issue_key}"
                 filter_file.write_text(",".join(compose_filter))
                 logger.info("Wrote compose filter for %s: %s", issue_key, compose_filter)
-
-            for tc in test_cases:
-                if tc.jira_issue == issue_key:
-                    tc.zstream_override = config.get("zstream_override")
-                    break
 
         yield
     finally:

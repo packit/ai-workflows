@@ -17,7 +17,6 @@ class TestGatewaySharedOptions:
 
         flexmock(gateway_module, MCPServer=lambda config: mock_server)
         flexmock(gateway_module).should_receive("setup_logging").once()
-        flexmock(gateway_module).should_receive("apply_zstream_override_from_env").once()
 
         gateway_module.main()
 

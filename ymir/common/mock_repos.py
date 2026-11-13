@@ -1,20 +1,19 @@
 """
 Shared utilities for setting up mock CentOS Stream repo fixtures.
 
-When ``MOCK_REPOS_DIR`` is set, per-issue JSON configs are loaded from that
-directory.  Each bare clone has its branch ref rewound to a pre-fix commit so
-that agents cannot "cheat" by finding an already-applied backport.
 
-When ``MOCK_ZSTREAMS`` is set (JSON string), the z-stream override is applied
-via the ``current_z_streams_override`` ContextVar.
+E2E test modules select the fixture directory using their environment
+settings, such as MOCK_REPOS_DIR for triage, and pass it to these utilities.
+Each bare clone has its branch ref rewound to a pre-fix commit so that
+agents cannot "cheat" by finding an already-applied backport.
 
 When ``MOCK_BLOCKED_URLS`` is set (comma-separated or JSON array),
 ``RunShellCommandTool`` blocks curl/wget invocations targeting those URL
 prefixes.
 
-Directory layout expected under ``MOCK_REPOS_DIR``::
+Fixture directory layout::
 
-    MOCK_REPOS_DIR/
+    fixtures/
         RHEL-15216.json
         RHEL-112546.json
         ...
@@ -22,9 +21,10 @@ Directory layout expected under ``MOCK_REPOS_DIR``::
 Each JSON file contains::
 
     {
-        "zstream_override": {"9": "rhel-9.2.z"},   // optional
         "rhel_config_override": {                    // optional
-            "current_y_streams": {"10": "rhel-10.2"}
+            "current_y_streams": {"9": "rhel-9.10", "10": "rhel-10.2"},
+            "current_z_streams": {"8": "rhel-8.10.z", "9": "rhel-9.8.z", "10": "rhel-10.1.z"},
+            "upcoming_z_streams": {"9": "rhel-9.9.z", "10": "rhel-10.2.z"}
         },
         "zstream_build_ref": "a983ca344462...",     // optional fixed E2E Brew baseline
         "input": {
@@ -50,13 +50,12 @@ Each JSON file contains::
 import json
 import logging
 import os
-import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
 import git
 
-from ymir.common.version_utils import current_z_streams_override, parse_zstream_branch_name
+from ymir.common.version_utils import parse_zstream_branch_name
 
 logger = logging.getLogger(__name__)
 
@@ -362,55 +361,3 @@ def _register_blocked_urls(urls: list[str]) -> None:
     current = {u.strip() for u in existing.split(",") if u.strip()} if existing else set()
     current.update(urls)
     os.environ["MOCK_BLOCKED_URLS"] = ",".join(sorted(current))
-
-
-def apply_zstream_override(override: dict[str, str] | None) -> None:
-    """Set the ``current_z_streams_override`` ContextVar if non-empty.
-
-    Args:
-        override: Mapping of RHEL major version to z-stream target,
-            or ``None`` to skip.
-    """
-    if override:
-        current_z_streams_override.set(override)
-
-
-def apply_zstream_override_from_env() -> None:
-    """Read the ``MOCK_ZSTREAMS`` env var (JSON) and apply it."""
-    raw = os.getenv("MOCK_ZSTREAMS")
-    if raw:
-        apply_zstream_override(json.loads(raw))
-
-
-def setup_mock_repos_from_env(issue_key: str, base_dir: Path | None = None) -> dict[str, str] | None:
-    """Load config from ``MOCK_REPOS_DIR`` for an issue and set up repos.
-
-    Also applies the per-issue z-stream override if present in the config.
-
-    Args:
-        issue_key: The Jira issue key (e.g. ``RHEL-15216``).
-        base_dir: Directory for bare clones. A temporary directory is
-            created when ``None``.
-
-    Returns:
-        The ``git_env`` dict on success, or ``None`` when mocking is not
-        configured or no config exists for the issue.
-    """
-    mock_dir = os.getenv("MOCK_REPOS_DIR")
-    if not mock_dir:
-        return None
-
-    config = load_fixture_config(issue_key, mock_dir)
-    if config is None:
-        return None
-
-    apply_zstream_override(config.get("zstream_override"))
-
-    repos = config.get("repos")
-    if not repos:
-        return None
-
-    if base_dir is None:
-        base_dir = Path(tempfile.mkdtemp(prefix=f"mock_repos_{issue_key}_"))
-
-    return setup_mock_repos(repos, issue_key, base_dir)

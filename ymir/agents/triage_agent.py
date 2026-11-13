@@ -32,7 +32,6 @@ from ymir.agents.rebase_consolidation import (
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
 from ymir.agents.tasks import InvalidReproducerConfigError
 from ymir.agents.utils import (
-    build_agent_factory_with_mock_repos,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
@@ -1832,12 +1831,11 @@ async def main() -> None:
                 )
                 raise
         with span_processor.start_transaction(jira_issue, workflow="TriageWorkflow"):
-            agent_factory = build_agent_factory_with_mock_repos(create_triage_agent, jira_issue)
             try:
                 state = await run_workflow(
                     jira_issue,
                     dry_run,
-                    agent_factory,
+                    create_triage_agent,
                     auto_chain=auto_chain,
                     force_cve_triage=force_cve_triage,
                     user_triggered=user_triggered,

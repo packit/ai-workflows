@@ -114,7 +114,7 @@ run-backport-agent-konflux-e2e-tests: konflux-token
 	# The dist-git SOURCE stays mocked (local bare clones via insteadOf).
 	# Requires FORK_NAMESPACE + GITLAB_TOKEN + KONFLUX_* in the environment /
 	# .secrets/mcp-gateway.env and a reachable Konflux cluster.
-	MOCK_JIRA=true DRY_RUN=true BUILD_BACKEND=konflux FORK_NAMESPACE="$(FORK_NAMESPACE)" \
+	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true BUILD_BACKEND=konflux FORK_NAMESPACE="$(FORK_NAMESPACE)" \
 		$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
@@ -282,7 +282,7 @@ run-mr-consolidation-agent-konflux-e2e-tests: konflux-token
 	# (local bare clones via insteadOf). Requires FORK_NAMESPACE + GITLAB_TOKEN +
 	# KONFLUX_* in the environment / .secrets/mcp-gateway.env and a reachable
 	# Konflux cluster.
-	MOCK_JIRA=true DRY_RUN=true BUILD_BACKEND=konflux FORK_NAMESPACE="$(FORK_NAMESPACE)" \
+	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true BUILD_BACKEND=konflux FORK_NAMESPACE="$(FORK_NAMESPACE)" \
 		$(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \

@@ -6,15 +6,16 @@ import re
 import sys
 import traceback
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 import sentry_sdk
 from beeai_framework.errors import FrameworkError
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.workflows import Workflow
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 import ymir.agents.tasks as tasks
 from ymir.agents.constants import I_AM_YMIR, mr_description_footer
@@ -36,7 +37,12 @@ from ymir.agents.utils import (
     run_tool,
 )
 from ymir.common.base_utils import fix_await, redis_client, run_task_loop
-from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.constants import (
+    GITLAB_MR_PAGE_SIZE,
+    REPRODUCER_TEST_REPOSITORY_HOST,
+    JiraLabels,
+    RedisQueues,
+)
 from ymir.common.delayed_queue import promote_due_tasks, schedule_task
 from ymir.common.error_list import clear_resolved_errors
 from ymir.common.logging_setup import configure_logging, current_jira_issue
@@ -83,6 +89,11 @@ _REPRODUCER_TERMINAL_LABELS = {
 _PROMPT_TEMPLATE = "reproducer/prompt.j2"
 _FIX_TMT_LINT_PROMPT_TEMPLATE = "reproducer/prompt_fix_tmt_lint.j2"
 _DEFAULT_MAX_TMT_LINT_FIX_ATTEMPTS = 3
+_REPRODUCER_PACKAGE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9+._-]*\Z")
+
+
+class ReproducerPackageResolutionError(ValueError):
+    """The Jira issue did not identify one valid reproducer package."""
 
 
 class ReproducerState(BaseModel):
@@ -102,6 +113,42 @@ class _FixTmtLintPromptContext(BaseModel):
     tmt_lint_error: str
     testing_farm_request_id: str | None = None
     dry_run: bool = False
+
+
+class TmtLintFixOutputSchema(BaseModel):
+    """Only fields the post-lint fixer is allowed to update."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    success: bool
+    summary: str
+    testing_farm_request_id: str | None = None
+    retryable_error: bool = False
+
+
+def _merge_tmt_lint_fix_result(
+    original: OutputSchema,
+    fixed: TmtLintFixOutputSchema,
+) -> OutputSchema:
+    """Apply only the lint-fix fields to the original reproducer result."""
+    original_summary = original.summary.strip()
+    fix_summary = fixed.summary.strip()
+    lint_note = f"Lint fix: {fix_summary}"
+    if not original_summary:
+        summary = fix_summary
+    elif not fix_summary or fix_summary == original_summary or lint_note in original_summary:
+        summary = original_summary
+    else:
+        summary = f"{original_summary}\n\n{lint_note}"
+
+    updates = {
+        "success": fixed.success,
+        "summary": summary,
+        "retryable_error": fixed.retryable_error,
+    }
+    if fixed.testing_farm_request_id is not None:
+        updates["testing_farm_request_id"] = fixed.testing_farm_request_id
+    return original.model_copy(update=updates)
 
 
 async def run_tmt_lint(tests_clone: Path, test_directory: str) -> tuple[bool, str]:
@@ -143,12 +190,107 @@ async def run_tmt_lint(tests_clone: Path, test_directory: str) -> tuple[bool, st
 
 
 def _tests_clone_for_result(jira_issue: str, package: str) -> Path:
-    return (
-        Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos"))
-        / "Reproducer"
-        / jira_issue
-        / f"tests-{package}"
-    )
+    issue_workspace = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / "Reproducer" / jira_issue
+    return _tests_clone_path(issue_workspace, package)
+
+
+def _validate_reproducer_package_name(package: Any) -> str:
+    """Require a package name safe to use as one URL and filesystem path segment."""
+    if not isinstance(package, str) or not _REPRODUCER_PACKAGE_NAME_RE.fullmatch(package):
+        raise ReproducerPackageResolutionError(f"Invalid reproducer package name: {package!r}")
+    return package
+
+
+def _tests_clone_path(issue_workspace: Path, package: str) -> Path:
+    """Build a package clone path and ensure it stays in the issue workspace."""
+    package = _validate_reproducer_package_name(package)
+    clone_path = issue_workspace / f"tests-{package}"
+    try:
+        clone_path.resolve().relative_to(issue_workspace.resolve())
+    except ValueError as exc:
+        raise ValueError(f"Tests clone destination escapes issue workspace: {clone_path}") from exc
+    return clone_path
+
+
+def _validate_reproducer_output_package(result: OutputSchema, expected_package: str) -> None:
+    """Keep the agent result on the package resolved by orchestration."""
+    expected = _validate_reproducer_package_name(expected_package)
+    actual = _validate_reproducer_package_name(result.package)
+    if actual != expected:
+        raise ValueError(
+            f"Reproducer agent returned package {actual!r}; expected resolved package {expected!r}"
+        )
+    result.package = expected
+
+
+def _default_test_repository_url(package: str) -> str:
+    package = _validate_reproducer_package_name(package)
+    return f"https://gitlab.com/redhat/rhel/tests/{package}"
+
+
+def _configured_test_repository_url(
+    package: str,
+    reproducer_config: PackageReproducerConfig | None,
+) -> str:
+    package = _validate_reproducer_package_name(package)
+    test_repository = getattr(reproducer_config, "test_repository", None)
+    if test_repository:
+        return test_repository
+    return _default_test_repository_url(package)
+
+
+def _package_from_jira_details(issue_details: Any) -> str:
+    """Resolve the package from the single Jira component used by reproducers."""
+    fields = issue_details.get("fields") if isinstance(issue_details, dict) else None
+    components = fields.get("components") if isinstance(fields, dict) else None
+    component_count = len(components) if isinstance(components, list) else 0
+    if component_count != 1:
+        raise ReproducerPackageResolutionError(
+            "Cannot resolve standalone reproducer package: expected exactly one Jira component, "
+            f"found {component_count}"
+        )
+
+    component = components[0]
+    package = component.get("name") if isinstance(component, dict) else None
+    if not isinstance(package, str) or not package.strip():
+        raise ReproducerPackageResolutionError(
+            "Cannot resolve standalone reproducer package: Jira component has no name"
+        )
+    return _validate_reproducer_package_name(package.strip())
+
+
+async def _resolve_reproducer_setup(
+    input_data: InputSchema,
+    reproducer_config: PackageReproducerConfig | None,
+    available_tools: list[Any],
+    *,
+    load_config_if_missing: bool = True,
+) -> tuple[InputSchema, PackageReproducerConfig | None, str]:
+    """Resolve package and its config before selecting the tests repository."""
+    if not input_data.package:
+        issue_details = await run_tool(
+            "get_jira_details",
+            issue_key=input_data.jira_issue,
+            available_tools=available_tools,
+        )
+        if isinstance(issue_details, str):
+            issue_details = json.loads(issue_details)
+        package = _package_from_jira_details(issue_details)
+        input_data = input_data.model_copy(update={"package": package})
+
+    package = _validate_reproducer_package_name(input_data.package)
+    if package != input_data.package:
+        input_data = input_data.model_copy(update={"package": package})
+
+    if reproducer_config is None and load_config_if_missing:
+        reproducer_config = await tasks.fetch_reproducer_config(package, available_tools)
+
+    repository_url = _configured_test_repository_url(package, reproducer_config)
+    return input_data, reproducer_config, repository_url
+
+
+def _is_gitlab_repository(repository_url: str) -> bool:
+    return (urlsplit(repository_url).hostname or "").lower() == REPRODUCER_TEST_REPOSITORY_HOST
 
 
 _FMF_TEMPLATE_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -245,6 +387,11 @@ class _PromptContext(InputSchema):
         default=None,
         description="Absolute path to the pre-provisioned tests clone",
     )
+    test_repository_url: str = Field(description="Full clone URL for this package's tests repository")
+    test_directory_prefix: str | None = Field(
+        default=None,
+        description="Optional repository-relative prefix for new reproducer test directories",
+    )
     existing_mr_url: str | None = Field(
         default=None,
         description="Open reproducer MR URL when the tests clone was bootstrapped for adapt",
@@ -272,9 +419,28 @@ class PreparedTestsClone:
     mr_source_branch: str | None = None
     existing_test_directory: str | None = None
     matched_mr: dict | None = None
+    rejected_mr_url: str | None = None
+    rejected_mr_source_branch: str | None = None
 
 
 TestsCloneBootstrap = PreparedTestsClone
+
+
+def _normalize_test_directory(path: str | None) -> str:
+    """Normalize the optional slash surrounding a repository-relative test path."""
+    return (path or "").strip().strip("/")
+
+
+def _is_bootstrapped_test_adaptation(
+    result: OutputSchema,
+    bootstrap: TestsCloneBootstrap | None,
+) -> bool:
+    """Return whether the result adapts the exact test directory found by bootstrap."""
+    if not result.adapted_existing or bootstrap is None or not bootstrap.existing_test_directory:
+        return False
+    return _normalize_test_directory(result.test_directory) == _normalize_test_directory(
+        bootstrap.existing_test_directory
+    )
 
 
 def _render_prompt(
@@ -282,6 +448,7 @@ def _render_prompt(
     dry_run: bool = False,
     bootstrap: TestsCloneBootstrap | None = None,
     reproducer_config: PackageReproducerConfig | None = None,
+    test_repository_url: str | None = None,
 ) -> str:
     """Render the reproducer prompt template with the input schema fields."""
     working_dir = (
@@ -314,6 +481,9 @@ def _render_prompt(
         reproducer_working_dir=str(working_dir),
         tests_clone_ready=bootstrap is not None,
         tests_clone_path=str(bootstrap.tests_clone if bootstrap else default_clone),
+        test_repository_url=test_repository_url
+        or _configured_test_repository_url(input_data.package, reproducer_config),
+        test_directory_prefix=getattr(reproducer_config, "test_directory_prefix", None),
         existing_mr_url=bootstrap.existing_mr_url if bootstrap else None,
         mr_source_branch=bootstrap.mr_source_branch if bootstrap else None,
         existing_test_directory=bootstrap.existing_test_directory if bootstrap else None,
@@ -442,12 +612,55 @@ def _resolve_test_dir(tests_clone: Path, test_directory: str | None) -> Path | N
     return None
 
 
+def _test_directory_is_under_prefix(
+    tests_clone: Path,
+    test_directory: str | None,
+    prefix: str,
+) -> bool:
+    """Return whether the resolved test path stays within its configured prefix."""
+    if not test_directory or not test_directory.strip():
+        return False
+
+    relative = PurePosixPath(test_directory.strip().lstrip("/"))
+    prefix_path = PurePosixPath(prefix)
+    if (
+        relative.is_absolute()
+        or ".." in relative.parts
+        or prefix_path.is_absolute()
+        or ".." in prefix_path.parts
+    ):
+        return False
+
+    root = tests_clone.resolve()
+    prefix_candidate = root.joinpath(*prefix_path.parts)
+    resolved_prefix = prefix_candidate.resolve()
+    if resolved_prefix != prefix_candidate:
+        return False
+
+    resolved_test_dir = root.joinpath(*relative.parts).resolve()
+    return resolved_test_dir.is_relative_to(resolved_prefix)
+
+
 def _is_reproducer_test_dir(path: Path) -> bool:
     """Return whether *path* looks like a reproducer test directory."""
     return path.is_dir() and (
         (path / "main.fmf").is_file()
         or (path / "runtest.sh").is_file()
         or (path / "ai-test-description").is_file()
+    )
+
+
+def _test_directory_has_mr_changes(
+    tests_clone: Path,
+    test_directory: Path,
+    mr_changed_paths: set[str] | None,
+) -> bool:
+    """Return whether the matching MR changed a file under this test directory."""
+    if mr_changed_paths is None:
+        return True
+    relative_directory = test_directory.relative_to(tests_clone).as_posix()
+    return any(
+        path == relative_directory or path.startswith(f"{relative_directory}/") for path in mr_changed_paths
     )
 
 
@@ -458,30 +671,49 @@ def _discover_existing_reproducer_test_dir(
     jira_issue: str,
     reproducer_type: str,
     clone_root: str | None = None,
+    test_directory_prefix: str | None = None,
+    allow_unscoped_regression_fallback: bool = True,
+    mr_changed_paths: set[str] | None = None,
 ) -> Path | None:
     """Find the reproducer test directory already on an open MR branch.
 
     When a sibling stream adapts an existing MR, the agent may report a fresh
     ``test_directory`` under the default branch layout. After checking out the
     MR tip, prefer the directory that is already part of that MR.
+    When ``mr_changed_paths`` is provided, only reuse directories changed by
+    that package-scoped MR.
     """
+    search_roots = [tests_clone]
+    prefixed_root = None
+    if test_directory_prefix:
+        prefixed_root = tests_clone / test_directory_prefix
+        if prefixed_root != tests_clone:
+            search_roots.insert(0, prefixed_root)
+
     cves = _cve_only_needles(cve_id)
     if cves:
-        for cve in cves:
-            candidate = tests_clone / "Security" / cve
-            if _is_reproducer_test_dir(candidate):
-                return candidate
-
-        security = tests_clone / "Security"
-        if security.is_dir():
-            by_name = {
-                child.name.upper(): child
-                for child in security.iterdir()
-                if child.is_dir() and _is_reproducer_test_dir(child)
-            }
+        for root in search_roots:
             for cve in cves:
-                if cve in by_name:
-                    return by_name[cve]
+                candidate = root / "Security" / cve
+                if _is_reproducer_test_dir(candidate) and _test_directory_has_mr_changes(
+                    tests_clone,
+                    candidate,
+                    mr_changed_paths,
+                ):
+                    return candidate
+
+            security = root / "Security"
+            if security.is_dir():
+                by_name = {
+                    child.name.upper(): child
+                    for child in security.iterdir()
+                    if child.is_dir()
+                    and _is_reproducer_test_dir(child)
+                    and _test_directory_has_mr_changes(tests_clone, child, mr_changed_paths)
+                }
+                for cve in cves:
+                    if cve in by_name:
+                        return by_name[cve]
         return None
 
     if reproducer_type == "bug":
@@ -492,18 +724,31 @@ def _discover_existing_reproducer_test_dir(
             search_keys.append(root)
         if issue not in search_keys:
             search_keys.append(issue)
-        for key in search_keys:
-            candidate = tests_clone / "Regression" / key
-            if _is_reproducer_test_dir(candidate):
-                return candidate
+        for root in search_roots:
+            for key in search_keys:
+                candidate = root / "Regression" / key
+                if _is_reproducer_test_dir(candidate) and _test_directory_has_mr_changes(
+                    tests_clone,
+                    candidate,
+                    mr_changed_paths,
+                ):
+                    return candidate
 
-        regression = tests_clone / "Regression"
-        if regression.is_dir():
-            matches = [
-                child for child in regression.iterdir() if child.is_dir() and _is_reproducer_test_dir(child)
-            ]
-            if len(matches) == 1:
-                return matches[0]
+        fallback_roots = [prefixed_root] if prefixed_root is not None else []
+        if mr_changed_paths is not None or (prefixed_root is None and allow_unscoped_regression_fallback):
+            fallback_roots.append(tests_clone)
+        for root in fallback_roots:
+            regression = root / "Regression"
+            if regression.is_dir():
+                matches = [
+                    child
+                    for child in regression.iterdir()
+                    if child.is_dir()
+                    and _is_reproducer_test_dir(child)
+                    and _test_directory_has_mr_changes(tests_clone, child, mr_changed_paths)
+                ]
+                if len(matches) == 1:
+                    return matches[0]
     return None
 
 
@@ -523,6 +768,13 @@ def _reproducer_mr_title_tags(title: str) -> tuple[set[str], set[str]]:
     cves = {match.upper() for match in _REPRODUCER_MR_BRACKET_CVE.findall(title)}
     jiras = {match.upper() for match in _REPRODUCER_MR_BRACKET_JIRA.findall(title)}
     return cves, jiras
+
+
+def _reproducer_mr_matches_package(mr: dict, package: str) -> bool:
+    """Return whether an MR title is scoped to the requested package."""
+    title = mr.get("title") or ""
+    title_package, separator, _ = title.partition(":")
+    return bool(separator and title_package.strip() == package)
 
 
 def _build_mr_title(
@@ -558,6 +810,7 @@ def _match_regression_sibling_mr(
     mrs: list[dict],
     jira_issue: str,
     *,
+    package: str,
     clone_root: str | None = None,
 ) -> dict | None:
     """Find the canonical regression reproducer MR to extend for another stream.
@@ -573,6 +826,8 @@ def _match_regression_sibling_mr(
     candidates: list[dict] = []
     for mr in mrs:
         title = mr.get("title") or ""
+        if not _reproducer_mr_matches_package(mr, package):
+            continue
         title_cves, title_jiras = _reproducer_mr_title_tags(title)
         if title_cves or not title_jiras or not _is_reproducer_mr_title(title):
             continue
@@ -601,9 +856,14 @@ async def _resolve_reproducer_clone_root(jira_issue: str) -> str:
         return jira_issue.upper()
 
 
+class IncompleteReproducerMRListingError(RuntimeError):
+    """Raised when the open-MR lookup could not retrieve every result page."""
+
+
 def _match_open_reproducer_mr(
     mrs: list[dict],
     *,
+    package: str,
     cve_ids: list[str] | None = None,
     jira_issue: str | None = None,
     clone_root: str | None = None,
@@ -616,7 +876,7 @@ def _match_open_reproducer_mr(
     """
     if existing_mr_url:
         for mr in mrs:
-            if mr.get("url") == existing_mr_url:
+            if mr.get("url") == existing_mr_url and _reproducer_mr_matches_package(mr, package):
                 return mr
 
     wanted_cves = {cve.upper() for cve in cve_ids or [] if cve}
@@ -624,6 +884,8 @@ def _match_open_reproducer_mr(
     root_jira = clone_root.upper() if clone_root else None
 
     for mr in mrs:
+        if not _reproducer_mr_matches_package(mr, package):
+            continue
         title = mr.get("title") or ""
         title_cves, title_jiras = _reproducer_mr_title_tags(title)
 
@@ -637,21 +899,61 @@ def _match_open_reproducer_mr(
     return None
 
 
-async def _list_open_reproducer_mrs(package: str, available_tools: list[Any]) -> list[dict]:
-    try:
-        listed = await run_tool(
-            "list_project_merge_requests",
-            project=f"redhat/rhel/tests/{package}",
-            state="opened",
-            labels=["ymir_reproducer"],
-            available_tools=available_tools,
+async def _list_open_reproducer_mrs(repository_url: str, available_tools: list[Any]) -> list[dict]:
+    parsed_url = urlsplit(repository_url)
+    if not _is_gitlab_repository(repository_url):
+        logger.info(
+            "Skipping automatic open-MR lookup for unsupported repository host %s",
+            repository_url,
         )
-    except Exception as e:
-        logger.warning("Failed to list open reproducer MRs for %s: %s", package, e)
         return []
+    project_path = parsed_url.path
+    while True:
+        decoded_path = unquote(project_path)
+        if decoded_path == project_path:
+            break
+        project_path = decoded_path
+    project = project_path.strip("/").removesuffix(".git")
+    mrs: list[dict] = []
+    page = 1
+    previous_page_mrs: list[dict] | None = None
+    try:
+        while True:
+            listed = await run_tool(
+                "list_project_merge_requests",
+                project=project,
+                state="opened",
+                labels=["ymir_reproducer"],
+                page=page,
+                available_tools=available_tools,
+            )
+            page_mrs = json.loads(listed) if isinstance(listed, str) else listed
+            if not isinstance(page_mrs, list):
+                raise ValueError(
+                    f"Unexpected MR listing response type on page {page}: {type(page_mrs).__name__}"
+                )
 
-    mrs = json.loads(listed) if isinstance(listed, str) else listed
-    return mrs if isinstance(mrs, list) else []
+            if page_mrs == previous_page_mrs:
+                raise ValueError(f"MR listing repeated page {page}; pagination did not advance")
+
+            mrs.extend(page_mrs)
+            if len(page_mrs) < GITLAB_MR_PAGE_SIZE:
+                break
+            previous_page_mrs = page_mrs
+            page += 1
+    except Exception as e:
+        logger.warning(
+            "Failed to complete open reproducer MR listing for %s on page %d: %s",
+            repository_url,
+            page,
+            e,
+        )
+        raise IncompleteReproducerMRListingError(
+            f"Could not retrieve complete open-MR listing for {repository_url}"
+        ) from e
+
+    logger.info("Found %d open reproducer MR(s) for %s", len(mrs), repository_url)
+    return mrs
 
 
 async def _match_open_reproducer_mr_for_input(
@@ -659,12 +961,17 @@ async def _match_open_reproducer_mr_for_input(
     mrs: list[dict],
 ) -> dict | None:
     """Match an open reproducer MR from queue input (before the agent runs)."""
+    package = input_data.package
+    if not package:
+        return None
+
     cve_needles = _cve_only_needles(input_data.cve_id)
     if cve_needles:
-        return _match_open_reproducer_mr(mrs, cve_ids=cve_needles)
+        return _match_open_reproducer_mr(mrs, package=package, cve_ids=cve_needles)
     clone_root = await _resolve_reproducer_clone_root(input_data.jira_issue)
     matched = _match_open_reproducer_mr(
         mrs,
+        package=package,
         jira_issue=input_data.jira_issue,
         clone_root=clone_root,
     )
@@ -672,6 +979,7 @@ async def _match_open_reproducer_mr_for_input(
         matched = _match_regression_sibling_mr(
             mrs,
             input_data.jira_issue,
+            package=package,
             clone_root=clone_root,
         )
     return matched
@@ -681,14 +989,15 @@ async def _bootstrap_tests_clone(
     working_dir: Path,
     input_data: InputSchema,
     available_tools: list[Any],
+    repository_url: str | None = None,
+    test_directory_prefix: str | None = None,
+    allow_unscoped_regression_fallback: bool = True,
+    require_mr_changed_paths: bool = False,
 ) -> TestsCloneBootstrap:
-    """Clone the tests repo and check out an open reproducer MR branch when present."""
-    package = input_data.package
-    if not package:
-        raise ValueError("package is required to bootstrap tests clone")
-
-    tests_clone = working_dir / f"tests-{package}"
-    repository = f"https://gitlab.com/redhat/rhel/tests/{package}"
+    """Clone tests and bootstrap existing MR or default-branch tests."""
+    package = _validate_reproducer_package_name(input_data.package)
+    tests_clone = _tests_clone_path(working_dir, package)
+    repository = repository_url or _default_test_repository_url(package)
 
     await run_tool(
         "clone_repository",
@@ -697,19 +1006,50 @@ async def _bootstrap_tests_clone(
         available_tools=available_tools,
     )
 
-    mrs = await _list_open_reproducer_mrs(package, available_tools)
+    mrs = await _list_open_reproducer_mrs(repository, available_tools)
     matched = await _match_open_reproducer_mr_for_input(input_data, mrs)
     if not matched:
         logger.info(
             "No open reproducer MR for %s — tests clone left on default branch",
             input_data.jira_issue,
         )
-        return TestsCloneBootstrap(tests_clone=tests_clone)
+        if not allow_unscoped_regression_fallback and not test_directory_prefix:
+            return TestsCloneBootstrap(tests_clone=tests_clone)
+
+        search_root = tests_clone
+        search_prefix = test_directory_prefix
+        if not allow_unscoped_regression_fallback:
+            search_root = tests_clone / test_directory_prefix
+            search_prefix = None
+
+        reproducer_type = "cve" if _cve_only_needles(input_data.cve_id) else "bug"
+        clone_root = None
+        if reproducer_type == "bug":
+            clone_root = await _resolve_reproducer_clone_root(input_data.jira_issue)
+        discovered = _discover_existing_reproducer_test_dir(
+            search_root,
+            cve_id=input_data.cve_id,
+            jira_issue=input_data.jira_issue,
+            reproducer_type=reproducer_type,
+            clone_root=clone_root,
+            test_directory_prefix=search_prefix,
+            allow_unscoped_regression_fallback=True,
+        )
+        return TestsCloneBootstrap(
+            tests_clone=tests_clone,
+            existing_test_directory=(str(discovered.relative_to(tests_clone)) if discovered else None),
+        )
 
     mr_url = matched.get("url")
     if not mr_url:
         logger.warning("Matched reproducer MR for %s has no URL", input_data.jira_issue)
-        return TestsCloneBootstrap(tests_clone=tests_clone, matched_mr=matched)
+        return TestsCloneBootstrap(
+            tests_clone=tests_clone,
+            rejected_mr_source_branch=matched.get("source_branch"),
+        )
+
+    default_branch, _ = await check_subprocess(["git", "branch", "--show-current"], cwd=tests_clone)
+    default_branch = default_branch.strip()
 
     details_raw = await run_tool(
         "get_merge_request_details",
@@ -730,6 +1070,24 @@ async def _bootstrap_tests_clone(
     )
     await check_subprocess(["git", "checkout", "-f", branch], cwd=tests_clone)
 
+    mr_changed_paths = None
+    if require_mr_changed_paths:
+        try:
+            changed_files, _ = await check_subprocess(
+                ["git", "diff", "--name-only", f"origin/{details.target_branch}...HEAD"],
+                cwd=tests_clone,
+            )
+            mr_changed_paths = {path for path in changed_files.splitlines() if path}
+        except Exception as exc:
+            logger.warning(
+                "Could not verify changed test paths for shared-repository MR %s: %s",
+                mr_url,
+                exc,
+            )
+            raise IncompleteReproducerMRListingError(
+                f"Could not verify changed paths for shared-repository MR {mr_url}"
+            ) from exc
+
     reproducer_type = "cve" if _cve_only_needles(input_data.cve_id) else "bug"
     clone_root = None
     if reproducer_type == "bug":
@@ -740,15 +1098,24 @@ async def _bootstrap_tests_clone(
         jira_issue=input_data.jira_issue,
         reproducer_type=reproducer_type,
         clone_root=clone_root,
+        test_directory_prefix=test_directory_prefix,
+        allow_unscoped_regression_fallback=allow_unscoped_regression_fallback,
+        mr_changed_paths=mr_changed_paths,
     )
     existing_test_directory = None
     if discovered:
         existing_test_directory = str(discovered.relative_to(tests_clone))
     else:
         logger.warning(
-            "Checked out reproducer MR %s on %s but found no test directory on branch",
+            "Checked out reproducer MR %s on %s but found no matching test directory",
             mr_url,
             branch,
+        )
+        await check_subprocess(["git", "checkout", "-f", default_branch], cwd=tests_clone)
+        return TestsCloneBootstrap(
+            tests_clone=tests_clone,
+            rejected_mr_url=mr_url,
+            rejected_mr_source_branch=branch,
         )
 
     logger.info(
@@ -772,6 +1139,7 @@ async def _resolve_reproducer_mr_target(
     package: str,
     available_tools: list[Any],
     *,
+    repository_url: str | None = None,
     bootstrap: TestsCloneBootstrap | None = None,
 ) -> tuple[str | None, str, dict | None]:
     """Resolve MR URL, git branch, and matched MR metadata for create/adapt push.
@@ -781,15 +1149,32 @@ async def _resolve_reproducer_mr_target(
     merged first. Regression (non-CVE) jobs accumulate ``[RHEL-…]`` keys in the
     MR title when another stream extends the same open MR.
     """
-    fallback_branch = f"reproducer/{result.jira_issue}"
-    if bootstrap and bootstrap.matched_mr:
+    default_repository = _default_test_repository_url(package)
+    is_custom_repository = bool(repository_url and repository_url.rstrip("/") != default_repository)
+    fallback_branch = (
+        f"reproducer/{package}/{result.jira_issue}"
+        if is_custom_repository
+        else f"reproducer/{result.jira_issue}"
+    )
+    if bootstrap is not None:
+        # Bootstrap is authoritative: it only carries an MR after finding its
+        # matching test branch. Do not re-discover a rejected MR from agent output.
         matched = bootstrap.matched_mr
+        if matched is None:
+            result.existing_mr_url = None
+            if bootstrap.rejected_mr_source_branch == fallback_branch:
+                raise RuntimeError(
+                    "Refusing to overwrite rejected open reproducer MR "
+                    f"{bootstrap.rejected_mr_url or '<unknown URL>'} on branch {fallback_branch}"
+                )
     else:
-        mrs = await _list_open_reproducer_mrs(package, available_tools)
+        repository = repository_url or _default_test_repository_url(package)
+        mrs = await _list_open_reproducer_mrs(repository, available_tools)
         cve_needles = _cve_only_needles(agent_input.cve_id)
         if cve_needles:
             matched = _match_open_reproducer_mr(
                 mrs,
+                package=package,
                 cve_ids=cve_needles,
                 existing_mr_url=result.existing_mr_url,
             )
@@ -797,6 +1182,7 @@ async def _resolve_reproducer_mr_target(
             clone_root = await _resolve_reproducer_clone_root(agent_input.jira_issue)
             matched = _match_open_reproducer_mr(
                 mrs,
+                package=package,
                 jira_issue=result.jira_issue,
                 clone_root=clone_root,
                 existing_mr_url=result.existing_mr_url,
@@ -805,6 +1191,7 @@ async def _resolve_reproducer_mr_target(
                 matched = _match_regression_sibling_mr(
                     mrs,
                     result.jira_issue,
+                    package=package,
                     clone_root=clone_root,
                 )
 
@@ -1009,6 +1396,45 @@ async def run_workflow(
 
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL"), call_meta=call_meta) as gateway_tools:
         agent_input = InputSchema(jira_issue=jira_issue) if input_data is None else input_data
+        resolving_standalone_package = input_data is None or not input_data.package
+        try:
+            agent_input, reproducer_config, test_repository_url = await _resolve_reproducer_setup(
+                agent_input,
+                reproducer_config,
+                gateway_tools,
+                load_config_if_missing=resolving_standalone_package,
+            )
+        except (ReproducerPackageResolutionError, InvalidReproducerConfigError) as exc:
+            if not resolving_standalone_package:
+                raise
+
+            if isinstance(exc, InvalidReproducerConfigError):
+                comment = (
+                    f"Cannot start the standalone reproducer: {exc}. "
+                    "Please fix the reproducer configuration in the package rules repository, then retry."
+                )
+            else:
+                comment = (
+                    f"Cannot start the standalone reproducer: {exc}. "
+                    "Please ensure the Jira issue has exactly one component containing the package name, "
+                    "then retry."
+                )
+            logger.error("%s", comment)
+            if not dry_run:
+                try:
+                    await tasks.post_terminal_error_comment(
+                        jira_issue=jira_issue,
+                        agent_type="Reproducer",
+                        comment_text=comment,
+                        available_tools=gateway_tools,
+                    )
+                except Exception as comment_error:
+                    logger.warning(
+                        "Failed to report package resolution error for %s: %s",
+                        jira_issue,
+                        comment_error,
+                    )
+            return ReproducerState(jira_issue=jira_issue)
 
         tf_cleanup = TFReservationCleanupMiddleware()
         reproducer_agent = reproducer_agent_factory(
@@ -1017,7 +1443,22 @@ async def run_workflow(
 
         bootstrap: TestsCloneBootstrap | None = None
         if agent_input.package:
-            bootstrap = await _bootstrap_tests_clone(working_dir, agent_input, gateway_tools)
+            shared_repo_with_prefix = bool(
+                reproducer_config
+                and reproducer_config.test_repository
+                and reproducer_config.test_directory_prefix
+            )
+            bootstrap = await _bootstrap_tests_clone(
+                working_dir,
+                agent_input,
+                gateway_tools,
+                repository_url=test_repository_url,
+                test_directory_prefix=(
+                    reproducer_config.test_directory_prefix if reproducer_config else None
+                ),
+                allow_unscoped_regression_fallback=not shared_repo_with_prefix,
+                require_mr_changed_paths=shared_repo_with_prefix,
+            )
 
         workflow = Workflow(ReproducerState, name="ReproducerWorkflow")
         max_tmt_lint_fix_attempts = int(
@@ -1034,14 +1475,34 @@ async def run_workflow(
                     dry_run=dry_run,
                     bootstrap=bootstrap,
                     reproducer_config=reproducer_config,
+                    test_repository_url=test_repository_url,
                 ),
                 expected_output=render_template("reproducer/output_format.j2"),
                 **get_agent_execution_config(),
             )
             state.result = OutputSchema.model_validate_json(response.last_message.text)
+            _validate_reproducer_output_package(state.result, agent_input.package)
 
             # Normalize jira_issue to upper-case
             state.result.jira_issue = state.result.jira_issue.upper()
+
+            if state.result.adapted_existing and not _is_bootstrapped_test_adaptation(
+                state.result,
+                bootstrap,
+            ):
+                logger.warning(
+                    "Rejecting unverified existing-test adaptation for %s at %r",
+                    state.jira_issue,
+                    state.result.test_directory,
+                )
+                state.result.success = False
+                state.result.test_already_exists = False
+                state.result.adapted_existing = False
+                state.result.existing_mr_url = None
+                state.result.summary += (
+                    " (existing-test adaptation rejected: bootstrap did not confirm this test directory)"
+                )
+                return "handle_results"
 
             if _needs_merge_request(state.result):
                 return "validate_tmt_lint"
@@ -1066,6 +1527,30 @@ async def run_workflow(
             if not result.test_directory:
                 result.success = False
                 result.summary += " (tmt lint skipped: test_directory missing)"
+                return "handle_results"
+
+            test_directory_prefix = reproducer_config.test_directory_prefix if reproducer_config else None
+            is_existing_test = _is_bootstrapped_test_adaptation(result, bootstrap)
+            if (
+                test_directory_prefix
+                and not is_existing_test
+                and not _test_directory_is_under_prefix(
+                    tests_clone,
+                    result.test_directory,
+                    test_directory_prefix,
+                )
+            ):
+                result.success = False
+                result.summary += (
+                    f" (tmt lint skipped: new test directory must be under "
+                    f"configured prefix {test_directory_prefix!r})"
+                )
+                logger.error(
+                    "New reproducer for %s used test_directory=%r outside configured prefix %r",
+                    state.jira_issue,
+                    result.test_directory,
+                    test_directory_prefix,
+                )
                 return "handle_results"
 
             logger.info(
@@ -1142,22 +1627,12 @@ async def run_workflow(
                         dry_run=dry_run,
                     ),
                 ),
-                expected_output=render_template("reproducer/output_format.j2"),
+                expected_output=TmtLintFixOutputSchema,
                 **get_agent_execution_config(),
             )
-            original_test_directory = result.test_directory
-            state.result = OutputSchema.model_validate_json(response.last_message.text)
+            fixed_result = TmtLintFixOutputSchema.model_validate_json(response.last_message.text)
+            state.result = _merge_tmt_lint_fix_result(result, fixed_result)
             state.result.jira_issue = state.result.jira_issue.upper()
-
-            if state.result.test_directory != original_test_directory:
-                logger.warning(
-                    "Fix agent changed test_directory from %r to %r for %s — "
-                    "restoring original to avoid linting/committing the wrong path",
-                    original_test_directory,
-                    state.result.test_directory,
-                    state.jira_issue,
-                )
-                state.result.test_directory = original_test_directory
 
             if not state.result.success:
                 return "handle_results"
@@ -1210,8 +1685,8 @@ async def run_workflow(
                 logger.info("Using test directory %s for MR creation", test_dir)
 
                 if bootstrap and bootstrap.existing_test_directory and result.adapted_existing:
-                    expected = bootstrap.existing_test_directory
-                    actual = (result.test_directory or "").strip().lstrip("/")
+                    expected = _normalize_test_directory(bootstrap.existing_test_directory)
+                    actual = _normalize_test_directory(result.test_directory)
                     if actual != expected:
                         logger.error(
                             "Adapt for %s used test_directory=%r but open MR test is at %r",
@@ -1231,6 +1706,7 @@ async def run_workflow(
                     agent_input,
                     package,
                     gateway_tools,
+                    repository_url=test_repository_url,
                     bootstrap=bootstrap,
                 )
                 update_branch, commit_dir = await _prepare_reproducer_branch(
@@ -1260,9 +1736,10 @@ async def run_workflow(
                 )
                 target_branch = target_ref.strip().removeprefix("origin/") if target_ref else "main"
 
-                repository = f"https://gitlab.com/redhat/rhel/tests/{package}"
                 fork_url = await run_tool(
-                    "fork_repository", repository=repository, available_tools=gateway_tools
+                    "fork_repository",
+                    repository=test_repository_url,
+                    available_tools=gateway_tools,
                 )
 
                 mr_title = _build_mr_title(result, agent_input, matched_mr=matched_mr)
@@ -1285,7 +1762,7 @@ async def run_workflow(
                     logger.info(f"Created/updated reproducer MR: {mr_url}")
                     if is_new_mr:
                         reviewer_branch = _reviewer_lookup_branch(agent_input)
-                        if reviewer_branch:
+                        if reviewer_branch and _is_gitlab_repository(test_repository_url):
                             await tasks.request_mr_qe_reviews(
                                 package,
                                 reviewer_branch,
@@ -1305,6 +1782,16 @@ async def run_workflow(
                     result.success = False
                     result.summary += " (MR creation did not return a URL)"
 
+            except IncompleteReproducerMRListingError as e:
+                logger.warning(
+                    "Skipping MR publication for %s because open-MR lookup was incomplete: %s",
+                    state.jira_issue,
+                    e,
+                )
+                result.test_mr_url = None
+                result.success = False
+                result.retryable_error = True
+                result.summary += " (Open-MR lookup was incomplete; retry scheduled)"
             except Exception as e:
                 logger.warning(f"Error creating reproducer MR for {state.jira_issue}: {e}")
                 result.test_mr_url = None
@@ -1435,7 +1922,10 @@ async def main() -> None:
                 dry_run,
                 agent_factory,
             )
-            logger.info(f"Direct run completed: {state.result.model_dump_json(indent=4)}")
+            if state.result is None:
+                logger.error("Direct reproducer run for %s ended without a result", jira_issue)
+            else:
+                logger.info(f"Direct run completed: {state.result.model_dump_json(indent=4)}")
             return
 
     logger.info("Starting reproducer agent in queue mode")
@@ -1668,6 +2158,18 @@ async def main() -> None:
                         f"lock_deferred: {output.lock_deferred}"
                     )
 
+            except IncompleteReproducerMRListingError as e:
+                logger.warning(
+                    "Open-MR lookup failed for %s; scheduling retry in %.0fs: %s",
+                    input_data.jira_issue,
+                    retry_delay_seconds,
+                    e,
+                )
+                await retry(
+                    task,
+                    ErrorData(details=str(e), jira_issue=input_data.jira_issue),
+                    delay_seconds=retry_delay_seconds,
+                )
             except Exception as e:
                 error = "".join(traceback.format_exception(e))
                 logger.error(f"Exception during reproducer processing for {input_data.jira_issue}: {error}")

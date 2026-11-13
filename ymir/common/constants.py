@@ -17,6 +17,8 @@ YMIR_COMMENT_MARKER = Template("Output from Ymir $AGENT_TYPE Agent")
 DATETIME_MIN_UTC = datetime.min.replace(tzinfo=UTC)
 # Groups within the redhat organization where we can find issues
 GITLAB_GROUPS = ["rhel/rpms", "centos-stream/rpms"]
+GITLAB_MR_PAGE_SIZE = 100
+REPRODUCER_TEST_REPOSITORY_HOST = "gitlab.com"
 # Timeout for post-push testing (e.g., CAT tests) after stage push completes
 POST_PUSH_TESTING_TIMEOUT = timedelta(hours=3)
 POST_PUSH_TESTING_TIMEOUT_STR = "3 hours"

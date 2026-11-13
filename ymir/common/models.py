@@ -8,12 +8,14 @@ and components to ensure consistency and type safety.
 import re
 from datetime import UTC, datetime
 from enum import Enum, StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
+from urllib.parse import unquote, urlsplit
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 
+from ymir.common.constants import REPRODUCER_TEST_REPOSITORY_HOST
 from ymir.common.validators import UniqueSortedList
 
 
@@ -1135,6 +1137,21 @@ class PackageReproducerConfig(BaseModel):
         default=False,
         description="Whether to run the Ymir reproducer workflow for this package",
     )
+    test_repository: str | None = Field(
+        default=None,
+        description=(
+            "GitLab.com repository URL under the redhat namespace used to clone, search, "
+            "and publish reproducer tests. Defaults to "
+            "https://gitlab.com/redhat/rhel/tests/<package>."
+        ),
+    )
+    test_directory_prefix: str | None = Field(
+        default=None,
+        description=(
+            "Optional repository-relative prefix prepended to new reproducer test directories. "
+            "Existing tests keep their discovered path."
+        ),
+    )
     fmf: PackageReproducerFmfConfig = Field(
         default_factory=PackageReproducerFmfConfig,
         description="Package-specific FMF metadata merged into the default reproducer template",
@@ -1143,6 +1160,66 @@ class PackageReproducerConfig(BaseModel):
         default_factory=PackageReproducerContextConfig,
         description="Package-specific context used to render FMF metadata templates",
     )
+
+    @field_validator("test_repository")
+    @classmethod
+    def validate_test_repository(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        parsed = urlsplit(value)
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("test_repository must use a valid HTTPS port") from exc
+        if port not in (None, 443):
+            raise ValueError("test_repository must use the default HTTPS port 443")
+
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or parsed.path in {"", "/"}
+        ):
+            raise ValueError("test_repository must be a credential-free HTTPS repository URL")
+
+        decoded_path = parsed.path
+        while True:
+            next_path = unquote(decoded_path)
+            if next_path == decoded_path:
+                break
+            decoded_path = next_path
+
+        path_parts = decoded_path.strip("/").split("/")
+        if any(part in {".", ".."} for part in path_parts):
+            raise ValueError("test_repository must not contain '.' or '..' path segments")
+
+        if (
+            parsed.hostname != REPRODUCER_TEST_REPOSITORY_HOST
+            or len(path_parts) < 2
+            or path_parts[0] != "redhat"
+            or any(not part for part in path_parts)
+        ):
+            raise ValueError(
+                f"test_repository must be a {REPRODUCER_TEST_REPOSITORY_HOST} repository "
+                "under the redhat namespace"
+            )
+
+        return value.rstrip("/")
+
+    @field_validator("test_directory_prefix")
+    @classmethod
+    def validate_test_directory_prefix(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        path = PurePosixPath(value)
+        if not value.strip() or path.is_absolute() or ".." in path.parts or not path.parts:
+            raise ValueError("test_directory_prefix must be a relative path without '..' segments")
+        return path.as_posix()
 
 
 class PackageReleaseBumpingConfig(BaseModel):

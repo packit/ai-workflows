@@ -11,6 +11,7 @@ import pytest
 import yaml
 from tabulate import tabulate
 
+from ymir.agents import reproducer_agent as reproducer_agent_module
 from ymir.agents.metrics_middleware import MetricsMiddleware
 from ymir.agents.observability import setup_observability
 from ymir.agents.reproducer_agent import ReproducerState, create_reproducer_agent, run_workflow
@@ -412,7 +413,17 @@ def run_test_cases_concurrently(request, mock_repos, observability_fixture):
     cases_to_run = [tc for tc in test_cases if tc in selected]
 
     async def _run_all():
-        await asyncio.gather(*(tc.run() for tc in cases_to_run))
+        async def _no_open_reproducer_mrs(*_args, **_kwargs):
+            return []
+
+        # E2E repos are local fixtures; keep MR discovery offline and deterministic too.
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(
+                reproducer_agent_module,
+                "_list_open_reproducer_mrs",
+                _no_open_reproducer_mrs,
+            )
+            await asyncio.gather(*(tc.run() for tc in cases_to_run))
 
     asyncio.run(_run_all())
 
@@ -523,6 +534,16 @@ def test_reproducer_agent_artifacts(test_case: ReproducerAgentTestCase):
     assert test_dir.is_dir(), (
         f"{test_case.jira_issue}: expected test directory at {test_dir} but it does not exist"
     )
+    prefix = test_case.reproducer_config.test_directory_prefix if test_case.reproducer_config else None
+    if prefix:
+        assert result.test_directory, (
+            f"{test_case.jira_issue}: test_directory is required with a configured prefix"
+        )
+        relative_test_dir = Path(str(result.test_directory).strip().lstrip("/"))
+        assert relative_test_dir.is_relative_to(Path(prefix)), (
+            f"{test_case.jira_issue}: expected test_directory={result.test_directory!r} "
+            f"to be under configured prefix {prefix!r}"
+        )
 
     runtest = test_dir / "runtest.sh"
     assert runtest.is_file(), f"{test_case.jira_issue}: missing runtest.sh in {test_dir}"

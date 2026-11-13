@@ -56,6 +56,19 @@ logger = logging.getLogger(__name__)
 _RH_EMPLOYEE_GROUP = "Red Hat Employee"
 
 
+def _issue_key_from_metadata(value: object) -> str | None:
+    """Normalize an unvalidated task-metadata issue key; ``None`` if unusable.
+
+    Task metadata comes straight from Redis and may hold arbitrary JSON
+    values, so a non-string must be treated as a per-item parse failure
+    instead of raising ``AttributeError`` and aborting the scan of the
+    remaining queue items (which would allow duplicate enqueues).
+    """
+    if isinstance(value, str) and value:
+        return value.upper()
+    return None
+
+
 class JiraIssueFetcher:
     DEFAULT_QUERY = "project=RHEL and assignee = jotnar-project"
     MAX_RESULTS_PER_PAGE = 500  # Optimize for fewer, more expensive calls
@@ -522,7 +535,9 @@ class JiraIssueFetcher:
                                             | RedisQueues.REPRODUCER_QUEUE.value
                                             | RedisQueues.REPRODUCER_QUEUE_TODO.value
                                         ):
-                                            issue_key = task.metadata.get("jira_issue", "").upper()
+                                            issue_key = _issue_key_from_metadata(
+                                                task.metadata.get("jira_issue")
+                                            )
                                         case _:
                                             continue
 
@@ -555,7 +570,7 @@ class JiraIssueFetcher:
                                     # Fallback to task parsing for these queues if direct parsing fails
                                     task = Task.model_validate_json(item)
                                     if task.metadata and "issue" in task.metadata:
-                                        issue_key = task.metadata["issue"].upper()
+                                        issue_key = _issue_key_from_metadata(task.metadata["issue"])
 
                             if issue_key:
                                 existing_keys.add(issue_key)
@@ -594,9 +609,9 @@ class JiraIssueFetcher:
                                             task.metadata
                                         ).issue.upper()
                                     except ValidationError:
-                                        issue_key = task.metadata.get("jira_issue", "").upper()
+                                        issue_key = _issue_key_from_metadata(task.metadata.get("jira_issue"))
                                 else:
-                                    issue_key = task.metadata.get("jira_issue", "").upper()
+                                    issue_key = _issue_key_from_metadata(task.metadata.get("jira_issue"))
                             if issue_key:
                                 existing_keys.add(issue_key)
                                 queue_count += 1

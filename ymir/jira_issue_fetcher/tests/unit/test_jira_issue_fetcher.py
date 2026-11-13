@@ -2116,3 +2116,34 @@ async def test_get_existing_issue_keys_includes_delayed_queues(fetcher, mock_red
 
     assert "RHEL-DELAYED-1" in result
     assert "RHEL-DELAYED-REPRO" in result
+
+
+@pytest.mark.asyncio
+async def test_get_existing_issue_keys_skips_invalid_delayed_metadata(fetcher, mock_redis_context):
+    """Non-string delayed-task metadata is a per-item failure, not a queue abort.
+
+    An AttributeError from ``.upper()`` used to escape the per-item handler
+    and abort the scan of the remaining delayed tasks, so the valid key
+    queued after the invalid one was never deduplicated.
+    """
+    invalid_json = json.dumps({"metadata": {"jira_issue": 12345}, "attempts": 1})
+    valid_json = json.dumps(
+        {"metadata": {"jira_issue": "RHEL-AFTER-INVALID", "package": "bind"}, "attempts": 1}
+    )
+
+    mock_redis, _ = mock_redis_context
+    for queue in RedisQueues.all_queues():
+        mock_redis.should_receive("lrange").with_args(queue, 0, -1).and_return(
+            create_async_mock_return_value([])
+        )
+    mock_redis.should_receive("zrange").with_args(RedisQueues.TRIAGE_DELAYED_QUEUE.value, 0, -1).and_return(
+        create_async_mock_return_value([])
+    )
+    mock_redis.should_receive("zrange").with_args(
+        RedisQueues.REPRODUCER_DELAYED_QUEUE.value, 0, -1
+    ).and_return(create_async_mock_return_value([invalid_json, valid_json]))
+
+    result = await fetcher._get_existing_issue_keys(mock_redis)
+
+    assert "RHEL-AFTER-INVALID" in result
+    assert len([key for key in result if key == "RHEL-AFTER-INVALID"]) == 1

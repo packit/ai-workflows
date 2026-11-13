@@ -648,15 +648,161 @@ async def check_build_in_buildroot(
     return True
 
 
+class ReferenceError(StrEnum):
+    """Why a Jira build reference could not be used for verification."""
+
+    MALFORMED = "malformed"            # Fixed in Build missing, non-string, or empty
+    UNPARSEABLE = "unparseable"        # not a valid NVR at all
+    NOT_FOUND = "not_found"            # build missing from Brew — data inconsistency
+    INVALID_METADATA = "invalid_metadata"  # Brew metadata cannot be compared
+    OUTAGE = "outage"                  # Brew/Jira lookup failed — transient, retry
+
+
+@dataclass
+class JiraBuildReference:
+    """A single Fixed in Build reference discovered on a Jira issue.
+
+    One structure carries everything the verification pipeline learns about a
+    reference — discovery (the raw Jira value), resolution (the parsed NEVR and
+    the Brew build), and the errors encountered — so each later step (stream
+    classification, filtering, selection) reads and enriches the same object
+    instead of re-deriving facts or looking them up again. The
+    ``BuildVerificationReport`` is a projection of these structures, built once
+    after classification, never the pipeline's working state.
+    """
+
+    issue_key: str
+    raw_nvr: str | None
+    status: str  # "closed" | "active"
+    jira_status: str = "Unknown"  # Jira issue status (logged for active references)
+    nevr: NEVR | None = None
+    build: BrewBuild | None = None
+    error: ReferenceError | None = None
+    error_detail: str = ""  # rendered problem line for the report
+    # Set by the stream classification; None means undetermined (fail open).
+    out_of_stream: bool | None = None
+    # Brew tag membership of the build in the fix version's stream, fetched
+    # once during candidate selection: (branch, shipped_tags, in_progress_tags).
+    stream_tags: tuple[str, list[str], list[str]] | None = None
+
+    @classmethod
+    def from_issue(cls, issue: dict, status: str) -> "JiraBuildReference | None":
+        """Build a reference from a Jira search result, or None for a keyless row."""
+        issue_key = issue.get("key")
+        if not issue_key:
+            return None
+        jira_status = issue.get("fields", {}).get("status", {}).get("name", "Unknown")
+        nvr_raw = issue.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
+        if not isinstance(nvr_raw, str):
+            kind = type(nvr_raw).__name__
+            logger.warning("Issue %s has non-string Fixed in Build: %s", issue_key, kind)
+            return cls(
+                issue_key=issue_key,
+                raw_nvr=None,
+                status=status,
+                jira_status=jira_status,
+                error=ReferenceError.MALFORMED,
+                error_detail=f"{issue_key}: Fixed in Build is not a string ({kind})",
+            )
+        if not (nvr := nvr_raw.strip()):
+            logger.warning("Issue %s has empty Fixed in Build", issue_key)
+            return cls(
+                issue_key=issue_key,
+                raw_nvr=None,
+                status=status,
+                jira_status=jira_status,
+                error=ReferenceError.MALFORMED,
+                error_detail=f"{issue_key}: Fixed in Build is empty",
+            )
+        return cls(issue_key=issue_key, raw_nvr=nvr, status=status, jira_status=jira_status)
+
+    async def resolve(self) -> Exception | None:
+        """Resolve this reference against Brew, recording the outcome on it.
+
+        Fills ``nevr``/``build`` on success or ``error``/``error_detail`` on
+        failure. A Brew outage is not recorded: the exception is returned so
+        the batch driver can retry the whole verification with a complete
+        candidate set.
+        """
+        if self.error is not None or self.raw_nvr is None:
+            # Already classified at discovery (malformed field value).
+            return None
+        try:
+            self.nevr = NEVR.from_string(self.raw_nvr)
+        except (SpecfileException, ValueError):
+            # A value that cannot be an NVR at all is a permanent data
+            # problem — clarify instead of retrying a lookup that can never
+            # succeed.
+            self.error = ReferenceError.UNPARSEABLE
+            self.error_detail = f"{self.issue_key} ({self.raw_nvr}): not a valid Brew NVR"
+            logger.warning("Brew lookup skipped: %s", self.error_detail)
+            return None
+        # Brew lookups need the epochless NVR: Jira Fixed in Build values may
+        # carry an epoch prefix that koji's getBuild does not match, which
+        # would report an existing build as missing.
+        try:
+            metadata = await asyncio.to_thread(
+                _get_koji_build, BREWHUB_URL, get_epochless_nvr_string(self.nevr)
+            )
+        except Exception as failure:
+            return failure
+        if metadata is None:
+            self.error = ReferenceError.NOT_FOUND
+            self.error_detail = f"{self.issue_key} ({self.raw_nvr}): build not found in Brew"
+            logger.warning("Brew lookup failed: %s", self.error_detail)
+            return None
+        try:
+            self.build = BrewBuild(metadata)
+            # The authoritative Brew NEVR replaces the provisional Jira parse:
+            # the Jira value may carry a wrong or absent epoch, and every
+            # later comparison (ordering, stream classification) must use the
+            # Brew-resolved identity.
+            self.nevr = self.build.nevr
+        except Exception as error:
+            self.error = ReferenceError.INVALID_METADATA
+            self.error_detail = (
+                f"{self.issue_key} ({self.raw_nvr}): Brew metadata cannot be compared: {error}"
+            )
+            logger.warning(self.error_detail, exc_info=True)
+        return None
+
+    @classmethod
+    async def resolve_all(cls, references: list["JiraBuildReference"]) -> None:
+        """Resolve references concurrently, retrying the verification on outages.
+
+        A single failed lookup means the candidate set would be incomplete, so
+        the whole verification raises ``TransientInfrastructureError`` and
+        retries rather than deciding on partial data.
+        """
+        failures = await asyncio.gather(*(ref.resolve() for ref in references))
+        lookup_failures = [
+            f"{ref.issue_key} ({ref.raw_nvr}): {failure}"
+            for ref, failure in zip(references, failures, strict=True)
+            if failure is not None
+        ]
+        if lookup_failures:
+            message = f"Brew lookup failed for {len(lookup_failures)} candidate(s): " + "; ".join(
+                lookup_failures
+            )
+            logger.warning("%s; retrying verification", message)
+            raise TransientInfrastructureError(message)
+
+
 async def _find_completed_builds_jira(
     package: str,
     fix_version: str,
     available_tools: list[Tool],
     jira_issue: str | None = None,
-    report: BuildVerificationReport | None = None,
     downstream_component: str | None = None,
-) -> tuple[list[tuple[str, NEVR]], list[tuple[str, NEVR]] | None]:
-    """Search Jira for completed builds with Fixed in Build set.
+) -> tuple[list[JiraBuildReference], list[JiraBuildReference] | None]:
+    """Search Jira for build references and resolve them against Brew.
+
+    Every returned reference carries its own resolution outcome: a successful
+    one has ``build`` set, a failed one carries ``error`` (and the rendered
+    ``error_detail``), so no caller needs parallel lists or string parsing to
+    know what happened. Malformed field values never resolve; unparseable
+    NVRs skip the Brew lookup; a Brew outage raises
+    ``TransientInfrastructureError`` so the whole verification retries.
 
     Args:
         package: Package name
@@ -666,9 +812,10 @@ async def _find_completed_builds_jira(
         downstream_component: Raw modular Downstream Component Name, when present.
 
     Returns:
-        Tuple of (closed_builds, active_builds) where:
-        - closed_builds: List of (issue_key, authoritative NEVR) tuples
-        - active_builds: List of (issue_key, authoritative NEVR) tuples, or None if query failed
+        Tuple of (closed_references, active_references) where:
+        - closed_references: resolved/errored references from closed issues
+        - active_references: same for not-yet-closed issues, or None if that
+          Jira query failed (a transient condition the caller raises on)
     """
     fix_version_variants = get_fix_version_variants(fix_version)
     escaped_versions = [v.replace('"', '\\"') for v in fix_version_variants]
@@ -723,16 +870,6 @@ async def _find_completed_builds_jira(
         search_all(active_jql, ["key", "customfield_10578", "status"], "active"),
         return_exceptions=True,
     )
-    if report is not None:
-        for status, results in (("closed", closed_results), ("active", active_results)):
-            if isinstance(results, Exception):
-                report.problems.append(f"{status.capitalize()}-build Jira query failed: {results}")
-                continue
-            for issue in results:
-                key = issue.get("key")
-                nvr = issue.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
-                if key and isinstance(nvr, str) and nvr.strip():
-                    report.candidates.append((key, nvr.strip(), status))
     if isinstance(active_results, Exception):
         logger.error("Failed to query active builds for %s in %s: %s", package, fix_version, active_results)
         active_results = None
@@ -744,173 +881,27 @@ async def _find_completed_builds_jira(
             f"Closed-build Jira query failed for {package} in {fix_version}: {closed_results}"
         ) from closed_results
 
-    if not closed_results and not active_results:
-        # If active query failed (None), we can't determine if there are active builds
-        if active_results is None:
-            logger.warning(
-                f"No closed builds found for {package} and active builds query failed. "
-                f"Cannot determine build status."
-            )
-            return [], None
-        # Both queries succeeded but found nothing
-        return [], []
+    def references_of(results: list[dict], status: str) -> list[JiraBuildReference]:
+        return [
+            ref for issue in results if (ref := JiraBuildReference.from_issue(issue, status)) is not None
+        ]
 
-    # Process closed results
-    closed_candidates = []
-    for issue in closed_results:
-        issue_key = issue.get("key")
-        nvr_raw = issue.get("fields", {}).get("customfield_10578")
+    closed_refs = references_of(closed_results, "closed")
+    active_refs = None if active_results is None else references_of(active_results, "active")
 
-        if not issue_key:
-            continue
-        if not isinstance(nvr_raw, str):
-            logger.warning(f"Issue {issue_key} has non-string Fixed in Build: {type(nvr_raw).__name__}")
-            if report is not None:
-                report.problems.append(
-                    f"{issue_key}: Fixed in Build is not a string ({type(nvr_raw).__name__})"
-                )
-            continue
-
-        if not (nvr := nvr_raw.strip()):
-            logger.warning(f"Issue {issue_key} has empty Fixed in Build")
-            if report is not None:
-                report.problems.append(f"{issue_key}: Fixed in Build is empty")
-            continue
-
-        closed_candidates.append((issue_key, nvr))
-
-    # Process active results (if query succeeded)
-    if active_results is None:
-        # Active query failed - signal this to caller
-        active_candidates = None
-    else:
-        active_candidates = []
-        for issue in active_results:
-            issue_key = issue.get("key")
-            nvr_raw = issue.get("fields", {}).get("customfield_10578")
-            status = issue.get("fields", {}).get("status", {}).get("name", "Unknown")
-
-            if not issue_key:
-                continue
-            if not isinstance(nvr_raw, str):
-                logger.warning(f"Active issue {issue_key} (status: {status}) has non-string Fixed in Build")
-                if report is not None:
-                    report.active_problems.append(
-                        f"{issue_key}: Fixed in Build is not a string ({type(nvr_raw).__name__})"
-                    )
-                continue
-
-            if not (nvr := nvr_raw.strip()):
-                logger.warning(f"Active issue {issue_key} (status: {status}) has empty Fixed in Build")
-                if report is not None:
-                    report.active_problems.append(f"{issue_key}: Fixed in Build is empty")
-                continue
-
-            active_candidates.append((issue_key, nvr))
-
-    if active_candidates:
+    if active_refs:
         logger.info(
-            f"Found {len(active_candidates)} active (not closed) builds for {package} in "
-            f"{fix_version}: {', '.join(f'{key} ({nvr})' for key, nvr in active_candidates)}"
+            "Found %d active (not closed) builds for %s in %s: %s",
+            len(active_refs),
+            package,
+            fix_version,
+            ", ".join(f"{ref.issue_key} ({ref.raw_nvr})" for ref in active_refs),
         )
 
-    async def resolve_candidates(candidates: list[tuple[str, str]], status: str) -> list[tuple[str, NEVR]]:
-        if not candidates:
-            return []
-        # Brew lookups need the epochless NVR: Jira Fixed in Build values may
-        # carry an epoch prefix that koji's getBuild does not match, which
-        # would report an existing build as missing. The raw Jira value is
-        # kept for the report; unparseable values skip the lookup entirely and
-        # are recorded as data problems below.
-        lookup_nvrs: list[str | None] = []
-        for _, nvr in candidates:
-            try:
-                lookup_nvrs.append(get_epochless_nvr_string(NEVR.from_string(nvr)))
-            except (SpecfileException, ValueError):
-                lookup_nvrs.append(None)
-
-        async def _lookup(nvr_or_none: str | None) -> dict | None:
-            if nvr_or_none is None:
-                return None
-            return await asyncio.to_thread(_get_koji_build, BREWHUB_URL, nvr_or_none)
-
-        builds = await asyncio.gather(
-            *(_lookup(lookup_nvr) for lookup_nvr in lookup_nvrs),
-            return_exceptions=True,
-        )
-        resolved = []
-        lookup_failures = []
-        for (issue_key, nvr), metadata in zip(candidates, builds, strict=True):
-            try:
-                NEVR.from_string(nvr)
-            except (SpecfileException, ValueError):
-                # A value that cannot be an NVR at all is a permanent data
-                # problem — clarify instead of retrying a lookup that can
-                # never succeed.
-                problem = f"{issue_key} ({nvr}): not a valid Brew NVR"
-                logger.warning("Brew lookup skipped: %s", problem)
-                if report is not None:
-                    if status == "active":
-                        report.active_problems.append(problem)
-                    else:
-                        report.problems.append(problem)
-                continue
-            if isinstance(metadata, Exception):
-                failure = metadata
-                problem = f"{issue_key} ({nvr}): {failure}"
-                logger.warning("Brew lookup failed: %s", problem)
-                # Unparseable values were rejected above, so any failure here is
-                # an infrastructure problem (including koji.GenericError) —
-                # retry the whole verification so the candidate set is never
-                # incomplete.
-                lookup_failures.append(problem)
-                continue
-            if metadata is None:
-                problem = f"{issue_key} ({nvr}): build not found in Brew"
-                logger.warning("Brew lookup failed: %s", problem)
-                if report is not None:
-                    if status == "active":
-                        # An active build that is not yet in Brew is common (build in
-                        # progress); record it for the report without blocking the
-                        # verification of the closed builds.
-                        report.active_problems.append(problem)
-                    else:
-                        # A closed build missing from Brew is a data inconsistency,
-                        # not an outage — clarify instead of retrying.
-                        report.problems.append(problem)
-                continue
-            try:
-                build = BrewBuild(metadata)
-                if report is not None:
-                    report.resolved_builds[nvr] = build
-                    canonical_nvr = get_epochless_nvr_string(build.nevr)
-                    if canonical_nvr != nvr:
-                        # Also index under the canonical epochless NVR so later
-                        # lookups rebuilt from Brew metadata succeed even when
-                        # the Jira value carries an epoch prefix.
-                        report.resolved_builds[canonical_nvr] = build
-                resolved.append((issue_key, build.nevr))
-            except Exception as error:
-                problem = f"{issue_key} ({nvr}): Brew metadata cannot be compared: {error}"
-                logger.warning(problem, exc_info=True)
-                if report is not None:
-                    if status == "active":
-                        report.active_problems.append(problem)
-                    else:
-                        report.problems.append(problem)
-        if lookup_failures:
-            message = f"Brew lookup failed for {len(lookup_failures)} candidate(s): " + "; ".join(
-                lookup_failures
-            )
-            logger.warning("%s; retrying verification", message)
-            raise TransientInfrastructureError(message)
-        return resolved
-
-    resolved_closed = await resolve_candidates(closed_candidates, "closed")
-    resolved_active = (
-        None if active_candidates is None else await resolve_candidates(active_candidates, "active")
-    )
-    return resolved_closed, resolved_active
+    await JiraBuildReference.resolve_all(closed_refs)
+    if active_refs is not None:
+        await JiraBuildReference.resolve_all(active_refs)
+    return closed_refs, active_refs
 
 
 async def _fetch_installed_pkgs_log(
@@ -1582,6 +1573,7 @@ class SelectedBuild(NamedTuple):
 
     build: BrewBuild
     issue_key: str
+    reference: JiraBuildReference | None = None
 
 
 class BuildVerifier:
@@ -1620,17 +1612,16 @@ class BuildVerifier:
         # constructing the verifier.
         self.dep_component = fixed_dep_build.nevr.name
         self.fixed_dep_nevr = fixed_dep_build.nevr
-        # The selected package build, captured by _select_build; later steps
-        # read this instead of fishing the build out of the report.
         # The build under analysis, captured by _verify once a selection
         # succeeds; every other view of it (NEVR, NVR, issue key) is derived.
         self.selection: SelectedBuild | None = None
+        # Every Jira build reference discovered for this verification, closed
+        # and active, resolved or errored. Set by _verify; the report is a
+        # projection of this list, never the working state.
+        self.references: list[JiraBuildReference] = []
         # Brew source-resolution cache shared across architecture log parses,
         # so the same installed RPM is resolved only once per verification.
         self._source_resolution_cache: dict[str, NEVR | None] = {}
-        # Brew tag-membership results per build, so selection and the
-        # post-selection stream check share one query per candidate.
-        self._stream_tags_cache: dict[str, tuple[str, list[str], list[str]] | None] = {}
 
     @property
     def selected_build(self) -> BrewBuild:
@@ -1692,81 +1683,74 @@ class BuildVerifier:
             payload=payload or None,
         )
 
-    def _active_builds_not_closed(self, active_candidates: list[tuple[str, NEVR]]) -> VerificationOutcome:
-        issues = [key for key, _ in active_candidates]
+    def _active_builds_not_closed(self, active_refs: list[JiraBuildReference]) -> VerificationOutcome:
+        issues = [ref.issue_key for ref in active_refs]
         return self._clarify(VerificationReason.ACTIVE_BUILDS_NOT_CLOSED, issues=issues)
 
     # ------------------------------------------------------------------ steps
 
     async def _verify(self) -> VerificationOutcome:
-        """Orchestrate the verification steps."""
-        # Step 1: Find builds in Jira.
-        closed_candidates, active_candidates = await _find_completed_builds_jira(
+        """Orchestrate the verification pipeline over the Jira references."""
+        # Discover every build reference and resolve it against Brew: each
+        # reference carries its own outcome (build or error), so the pipeline
+        # below only reduces the list.
+        closed_refs, active_refs = await _find_completed_builds_jira(
             self.package,
             self.fix_version,
             self.available_tools,
             self.jira_issue,
-            self.report,
             self.downstream_component,
         )
-        closed_candidates = self._filter_target_stream(closed_candidates)
-        if active_candidates is not None:
-            active_candidates = self._filter_target_stream(active_candidates)
-
-        # Handle case where active query failed.
-        if active_candidates is None:
+        if active_refs is None:
             logger.warning("Active-build Jira query failed for %s in %s", self.package, self.fix_version)
             raise TransientInfrastructureError(
                 f"Active-build Jira query failed for {self.package} in {self.fix_version}"
             )
 
+        # All verification state is set here, in the main flow.
+        self.references = closed_refs + active_refs
+
+        # Classify every reference's stream (dist-tag pre-filter): in-stream
+        # references remain candidates; out-of-stream ones are flagged and
+        # drop out of the reduction.
+        closed_candidates = self._classify_stream(closed_refs)
+        active_candidates = self._classify_stream(active_refs)
+        self._sync_report()
+
         if not closed_candidates and not active_candidates:
-            # Classify from the report's raw references: unresolvable ones
-            # never became candidates, so the filtered lists alone cannot see
-            # them. Unparseable references stay out (fail open to the generic
-            # problems clarification below).
-            out_of_stream_refs = [
-                (key, nvr)
-                for key, nvr, status in self.report.candidates
-                if status == "closed" and self._nvr_is_out_of_stream(nvr)
-            ]
+            # Every closed reference that could be classified points at
+            # another stream while the fix version names this one — the
+            # references and the fix version contradict each other, and
+            # nothing in this stream can be verified. Ask a human instead of
+            # silently recommending a rebuild, whether or not the references
+            # resolve in Brew.
+            out_of_stream_refs = [ref for ref in closed_refs if ref.out_of_stream]
             if out_of_stream_refs:
-                # Every completed-build reference on this ticket points at
-                # another stream while its fix version names this one — the
-                # references and the fix version contradict each other, and
-                # nothing in this stream can be verified. Ask a human instead
-                # of silently recommending a rebuild, whether or not the
-                # references resolve in Brew.
+                references = [f"{ref.issue_key} ({ref.raw_nvr})" for ref in out_of_stream_refs]
                 logger.warning(
                     "All completed-build references of %s in %s point at another stream: %s",
                     self.package,
                     self.fix_version,
-                    ", ".join(f"{key} ({nvr})" for key, nvr in out_of_stream_refs),
+                    ", ".join(references),
                 )
-                return self._clarify(
-                    VerificationReason.BUILDS_NOT_IN_STREAM,
-                    references=[f"{key} ({nvr})" for key, nvr in out_of_stream_refs],
-                )
+                return self._clarify(VerificationReason.BUILDS_NOT_IN_STREAM, references=references)
             if self.report.problems or self.report.active_problems:
                 return self._clarify(None)
             logger.info(f"No builds found for {self.package} in {self.fix_version}")
             return VerificationOutcome(already_fixed=False)
 
-        # Validate active candidates to filter out builds for different packages.
-        # This prevents unrelated active builds from blocking rebuild decisions.
+        # Active references to other packages cannot block this package's
+        # rebuild decision.
         active_candidates = self._filter_active_package(active_candidates)
+        # Views the selection fallbacks need: every closed reference (also
+        # the errored and out-of-stream ones) and the in-stream actives.
+        self._closed_refs = closed_refs
+        self._active_candidates = active_candidates
 
-        # Drop lookup problems recorded for candidates whose Jira-recorded NVR
-        # belongs to another release stream: a suitable in-stream build was
-        # found (the flow would have clarified otherwise), so the out-of-stream
-        # references cannot contribute to this stream's verdict and must not
-        # block it with their lookup problems.
-        self._drop_out_of_stream_problems()
-
-        selection = await self._select_build(closed_candidates, active_candidates)
+        selection = await self._select_build(closed_candidates)
         if isinstance(selection, VerificationOutcome):
             return selection
-        self.selection, active_candidates = selection
+        self.selection = selection
         # The report mirrors the selection once, for its own rendering.
         self.report.selected_issue_key = self.selection.issue_key
         self.report.selected_nevr = self.selection.build.nevr
@@ -1780,7 +1764,7 @@ class BuildVerifier:
         # Only resolved active builds can be ordered. Unresolved builds still
         # require clarification.
         active_candidates = [
-            (key, active_nevr) for key, active_nevr in active_candidates if active_nevr > self.latest_nevr
+            ref for ref in active_candidates if ref.nevr > self.latest_nevr
         ]
 
         stream_outcome = await self._verify_stream_tags()
@@ -1789,115 +1773,87 @@ class BuildVerifier:
 
         return await self._verify_from_logs(active_candidates)
 
-    def _filter_target_stream(
-        self, candidates: list[tuple[str, str | NEVR]]
-    ) -> list[tuple[str, str | NEVR]]:
-        """Keep only candidates whose NVR belongs to the fix version's stream.
+    def _classify_stream(
+        self, references: list[JiraBuildReference]
+    ) -> list[JiraBuildReference]:
+        """Flag each reference's stream and return the in-stream candidates.
 
-        Jira matches both the Y-stream (rhel-9.8) and Z-stream (rhel-9.8.z)
-        forms of a fix version (see get_fix_version_variants). This is a
-        selection pre-filter, not the membership decision: it runs before the
-        highest-EVR selection so an out-of-stream reference cannot win it (the
-        authoritative tag check only runs on the single selected build), and
-        it classifies candidates that could not be resolved in Brew (where no
-        tag check is possible) so their lookup problems do not block a
-        rebuild. The authoritative membership decision is the Brew tag check
-        in _verify_stream_tags. Unparseable NVRs are kept so the Brew
-        resolution path reports them.
-
-        Returns ``(kept, dropped)``; the caller clarifies when the dropped
-        references were the only completed-build evidence on the ticket.
+        The dist tag is a selection pre-filter, not the membership decision:
+        it runs before the highest-EVR selection so an out-of-stream reference
+        cannot win it (the authoritative tag check only runs on the selected
+        build). Unparseable or unresolved references stay undetermined (fail
+        open) — their errors surface through the report.
         """
-        kept = []
-        for key, nvr in candidates:
-            nevr = nvr if isinstance(nvr, NEVR) else None
-            if nevr is None:
-                try:
-                    nevr = NEVR.from_string(nvr)
-                except (SpecfileException, ValueError):
-                    kept.append((key, nvr))
-                    continue
-            if nevr_matches_fix_version_stream(nevr, self.fix_version):
-                kept.append((key, nvr))
-            else:
+        candidates = []
+        for ref in references:
+            if ref.nevr is None:
+                continue
+            # Flag every parseable reference, resolved or not: the flag also
+            # drives the all-references-out-of-stream clarification and the
+            # report's problem projection.
+            ref.out_of_stream = not nevr_matches_fix_version_stream(ref.nevr, self.fix_version)
+            if ref.out_of_stream:
                 logger.info(
                     "Ignoring %s (%s): build stream does not match fix version %s",
-                    key,
-                    nvr,
+                    ref.issue_key,
+                    ref.raw_nvr,
                     self.fix_version,
                 )
-        return kept
+                continue
+            # Only resolved references can be selected or ordered; errored
+            # ones surface through the report.
+            if ref.build is not None:
+                candidates.append(ref)
+        return candidates
 
-    def _nvr_is_out_of_stream(self, nvr: str) -> bool:
-        try:
-            return not nevr_matches_fix_version_stream(NEVR.from_string(nvr), self.fix_version)
-        except (SpecfileException, ValueError):
-            return False
-
-    def _drop_out_of_stream_problems(self) -> None:
-        """Remove report problems of candidates from another release stream."""
-        out_of_stream_keys = {
-            key for key, nvr, _status in self.report.candidates if self._nvr_is_out_of_stream(nvr)
-        }
-        if out_of_stream_keys:
-            self.report.problems = [
-                problem
-                for problem in self.report.problems
-                if not any(problem.startswith(f"{key} (") for key in out_of_stream_keys)
-            ]
-            self.report.active_problems = [
-                problem
-                for problem in self.report.active_problems
-                if not any(problem.startswith(f"{key} (") for key in out_of_stream_keys)
-            ]
-
-    def _filter_active_package(self, active_candidates: list[tuple[str, NEVR]]) -> list[tuple[str, NEVR]]:
-        """Drop active builds that resolve to a different package."""
+    def _filter_active_package(
+        self, active_refs: list[JiraBuildReference]
+    ) -> list[JiraBuildReference]:
+        """Drop active references that resolve to a different package."""
         filtered = []
-        for active_key, active_nevr in active_candidates:
-            if active_nevr.name != self.package:
+        for ref in active_refs:
+            if ref.build is not None and ref.build.nevr.name != self.package:
                 logger.warning(
-                    f"Active build {get_epochless_nvr_string(active_nevr)} (issue {active_key}) "
-                    f"resolves to '{active_nevr.name}', "
+                    f"Active build {get_epochless_nvr_string(ref.build.nevr)} (issue {ref.issue_key}) "
+                    f"resolves to '{ref.build.nevr.name}', "
                     f"not expected package '{self.package}' — ignoring"
                 )
                 continue
-            filtered.append((active_key, active_nevr))
+            filtered.append(ref)
         return filtered
 
     async def _select_build(
-        self, closed_candidates: list[tuple[str, NEVR]], active_candidates: list[tuple[str, NEVR]]
-    ) -> VerificationOutcome | tuple[SelectedBuild, list[tuple[str, NEVR]]]:
-        """Select the highest authoritative NEVR among the closed builds.
+        self, closed_candidates: list[JiraBuildReference]
+    ) -> VerificationOutcome | SelectedBuild:
+        """Select the highest in-stream build among the closed candidates.
 
-        Returns either a clarification outcome, or the
-        ``(selection, active_candidates)`` pair; the caller records the
-        selection as the verification state.
+        Returns either a clarification outcome or the selection; the caller
+        records it as the verification state.
         """
         # If only active (not closed) builds exist, request clarification:
         # these might be rejected/abandoned, so we can't trust them yet.
-        if not closed_candidates and active_candidates:
+        if not closed_candidates and self._active_candidates:
             if self.report.problems:
                 return self._clarify(None)
             logger.warning(
-                f"Found {len(active_candidates)} active builds for {self.package} in "
+                f"Found {len(self._active_candidates)} active builds for {self.package} in "
                 f"{self.fix_version}, but none are closed/resolved. "
                 f"Cannot determine if rebuild already done."
             )
-            return self._active_builds_not_closed(active_candidates)
+            return self._active_builds_not_closed(self._active_candidates)
 
-        comparable_builds = sorted(
-            [(nevr, issue_key) for issue_key, nevr in closed_candidates if nevr.name == self.package],
-            key=lambda item: item[0],
+        comparable = sorted(
+            [ref for ref in closed_candidates if ref.build.nevr.name == self.package],
+            key=lambda ref: ref.build.nevr,
             reverse=True,
         )
-        for issue_key, nevr in closed_candidates:
-            if nevr.name != self.package:
+        for ref in closed_candidates:
+            if ref.build.nevr.name != self.package:
                 logger.warning(
                     "Ignoring %s (%s): Brew package %r does not match %r",
-                    issue_key,
-                    get_epochless_nvr_string(nevr),
-                    nevr.name,
+                    ref.issue_key,
+                    get_epochless_nvr_string(ref.build.nevr),
+                    ref.build.nevr.name,
                     self.package,
                 )
         # Walk the candidates from the highest EVR down and select the first
@@ -1907,44 +1863,39 @@ class BuildVerifier:
         # open). When every candidate is tagged into another stream, the
         # highest one is selected anyway so the post-selection stream check
         # clarifies with the referenced build.
-        for selected_nevr, package_issue_key in comparable_builds:
-            # The report's resolved_builds map is evidence for clarifications,
-            # not the verifier's working state; the epoch-aware NVR indexing is
-            # isolated to this single place.
-            candidate_build = self.report.resolved_builds[get_epochless_nvr_string(selected_nevr)]
-            tags = await self._stream_tags(candidate_build)
-            if tags is not None and not tags[1] and not tags[2]:
+        for ref in comparable:
+            ref.stream_tags = await build_tags_in_stream(ref.build, self.fix_version)
+            if ref.stream_tags is not None and not ref.stream_tags[1] and not ref.stream_tags[2]:
                 logger.info(
                     "Ignoring %s (%s): carries no tag of the %s stream",
-                    package_issue_key,
-                    selected_nevr,
-                    tags[0],
+                    ref.issue_key,
+                    ref.build.nevr,
+                    ref.stream_tags[0],
                 )
                 continue
             logger.info(
-                f"Found latest build for {self.package}: {selected_nevr} (issue: {package_issue_key})"
+                f"Found latest build for {self.package}: {ref.build.nevr} (issue: {ref.issue_key})"
             )
-            return SelectedBuild(candidate_build, package_issue_key), active_candidates
-        if comparable_builds:
-            selected_nevr, package_issue_key = comparable_builds[0]
+            return SelectedBuild(ref.build, ref.issue_key, ref)
+        if comparable:
+            ref = comparable[0]
             logger.info(
-                f"Found latest build for {self.package}: {selected_nevr} (issue: {package_issue_key})"
+                f"Found latest build for {self.package}: {ref.build.nevr} (issue: {ref.issue_key})"
             )
-            candidate_build = self.report.resolved_builds[get_epochless_nvr_string(selected_nevr)]
-            return SelectedBuild(candidate_build, package_issue_key), active_candidates
+            return SelectedBuild(ref.build, ref.issue_key, ref)
 
         logger.warning(f"No valid closed builds found in Brew for {self.package} in {self.fix_version}")
         if self.report.problems:
             # Closed builds that could not be resolved are reported for clarification.
             return self._clarify(None)
         # If active builds exist, request clarification on those instead of rebuilding.
-        if active_candidates:
+        if self._active_candidates:
             logger.info(
-                f"Closed builds invalid, but {len(active_candidates)} active builds exist. "
+                f"Closed builds invalid, but {len(self._active_candidates)} active builds exist. "
                 f"Requesting clarification on active builds."
             )
-            return self._active_builds_not_closed(active_candidates)
-        if not closed_candidates:
+            return self._active_builds_not_closed(self._active_candidates)
+        if not self._closed_refs:
             logger.info(
                 f"No builds found for {self.package} in {self.fix_version} after filtering. "
                 f"All builds belonged to other packages."
@@ -1952,20 +1903,54 @@ class BuildVerifier:
             return self._clarify(VerificationReason.NO_BUILDS_FOUND)
         # Closed builds exist in Jira but all NVRs resolve to a different
         # package name in Brew — flag the data inconsistency for human review.
-        rejected_issues = [key for key, _ in closed_candidates]
+        rejected_issues = [ref.issue_key for ref in self._closed_refs]
         return self._clarify(VerificationReason.INVALID_BUILD_RECORDS, issues=rejected_issues)
 
-    async def _stream_tags(self, build: BrewBuild) -> tuple[str, list[str], list[str]] | None:
-        """Brew tag membership of the build in the fix version's stream (cached).
+    def _sync_report(self) -> None:
+        """Project the references into the report.
 
-        See :func:`build_tags_in_stream` for the return contract; results are
-        cached per build so candidate selection and the post-selection stream
-        check issue a single Brew query per build.
+        The report is the renderable evidence for clarification comments,
+        never the pipeline's working state: it is derived from the reference
+        list once, after stream classification. Problems are ordered field
+        errors first, then resolution errors, per status — matching the
+        historical accumulation order. Errors of out-of-stream references are
+        not projected: a suitable in-stream build was found (the flow would
+        have clarified otherwise), so they cannot contribute to this stream's
+        verdict and must not block it.
         """
-        key = get_epochless_nvr_string(build.nevr)
-        if key not in self._stream_tags_cache:
-            self._stream_tags_cache[key] = await build_tags_in_stream(build, self.fix_version)
-        return self._stream_tags_cache[key]
+        self.report.candidates = [
+            (ref.issue_key, ref.raw_nvr, ref.status) for ref in self.references if ref.raw_nvr
+        ]
+        self.report.resolved_builds = {}
+        for ref in self.references:
+            if ref.build is None:
+                continue
+            self.report.resolved_builds[ref.raw_nvr] = ref.build
+            canonical_nvr = get_epochless_nvr_string(ref.build.nevr)
+            if canonical_nvr != ref.raw_nvr:
+                # Also index under the canonical epochless NVR so the report
+                # renderer finds the build even when the Jira value carries
+                # an epoch prefix.
+                self.report.resolved_builds[canonical_nvr] = ref.build
+
+        def errors(status: str) -> list[str]:
+            refs = [ref for ref in self.references if ref.status == status]
+            field_errors = [
+                ref.error_detail
+                for ref in refs
+                if ref.error == ReferenceError.MALFORMED and ref.error_detail
+            ]
+            resolution_errors = [
+                ref.error_detail
+                for ref in refs
+                if ref.error not in (None, ReferenceError.MALFORMED)
+                and ref.error_detail
+                and not ref.out_of_stream
+            ]
+            return field_errors + resolution_errors
+
+        self.report.problems = errors("closed")
+        self.report.active_problems = errors("active")
 
     async def _verify_stream_tags(self) -> VerificationOutcome | None:
         """Verify the selected build's stream membership via Brew tags.
@@ -1976,13 +1961,15 @@ class BuildVerifier:
         fix in progress, not a shipped one — stop and tell the user instead
         of verifying it as already fixed. Unperformable checks fail open.
         """
-        tags_in_stream = self._stream_tags_cache.get(get_epochless_nvr_string(self.selected_build.nevr))
+        tags_in_stream = self.selection.reference.stream_tags if self.selection.reference else None
         if tags_in_stream is None:
             return None
-        branch, shipped_tags, in_progress_tags = tags_in_stream
+        _branch, shipped_tags, in_progress_tags = tags_in_stream
         if not shipped_tags and not in_progress_tags:
-            logger.warning("Selected build %s carries no tag of the %s stream", self.latest_nevr, branch)
-            return self._clarify(VerificationReason.BUILD_NOT_TAGGED_IN_STREAM, branch=branch)
+            logger.warning(
+                "Selected build %s carries no tag of the %s stream", self.latest_nevr, _branch
+            )
+            return self._clarify(VerificationReason.BUILD_NOT_TAGGED_IN_STREAM, branch=_branch)
         if not shipped_tags:
             logger.info(
                 "Selected build %s is still in progress (%s)",
@@ -1992,7 +1979,7 @@ class BuildVerifier:
             return self._clarify(VerificationReason.FIX_IN_PROGRESS_IN_STREAM, tags=in_progress_tags)
         return None
 
-    async def _verify_from_logs(self, active_candidates: list[tuple[str, NEVR]]) -> VerificationOutcome:
+    async def _verify_from_logs(self, active_candidates: list[JiraBuildReference]) -> VerificationOutcome:
         """Verify the selected build from its installed_pkgs.log."""
         package_build = self.selected_build.metadata
 
@@ -2253,7 +2240,7 @@ class BuildVerifier:
             nevr=self.latest_nevr,
         )
 
-    async def _timestamp_fallback(self, active_candidates: list[tuple[str, NEVR]]) -> VerificationOutcome:
+    async def _timestamp_fallback(self, active_candidates: list[JiraBuildReference]) -> VerificationOutcome:
         """Compare build completion timestamps when installed_pkgs.log is unavailable."""
         logger.info(
             f"installed_pkgs.log unavailable for {self.package_nvr}; "

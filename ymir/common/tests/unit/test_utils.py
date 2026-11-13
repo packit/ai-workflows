@@ -43,6 +43,12 @@ async def _noop(*args, **kwargs):
     pass
 
 
+
+def _ref_tuple(refs):
+    """Assert-friendly view of JiraBuildReference results: (key, nevr)."""
+    return [(r.issue_key, r.nevr) for r in refs]
+
+
 @pytest.fixture(autouse=True)
 def brew_files_config(monkeypatch, tmp_path):
     config = tmp_path / "rhel-config.json"
@@ -2177,10 +2183,12 @@ async def test_find_completed_builds_jira_success():
     closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
 
     assert len(closed) == 2
-    assert closed[0] == ("RHEL-123", NEVR(name="pkg", epoch=0, version="1.0", release="1.el10"))
-    assert closed[1] == ("RHEL-456", NEVR(name="pkg", epoch=0, version="2.0", release="1.el10"))
+    assert _ref_tuple(closed) == [
+        ("RHEL-123", NEVR(name="pkg", epoch=0, version="1.0", release="1.el10")),
+        ("RHEL-456", NEVR(name="pkg", epoch=0, version="2.0", release="1.el10")),
+    ]
     assert len(active) == 1
-    assert active[0] == ("RHEL-789", NEVR(name="pkg", epoch=0, version="3.0", release="1.el10"))
+    assert _ref_tuple(active) == [("RHEL-789", NEVR(name="pkg", epoch=0, version="3.0", release="1.el10"))]
 
 
 @pytest.mark.asyncio
@@ -2227,7 +2235,7 @@ async def test_find_completed_builds_jira_reads_all_closed_pages():
     closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [flexmock()])
 
     assert len(closed) == 51
-    assert closed[-1] == ("RHEL-50", NEVR(name="pkg", epoch=0, version="1", release="50.el10"))
+    assert _ref_tuple(closed)[-1] == ("RHEL-50", NEVR(name="pkg", epoch=0, version="1", release="50.el10"))
     assert active == []
     assert len(queries) == 2
 
@@ -2253,8 +2261,11 @@ async def test_find_completed_builds_jira_missing_nvr():
 
     closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
 
-    assert len(closed) == 1
-    assert closed[0] == ("RHEL-123", NEVR(name="pkg", epoch=0, version="1.0", release="1.el10"))
+    # Every reference is returned, resolved or errored: the one usable
+    # reference resolved, the keyless/malformed ones carry their error.
+    usable = [ref for ref in closed if ref.error is None]
+    assert _ref_tuple(usable) == [("RHEL-123", NEVR(name="pkg", epoch=0, version="1.0", release="1.el10"))]
+    assert all(ref.error == _ymir_utils.ReferenceError.MALFORMED for ref in closed if ref.error)
     assert active == []
 
 
@@ -2286,10 +2297,14 @@ async def test_find_completed_builds_jira_whitespace_and_invalid_types():
 
     closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
 
-    # Should only get the valid ones, with whitespace stripped
-    assert len(closed) == 2
-    assert closed[0] == ("RHEL-123", NEVR(name="pkg", epoch=0, version="1.0", release="1.el10"))
-    assert closed[1] == ("RHEL-456", NEVR(name="pkg", epoch=0, version="2.0", release="1.el10"))
+    # Every reference is returned: the valid ones (whitespace stripped)
+    # resolved, the malformed ones carrying their error.
+    usable = [ref for ref in closed if ref.error is None]
+    assert _ref_tuple(usable) == [
+        ("RHEL-123", NEVR(name="pkg", epoch=0, version="1.0", release="1.el10")),
+        ("RHEL-456", NEVR(name="pkg", epoch=0, version="2.0", release="1.el10")),
+    ]
+    assert len([ref for ref in closed if ref.error]) == 3
     assert active == []
 
 
@@ -2376,7 +2391,7 @@ async def test_find_completed_builds_jira_active_query_fails():
 
     closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
 
-    assert closed == [("RHEL-123", NEVR(name="pkg", epoch=0, version="1.0", release="1.el10"))]
+    assert _ref_tuple(closed) == [("RHEL-123", NEVR(name="pkg", epoch=0, version="1.0", release="1.el10"))]
     assert active is None  # Query failed
 
 
@@ -2407,7 +2422,7 @@ async def test_find_completed_builds_jira_active_query_invalid_response():
 
     closed, active = await _find_completed_builds_jira("pkg", "rhel-10.2.z", [mock_tool])
 
-    assert closed == [("RHEL-123", NEVR(name="pkg", epoch=0, version="1.0", release="1.el10"))]
+    assert _ref_tuple(closed) == [("RHEL-123", NEVR(name="pkg", epoch=0, version="1.0", release="1.el10"))]
     assert active is None
 
 
@@ -4181,7 +4196,7 @@ async def test_completed_build_search_is_scoped_to_modular_stream(stream):
     )
     assert len(queries) == 2
     key, nvr = candidates[stream]
-    assert closed == active == [(key, NEVR.from_string(nvr))]
+    assert _ref_tuple(closed) == _ref_tuple(active) == [(key, NEVR.from_string(nvr))]
 
 
 @pytest.mark.asyncio
@@ -4409,7 +4424,7 @@ async def test_epoch_bearing_jira_reference_resolves():
     # The Brew lookup used the epochless form, not the raw Jira value.
     assert looked_up == ["pkg-1-1.el10"]
     # The build resolved with the authoritative epoch from Brew metadata.
-    assert closed == [("RHEL-1", NEVR(name="pkg", epoch=1, version="1", release="1.el10"))]
+    assert _ref_tuple(closed) == [("RHEL-1", NEVR(name="pkg", epoch=1, version="1", release="1.el10"))]
     assert active == []
 
 

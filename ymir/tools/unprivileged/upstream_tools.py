@@ -29,6 +29,7 @@ from beeai_framework.tools import (
 from pydantic import BaseModel, Field
 
 from ymir.common.base_utils import run_subprocess
+from ymir.common.upstream_tags import base_commit_tag_patterns
 from ymir.common.utils import mcp_tools, run_tool
 from ymir.common.validators import AbsolutePath
 from ymir.tools.base import CloneableTool as Tool
@@ -530,10 +531,6 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
             dir_name = tool_input.repo_path.name
             if dir_name.endswith("-upstream"):
                 pkg_name = dir_name.removesuffix("-upstream")
-            # RHEL versioned packages (nodejs22, python39) → strip trailing digits
-            pkg_base = re.sub(r"[-_]?\d+$", "", pkg_name) if pkg_name else None
-            if pkg_base == pkg_name:
-                pkg_base = None
 
             # List all tags once and match in-memory (avoids N subprocess calls)
             cmd = ["git", "tag", "-l"]
@@ -553,48 +550,8 @@ class FindBaseCommitTool(Tool[FindBaseCommitToolInput, ToolRunOptions, StringToo
                 # Split digit-letter boundaries then uppercase (e.g. 9.9p1 -> 9_9_P1)
                 ver_upper = re.sub(r"(\d)([a-zA-Z])", r"\1_\2", ver_under).upper()
 
-                tag_patterns = [
-                    f"v{ver}",
-                    f"{ver}",
-                    f"release-{ver}",
-                    f"{ver}-release",
-                    f"rel-{ver}",
-                    f"{ver}.0",
-                    f"v{ver}.0",
-                    f"v{ver_under}",
-                    f"V_{ver_upper}",
-                    f"REL_{ver_under}",
-                    f"REL{ver_under}",
-                ]
-
-                if pkg_name:
-                    tag_patterns.extend(
-                        [
-                            f"{pkg_name}-{ver_under}",
-                            f"{pkg_name}-{ver}",
-                            f"{pkg_name}_{ver_under}",
-                            f"{pkg_name.upper()}-{ver_under}",
-                            f"{pkg_name.upper()}_{ver_upper}",
-                        ]
-                    )
-
-                if pkg_base:
-                    tag_patterns.extend(
-                        [
-                            f"{pkg_base}-{ver_under}",
-                            f"{pkg_base}-{ver}",
-                            f"{pkg_base}_{ver_under}",
-                            f"{pkg_base.upper()}-{ver_under}",
-                            f"{pkg_base.upper()}_{ver_upper}",
-                        ]
-                    )
-
-                tag_patterns = list(dict.fromkeys(tag_patterns))
-                found_tag = None
-                for tag in tag_patterns:
-                    if tag in all_tags_set:
-                        found_tag = tag
-                        break
+                tag_patterns = base_commit_tag_patterns(ver, pkg_name)
+                found_tag = next((tag for tag in tag_patterns if tag in all_tags_set), None)
 
                 if not found_tag:
                     relevant = [t for t in all_tags if ver_under in t or ver in t or ver_upper in t]

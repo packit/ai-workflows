@@ -368,6 +368,76 @@ services:
     restart: "no"
     profiles: ["e2e-test"]
 
+  # A/B arm: runs Amalgamator on the same backport fixtures and compares its
+  # patch with the reference patch. Does not run the Ymir agent, so it can run
+  # beside backport-agent-e2e-tests or on its own.
+  #
+  # Needs an Amalgamator checkout and a Python 3.12+ environment with its
+  # dependencies. Point AMALGAMATOR_HOST_PATH / AMALGAMATOR_VENV_HOST_PATH at
+  # them; the suite skips cleanly when they are missing.
+  #
+  # Model choice: AMALGAMATOR_MODEL names a profile id or a bare model name, and
+  # AMALGAMATOR_MODELS is the CONTAINER path of a models.yaml. The registry is
+  # mounted at /home/beeai/amalgamator-models from AMALGAMATOR_MODELS_HOST_PATH
+  # (default: the host .secrets directory, so
+  # AMALGAMATOR_MODELS=/home/beeai/amalgamator-models/models.yaml reads the
+  # registry from .secrets/models.yaml). A host path in AMALGAMATOR_MODELS does
+  # nothing: it does not exist in the container. Credentials come from the
+  # profile's api_key/api_key_file, or for a bare name from ANTHROPIC_API_KEY /
+  # OPENAI_API_KEY in .secrets/beeai-agent.env.
+  backport-agent-amalgamator-e2e-tests:
+    <<: *beeai-agent-c10s
+    environment:
+      <<: *beeai-env
+      BACKPORT_MOCK_REPOS_DIR: /home/beeai/mock_repos/backport
+      BACKPORT_E2E_EXCLUDE_ISSUES: ${BACKPORT_E2E_EXCLUDE_ISSUES:-}
+      # One case can take hours; set this to a Jira key to smoke-test the arm.
+      BACKPORT_E2E_ONLY_ISSUES: ${BACKPORT_E2E_ONLY_ISSUES:-}
+      AMALGAMATOR_ROOT: /opt/amalgamator
+      AMALGAMATOR_PYTHON: /opt/amalgamator-venv/bin/python
+      AMALGAMATOR_MODEL: ${AMALGAMATOR_MODEL:-}
+      AMALGAMATOR_MODELS: ${AMALGAMATOR_MODELS:-}
+      # Six hours, so a slow model still finishes instead of being killed and
+      # recorded as a failure. Runtime is model-dependent: GLM-5.3 took 2h20m
+      # to 4h07m per case on these fixtures, faster models finish sooner.
+      AMALGAMATOR_TIMEOUT: ${AMALGAMATOR_TIMEOUT:-21600}
+      AMALGAMATOR_E2E_INFORMATIONAL: ${AMALGAMATOR_E2E_INFORMATIONAL:-true}
+      # Forge API token for GitHub pull-request → merge-commit resolution;
+      # GITLAB_TOKEN comes from the shared env anchor.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      # Ticket summaries for Amalgamator's description, read straight from the
+      # mock Jira files (the arm never calls the Jira API).
+      JIRA_MOCK_FILES: /home/beeai/mock_jira
+      # SAFETY: same gate as the agent suite; this arm never writes to Jira.
+      MOCK_JIRA: ${MOCK_JIRA:-true}
+      DRY_RUN: ${DRY_RUN:-true}
+    volumes:
+      - ./ymir:/home/beeai/ymir:ro,z
+      - git-repos:/git-repos:rw,U
+      - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
+      - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
+      - ${MOCK_REPOS_HOST:-./ymir/agents/tests/e2e/mock_repos}:/home/beeai/mock_repos:ro,z
+      - ${JIRA_MOCK_FILES_HOST:-./ymir/tools/privileged/tests/data}:/home/beeai/mock_jira:ro,z
+      - ${AMALGAMATOR_HOST_PATH:-../amalgamator}:/opt/amalgamator:ro,z
+      - ${AMALGAMATOR_VENV_HOST_PATH:-../amalgamator/.venv}:/opt/amalgamator-venv:ro,z
+      # Model registry. Defaults to the .secrets directory (which the env_file
+      # anchor already requires) because a profile can carry an api_key or name
+      # an api_key_file; the arm reads a file here only when AMALGAMATOR_MODELS
+      # names it. No U flag: that would chown the whole .secrets tree on the
+      # host. The process runs as beeai, so the registry and any key file must
+      # be readable by it (chmod a+r).
+      - ${AMALGAMATOR_MODELS_HOST_PATH:-./.secrets}:/home/beeai/amalgamator-models:ro,z
+    command:
+      [
+        "pytest",
+        "ymir/agents/tests/e2e/backport_agent/test_backport_amalgamator.py",
+        "-o",
+        "asyncio_default_test_loop_scope=session",
+        "--log-disable=agent.trajectory",
+      ]
+    restart: "no"
+    profiles: ["e2e-test"]
+
   reproducer-agent-e2e-tests:
     <<: *beeai-agent-c10s
     environment:

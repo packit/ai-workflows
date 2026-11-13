@@ -1,5 +1,6 @@
 import pytest
 from flexmock import flexmock
+from specfile.utils import NEVR
 
 from ymir.common.version_utils import (
     detect_modular_issue,
@@ -7,6 +8,7 @@ from ymir.common.version_utils import (
     get_maintenance_rhel_branch,
     is_modular,
     is_older_zstream,
+    nevr_matches_fix_version_stream,
     parse_branch_name,
     parse_module_stream,
     parse_rhel_version,
@@ -44,6 +46,36 @@ from ymir.common.version_utils import (
 def test_parse_rhel_version(version, expected):
     result = parse_rhel_version(version)
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    "nvr, fix_version, expected",
+    [
+        # Z-stream ticket: only Z-stream builds (.elX_Y) match
+        ("go-fdo-client-1.0.0-4.el10_2.7", "rhel-10.2.z", True),
+        ("go-fdo-client-1.0.0-3.el10_2", "rhel-10.2.z", True),
+        ("foo-1.5-3.el9_8", "rhel-9.8.z", True),
+        # Z-stream ticket must reject a higher-EVR Y-stream / CentOS Stream build
+        ("foo-2.0-1.el9", "rhel-9.8.z", False),
+        # Wrong minor / major are rejected
+        ("foo-1.5-3.el9_7", "rhel-9.8.z", False),
+        ("foo-1.5-3.el8_8", "rhel-9.8.z", False),
+        # No false substring match (minor 20 must not match minor 2)
+        ("foo-1.5-3.el10_20", "rhel-10.2.z", False),
+        # Y-stream ticket: both CentOS Stream (.el9) and RHEL branch (.el9_8)
+        # builds legitimately back it — the former carries fixes developed in
+        # Stream, the latter fixes that shipped as part of the GA itself.
+        ("foo-2.0-1.el9", "rhel-9.8", True),
+        ("foo-1.5-3.el9_8", "rhel-9.8", True),
+        # A different major is still rejected for a Y-stream ticket
+        ("foo-1.5-3.el8_8", "rhel-9.8", False),
+        # Undeterminable inputs are kept (no dist tag or unparseable fix version)
+        ("foo-1.5-3", "rhel-9.8.z", True),
+        ("foo-1.5-3.el9_8", "garbage", True),
+    ],
+)
+def test_nevr_matches_fix_version_stream(nvr, fix_version, expected):
+    assert nevr_matches_fix_version_stream(NEVR.from_string(nvr), fix_version) is expected
 
 
 @pytest.mark.parametrize(
@@ -327,3 +359,29 @@ class TestDetectModularIssue:
             )
             is True
         )
+
+
+def test_version_utils_importable_without_specfile():
+    """ymir/common must be importable without specfile (API image dependency set).
+
+    The API container image ships ymir/common with a minimal Python package set
+    that does not include specfile; importing ymir.common loads version_utils,
+    so a module-level specfile import breaks the API server at startup.
+    """
+    import subprocess
+    import sys
+
+    code = "\n".join(
+        [
+            "import sys",
+            "",
+            "class _Blocker:",
+            "    def find_spec(self, name, path=None, target=None):",
+            "        if name == 'specfile' or name.startswith('specfile.'):",
+            "            raise ImportError(name)",
+            "",
+            "sys.meta_path.insert(0, _Blocker())",
+            "import ymir.common  # noqa: F401",
+        ]
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

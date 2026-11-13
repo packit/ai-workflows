@@ -31,6 +31,8 @@ def git_repo(tmp_path):
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
     subprocess.run(["git", "init"], cwd=repo_path, check=True)
+    subprocess.run(["git", "config", "user.email", "ymir@example.com"], cwd=repo_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Ymir"], cwd=repo_path, check=True)
     # Create a file and commit it
     file_path = repo_path / "file.txt"
     file_path.write_text("Line 1\n")

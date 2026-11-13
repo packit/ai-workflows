@@ -249,14 +249,35 @@ test
 """
 
 
+def _rpm_parses_legacy_patch_n() -> bool:
+    """Whether the local rpm still accepts the legacy ``%patchN`` syntax.
+
+    rpm 6 rejects ``%patch0 -p1`` at parse time, while the project's test
+    containers ship an rpm that still accepts it.
+    """
+    try:
+        Specfile(content=_spec("", "%setup -q\n%patch0 -p1"))
+        return True
+    except Exception:
+        return False
+
+
+_LEGACY_PATCH_N_SUPPORTED = _rpm_parses_legacy_patch_n()
+
+_legacy_patch_n_skip = pytest.mark.skipif(
+    not _LEGACY_PATCH_N_SUPPORTED, reason="local rpm rejects legacy %patchN syntax"
+)
+
+
 @pytest.mark.parametrize(
     ("original_patches", "original_prep", "adapted_prep", "expected_prep"),
     [
-        (
+        pytest.param(
             "",
             "%setup -q",
             "# keep this comment\n  %patch0 -p1 -b .backup\n%patch1 -p0",
             "# keep this comment\n  %patch -P 0 -p1 -b .backup\n%patch -P 1 -p0",
+            marks=_legacy_patch_n_skip,
         ),
         (
             "",
@@ -265,7 +286,13 @@ test
             "  %patch -P 0 -p1 -b .backup",
         ),
         ("", "%autosetup -p1", "%autosetup -p1", "%autosetup -p1"),
-        ("Patch0: existing.patch", "%patch0 -p1", "%patch0 -p1\n%patch1 -p1", "%patch0 -p1\n%patch1 -p1"),
+        pytest.param(
+            "Patch0: existing.patch",
+            "%patch0 -p1",
+            "%patch0 -p1\n%patch1 -p1",
+            "%patch0 -p1\n%patch1 -p1",
+            marks=_legacy_patch_n_skip,
+        ),
         (
             "%if 0\nPatch0: conditional.patch\n%endif",
             "%setup -q",
@@ -292,6 +319,7 @@ def test_normalize_first_inherited_patch_applications(
     assert spec_path.read_text() == _spec("Patch0: fix.patch\nPatch1: second.patch", expected_prep)
 
 
+@_legacy_patch_n_skip
 def test_normalize_first_inherited_patch_applications_only_changes_inherited_macros(tmp_path):
     original = _spec("", "%setup -q").replace("%description\ntest", "%description\ntest\nPatch0: example")
     spec_path = tmp_path / "package.spec"
@@ -305,6 +333,7 @@ def test_normalize_first_inherited_patch_applications_only_changes_inherited_mac
 
 
 @pytest.mark.asyncio
+@_legacy_patch_n_skip
 async def test_apply_zstream_change_and_cleanup(tmp_path):
     _git(tmp_path, "init")
     _git(tmp_path, "config", "user.email", "ymir@example.com")

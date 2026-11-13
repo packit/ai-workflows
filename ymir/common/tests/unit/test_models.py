@@ -1,10 +1,14 @@
+import json
+
 from ymir.common.models import (
     AUTOMATED_RESOLUTION_NOT_SUPPORTED,
     POSTPONEMENT_NOTE,
     TRIAGE_DISCLAIMER,
+    AlreadyFixedData,
     ApplicabilityResult,
     BackportData,
     ClarificationNeededData,
+    ConfidenceAssessment,
     ConsolidatedIssue,
     ErrorData,
     ErrorListEntry,
@@ -839,3 +843,112 @@ def test_error_list_entry_non_requeueable_when_task_missing():
     )
     assert entry.queue is None
     assert entry.task is None
+
+
+def test_already_fixed_formatting_with_all_fields():
+    """AlreadyFixedData with full rebuild details formats all build and dependency lines."""
+    data = AlreadyFixedData(
+        explanation="Build logs confirm package was created with the fixed dependency.",
+        jira_issue="RHEL-12345",
+        package="myapp",
+        package_nvr="myapp-2.0-1.el9",
+        package_issue_key="RHEL-67890",
+        dependency_issue_key="RHEL-11111",
+        dependency_nvr="libfoo-1.5-2.el9",
+        cve_id="CVE-2025-9999",
+        fix_version="rhel-9.8",
+    )
+    output = TriageOutputSchema(resolution=Resolution.ALREADY_FIXED, data=data)
+    formatted = output.format_for_comment()
+
+    assert "*Package*: myapp" in formatted
+    assert "*Build with Fix*: myapp-2.0-1.el9 (RHEL-67890)" in formatted
+    assert "*Dependency Fix*: libfoo-1.5-2.el9 (RHEL-11111)" in formatted
+    assert "Build logs confirm package was created with the fixed dependency." in formatted
+    assert "*Action Required*: Add build myapp-2.0-1.el9 to the errata for rhel-9.8." in formatted
+    assert AUTOMATED_RESOLUTION_NOT_SUPPORTED in formatted
+    assert TRIAGE_DISCLAIMER in formatted
+
+
+def test_already_fixed_formatting_rebase_no_jira_issue():
+    """AlreadyFixedData for rebase without found Jira issue omits build/dependency lines."""
+    data = AlreadyFixedData(
+        explanation="Package is already at version 3.0 in the rhel-9.8 branch. Search for builds.",
+        jira_issue="RHEL-12345",
+        package="libbar",
+        package_nvr=None,
+        package_issue_key=None,
+        dependency_issue_key=None,
+        dependency_nvr=None,
+        cve_id="CVE-2025-8888",
+        fix_version="rhel-9.8",
+    )
+    output = TriageOutputSchema(resolution=Resolution.ALREADY_FIXED, data=data)
+    formatted = output.format_for_comment()
+
+    assert "*Package*: libbar" in formatted
+    assert "*Build with Fix*:" not in formatted
+    assert "*Dependency Fix*:" not in formatted
+    assert "Package is already at version 3.0" in formatted
+    assert "*Action Required*: Search for the existing build" in formatted
+    assert AUTOMATED_RESOLUTION_NOT_SUPPORTED in formatted
+    assert TRIAGE_DISCLAIMER in formatted
+
+
+def test_already_fixed_sparse_payload_parsing():
+    """Minimal already-fixed payload with only required fields must parse as AlreadyFixedData."""
+
+    minimal_payload = {
+        "resolution": "already-fixed",
+        "data": {
+            "explanation": "Package contains the fix",
+            "jira_issue": "RHEL-99999",
+            "package": "testpkg",
+        },
+    }
+    output = TriageOutputSchema.model_validate(minimal_payload)
+    assert output.resolution == Resolution.ALREADY_FIXED
+    assert isinstance(output.data, AlreadyFixedData)
+    assert output.data.explanation == "Package contains the fix"
+    assert output.data.jira_issue == "RHEL-99999"
+    assert output.data.package == "testpkg"
+
+
+def test_already_fixed_formatting_includes_confidence():
+    """The already-fixed comment must carry the applicability confidence assessment."""
+    data = AlreadyFixedData(
+        explanation="Build logs confirm the fixed dependency was used.",
+        jira_issue="RHEL-12345",
+        package="readline",
+        package_nvr="readline-8.0-5.el10",
+        package_issue_key="RHEL-99999",
+    )
+    result = TriageOutputSchema(
+        resolution=Resolution.ALREADY_FIXED,
+        confidence=ConfidenceAssessment(level="high", reason="Verified via installed_pkgs.log"),
+        data=data,
+    )
+
+    comment = result.format_for_comment()
+    assert "*Resolution*: already-fixed" in comment
+    assert "*Confidence*: high" in comment
+    assert "*Confidence Reason*: Verified via installed_pkgs.log" in comment
+
+
+def test_select_data_model_does_not_mutate_caller_payload():
+    """Validating must not replace the caller's plain `data` mapping with a model."""
+    payload = {
+        "resolution": "backport",
+        "data": {
+            "patch_urls": ["https://example.com/patch.patch"],
+            "justification": "Fixes the bug in bind.c",
+            "jira_issue": "RHEL-12345",
+            "package": "readline",
+        },
+    }
+
+    TriageOutputSchema.model_validate(payload)
+
+    # The caller's dict must stay JSON-serializable with its original contents.
+    assert isinstance(payload["data"], dict)
+    assert json.loads(json.dumps(payload))["data"]["jira_issue"] == "RHEL-12345"

@@ -85,6 +85,7 @@ def build_case_config(
     build_command: str = "",
     test_command: str = "",
     model: str | None = None,
+    advanced: dict | None = None,
 ) -> dict:
     """Build Amalgamator's case mapping from Ymir values.
 
@@ -128,6 +129,10 @@ def build_case_config(
         config["branches"]["source"] = source_branch
     if model:
         config["model"] = model
+    # Amalgamator's ``advanced`` section (context_length, fused modes, review
+    # gates, ...). Omitted when empty so Amalgamator keeps its own defaults.
+    if advanced:
+        config["advanced"] = dict(advanced)
     return config
 
 
@@ -271,6 +276,7 @@ def run_case(
     models_path: str | None = None,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     python: str | None = None,
+    advanced: dict | None = None,
 ) -> AmalgamatorResult:
     """Write the case file, run Amalgamator, and collect the result."""
     workdir_path = Path(workdir).resolve()
@@ -292,6 +298,7 @@ def run_case(
         build_command=build_command,
         test_command=test_command,
         model=model,
+        advanced=advanced,
     )
     write_case(config, case_path)
 

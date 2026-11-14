@@ -142,6 +142,7 @@ def run_arm(
     test_command: str = "",
     timeout: int = adapter.DEFAULT_TIMEOUT_SECONDS,
     python: str | None = None,
+    advanced: dict | None = None,
 ) -> adapter.AmalgamatorResult:
     """Run Amalgamator for one prepared issue and return its result."""
     logger.info(
@@ -167,4 +168,5 @@ def run_arm(
         models_path=models_path,
         timeout=timeout,
         python=python,
+        advanced=advanced,
     )

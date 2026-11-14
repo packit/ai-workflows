@@ -337,6 +337,9 @@ def test_amalgamator_arm(case: AmalgamatorCase, mock_repos, tmp_path):
         test_command=commands.get("test", ""),
         timeout=int(os.getenv("AMALGAMATOR_TIMEOUT", str(adapter.DEFAULT_TIMEOUT_SECONDS))),
         python=interpreter,
+        # AMALGAMATOR_ADVANCED is a JSON object for the case file's
+        # ``advanced`` section, e.g. {"context_length": 200000}.
+        advanced=json.loads(os.getenv("AMALGAMATOR_ADVANCED") or "{}") or None,
     )
 
     files: set[str] = set()

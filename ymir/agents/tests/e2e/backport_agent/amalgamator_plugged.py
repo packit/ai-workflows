@@ -284,6 +284,7 @@ class AmalgamatorBackportAgent:
             models_path=os.getenv("AMALGAMATOR_MODELS") or None,
             timeout=int(os.getenv("AMALGAMATOR_TIMEOUT", str(adapter.DEFAULT_TIMEOUT_SECONDS))),
             python=os.getenv("AMALGAMATOR_PYTHON") or None,
+            advanced=json.loads(os.getenv("AMALGAMATOR_ADVANCED") or "{}") or None,
         )
         self.record["amalgamator"] = result.to_dict()
         self._save()

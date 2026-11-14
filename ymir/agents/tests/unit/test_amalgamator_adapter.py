@@ -76,6 +76,13 @@ def test_model_is_only_included_when_given():
     assert _case(model="m1")["model"] == "m1"
 
 
+def test_advanced_is_only_included_when_given():
+    assert "advanced" not in _case()
+    assert "advanced" not in _case(advanced={})
+    advanced = {"context_length": 200000, "fused_resolution": True}
+    assert _case(advanced=advanced)["advanced"] == advanced
+
+
 def test_write_case_round_trips_as_json(tmp_path):
     config = _case()
     case_path = adapter.write_case(config, tmp_path / "case.json")

@@ -67,6 +67,7 @@ from ymir.agents.amalgamator import adapter
 from ymir.agents.amalgamator import inputs as arm_inputs
 from ymir.agents.tests.e2e.backport_agent.amalgamator_arm import (
     ArmUnavailableError,
+    build_commands_for,
     collect_inputs,
     run_arm,
 )
@@ -321,12 +322,10 @@ def test_amalgamator_arm(case: AmalgamatorCase, mock_repos, tmp_path):
     except ArmUnavailableError as exc:
         pytest.skip(f"Amalgamator arm not applicable: {exc}")
 
-    # Without build/test commands Amalgamator's verify phase checks nothing.
-    # AMALGAMATOR_BUILD_COMMANDS names a JSON file of per-issue
-    # {"build": ..., "test": ...} commands, run at the upstream repo root.
-    commands: dict = {}
-    if commands_path := os.getenv("AMALGAMATOR_BUILD_COMMANDS"):
-        commands = json.loads(Path(commands_path).read_text()).get(case.jira_issue) or {}
+    # Without build/test commands Amalgamator's verify phase checks nothing;
+    # build_commands_for() reads them per issue, from
+    # AMALGAMATOR_BUILD_COMMANDS or the JSON file shipped next to the arm.
+    commands = build_commands_for(case.jira_issue)
 
     result = run_arm(
         arm,

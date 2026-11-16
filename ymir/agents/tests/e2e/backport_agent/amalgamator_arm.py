@@ -17,7 +17,9 @@ Two things this module deliberately does not do:
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +27,29 @@ from ymir.agents.amalgamator import adapter
 from ymir.agents.amalgamator import inputs as arm_inputs
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_BUILD_COMMANDS_PATH = Path(__file__).with_name("amalgamator_build_commands.json")
+
+
+def build_commands_for(issue_key: str) -> dict[str, str]:
+    """Return the per-issue build/test commands for Amalgamator.
+
+    The commands come from the JSON file named by ``AMALGAMATOR_BUILD_COMMANDS``
+    or, when that is unset, from ``amalgamator_build_commands.json`` next to
+    this module. They run at the upstream repo root and build out of tree, so
+    build products never reach the patch.
+
+    Without commands Amalgamator writes an empty ``build.command`` and
+    ``build.test_command``, runs nothing in its verify phase, and reports
+    "passed" in well under a second — the arm then only shows that a patch was
+    produced. Issues without an entry (nginx, whose patched code needs PCRE1)
+    get no commands on purpose.
+    """
+    path = Path(os.getenv("AMALGAMATOR_BUILD_COMMANDS") or DEFAULT_BUILD_COMMANDS_PATH)
+    if not path.is_file():
+        logger.warning("No Amalgamator build/test commands at %s; verify will run nothing", path)
+        return {}
+    return json.loads(path.read_text()).get(issue_key) or {}
 
 
 class ArmUnavailableError(RuntimeError):

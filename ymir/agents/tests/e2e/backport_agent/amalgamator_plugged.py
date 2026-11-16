@@ -41,6 +41,7 @@ from typing import Any
 from ymir.agents import tasks
 from ymir.agents.amalgamator import adapter
 from ymir.agents.amalgamator import inputs as arm_inputs
+from ymir.agents.tests.e2e.backport_agent.amalgamator_arm import build_commands_for
 from ymir.agents.utils import run_tool
 from ymir.common.models import BackportOutputSchema
 from ymir.tools.unprivileged.specfile import GetPackageInfoTool, PackageInfo
@@ -258,9 +259,7 @@ class AmalgamatorBackportAgent:
             fix_commit=fix_commit,
         )
 
-        commands: dict = {}
-        if commands_path := os.getenv("AMALGAMATOR_BUILD_COMMANDS"):
-            commands = json.loads(Path(commands_path).read_text()).get(issue) or {}
+        commands = build_commands_for(issue)
 
         workdir = self.out / "amalgamator"
         if workdir.exists():

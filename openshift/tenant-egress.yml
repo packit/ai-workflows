@@ -2361,6 +2361,10 @@ spec:
     - type: Allow
       to:
         dnsName: w1.fi
+    # hostapd, wpa_supplicant (cgit clone URLs)
+    - type: Allow
+      to:
+        dnsName: git.w1.fi
     # decentxml, gl-manpages, libxml2
     - type: Allow
       to:

@@ -161,6 +161,26 @@ For `not-affected`, applicability overrides copy `package` / `cve_id` /
 `fix_version` / `triage_summary` / `patch_urls` from the prior resolution, and
 the N/A explanation is folded into `triage_summary` for the reproducer prompt.
 
+### Reproducer-only re-run (`ymir_todo_reproducer`)
+
+A maintainer adds `ymir_todo_reproducer` to re-run just the reproducer on an
+already-triaged issue, without the full re-triage `ymir_todo` does.
+
+1. Same Red Hat Employee check as `ymir_todo`; an untrusted label is removed.
+   The trigger waits while any `ymir_*_in_progress` label is present.
+2. `package` comes from `customfield_10669`; an issue without it, or a modular
+   issue (which triage never runs the reproducer for either), is skipped and
+   the label removed. `fix_version` comes from `fixVersions` and `cve_id` from
+   the summary. The task has no `triage_summary` or `patch_urls`; to retry an
+   errored run with its original task, use `make -C openshift requeue-error`.
+3. An authorized `ymir_todo` or `ymir_todo_triage` wins and its flip consumes
+   `ymir_todo_reproducer` too. If that triage run doesn't queue the
+   reproducer, re-add the label afterwards.
+4. Both fetcher CronJobs can see the issue, so the fetcher takes
+   `lock:reproducer_trigger:<issue>` for 20 minutes (`issue_lock`), pushes a
+   `user_triggered=True` task to `reproducer_queue_todo`, then removes the
+   label. A failed push releases the lock.
+
 ### Standalone / queue / test modes
 
 | Mode | Purpose | How |

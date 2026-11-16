@@ -206,6 +206,7 @@ def _terminal_ymir_labels(labels: list[str]) -> list[str]:
         JiraLabels.WAITING_FOR_SIBLINGS.value,
         JiraLabels.TODO.value,
         JiraLabels.TODO_TRIAGE.value,
+        JiraLabels.TODO_REPRODUCER.value,
         JiraLabels.TRIAGE_ONLY.value,
         JiraLabels.MR_CLOSED.value,
         JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,

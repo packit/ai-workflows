@@ -1903,11 +1903,20 @@ class FetchGitlabMrNotesTool(Tool[FetchGitlabMrNotesInput, ToolRunOptions, Strin
 
 class SearchGitlabProjectMrsToolInput(BaseModel):
     project: str = Field(description="GitLab project path (e.g. 'redhat/rhel/rpms/podman')")
-    search: str = Field(description="Search string to match against merge requests (e.g. a JIRA issue key)")
+    search: str | None = Field(
+        default=None,
+        description="Search string to match against merge requests (e.g. a JIRA issue key); "
+        "omit to list MRs using only the other filters",
+    )
     state: str | None = Field(
         default=None,
         description="Filter MRs by state: 'opened', 'closed', 'merged', or null for all",
     )
+    label: str | None = Field(
+        default=None,
+        description="Only return MRs carrying this label (e.g. 'mr_testing_analyzed')",
+    )
+    exclude_drafts: bool = Field(default=False, description="Exclude draft/WIP merge requests")
 
 
 class SearchGitlabProjectMrsTool(
@@ -1921,7 +1930,8 @@ class SearchGitlabProjectMrsTool(
     timeout = 120
     description = """
     Searches for merge requests in a GitLab project matching a search string
-    (typically a JIRA issue key). Returns a list of matching MRs with their
+    (typically a JIRA issue key), optionally filtered by state, label, and
+    draft status. Newest first. Returns a list of matching MRs with their
     project, iid, url, title, description, state, and merged_at timestamp.
     """
     input_schema = SearchGitlabProjectMrsToolInput
@@ -1945,9 +1955,15 @@ class SearchGitlabProjectMrsTool(
         encoded_project = quote(project, safe="")
         url = f"https://gitlab.com/api/v4/projects/{encoded_project}/merge_requests"
 
-        params: dict[str, str] = {"search": search}
+        params: dict[str, str] = {}
+        if search:
+            params["search"] = search
         if state is not None:
             params["state"] = state
+        if tool_input.label:
+            params["labels"] = tool_input.label
+        if tool_input.exclude_drafts:
+            params["wip"] = "no"
 
         headers = _get_auth_headers(f"https://gitlab.com/{project}")
         logger.info("Searching MRs for %s in %s (state=%s)", search, project, state)

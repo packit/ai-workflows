@@ -69,6 +69,9 @@ _GATEWAY_TOOL_NAMES = [
     # Gating mode (OSCI bot pipeline results, no anewa/NEWA run)
     "get_pipeline_job_trace",
     "extract_tf_request_from_job_trace",
+    # Read-only history lookup for failure analysis (earlier analyses of this component)
+    "search_gitlab_project_mrs",
+    "get_merge_request_discussions",
 ]
 
 

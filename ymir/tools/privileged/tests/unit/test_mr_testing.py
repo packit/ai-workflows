@@ -473,6 +473,23 @@ async def test_format_test_failures_markdown():
 
 
 @pytest.mark.asyncio
+async def test_format_test_failures_markdown_history():
+    out = await FormatMrTestingCommentTool().run(
+        input={
+            "action": "test_failures_markdown",
+            "failures": [
+                {"test_name": "/Sanity/smoke", "history": "Also failed in !12 (waived) and !9"},
+                {"test_name": "/Sanity/other"},
+            ],
+        }
+    )
+    comment = out.result
+
+    assert comment.count("**History:**") == 1
+    assert "Also failed in !12 (waived) and !9" in comment
+
+
+@pytest.mark.asyncio
 async def test_format_missing_required_field_raises():
     from beeai_framework.tools import ToolError
 

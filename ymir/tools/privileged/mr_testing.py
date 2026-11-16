@@ -1393,6 +1393,8 @@ def _format_test_failures_markdown(failures: list[dict[str, Any]]) -> str:
         likely_cause = failure.get("likely_cause", "")
         assessment = failure.get("assessment", "")
         journal_section = _format_journal_section(failure.get("journal_urls"))
+        history = failure.get("history", "")
+        history_section = f"**History:**\n{history}\n\n" if history else ""
 
         sections.append(
             section_template.format(
@@ -1404,6 +1406,7 @@ def _format_test_failures_markdown(failures: list[dict[str, Any]]) -> str:
                 key_error=key_error,
                 journal_section=journal_section,
                 likely_cause=likely_cause,
+                history_section=history_section,
                 assessment=assessment,
             )
         )

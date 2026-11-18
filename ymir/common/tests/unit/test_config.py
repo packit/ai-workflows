@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +27,32 @@ RHEL_10_2_CONFIG = {
     "upcoming_z_streams": {"9": "rhel-9.9.z", "10": "rhel-10.2.z"},
     "internal_repos_host": "https://internal.host",
 }
+
+
+def test_load_rhel_config_without_mcp(monkeypatch, tmp_path):
+    config_path = tmp_path / "rhel-config.json"
+    config_path.write_text(json.dumps(RHEL_CONFIG))
+    monkeypatch.setenv("RHEL_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("ALLOW_RHEL_CONFIG_OVERRIDE", "true")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import asyncio, json, os, sys; "
+            "sys.modules['mcp'] = None; "
+            "from ymir.common.config import load_rhel_config; "
+            "from pathlib import Path; "
+            "expected = json.loads(Path(os.environ['RHEL_CONFIG_PATH']).read_text()); "
+            "assert asyncio.run(load_rhel_config()) == expected",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.asyncio

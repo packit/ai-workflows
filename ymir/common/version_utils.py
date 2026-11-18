@@ -3,12 +3,22 @@ Shared version parsing utilities for RHEL version strings.
 
 This module provides functions for parsing and comparing RHEL version
 strings in various formats (e.g., rhel-9.8, rhel-9.7.z, rhel-9.0.0.z).
+
+This module must stay importable without ``specfile`` installed: the API
+image ships ``ymir/common`` with a minimal dependency set, and importing
+``ymir.common`` (which loads this module) must not require it.
 """
+
+from __future__ import annotations
 
 import asyncio
 import contextvars
 import re
 import subprocess
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from specfile.utils import NEVR
 
 _DIST_TAG_RE = re.compile(r"\.el(\d+)(_\d+)?")
 
@@ -281,6 +291,44 @@ def get_fix_version_variants(fix_version: str) -> list[str]:
 
     major, minor, _is_zstream = parsed
     return [f"rhel-{major}.{minor}", f"rhel-{major}.{minor}.z"]
+
+
+def nevr_matches_fix_version_stream(nevr: NEVR, fix_version: str) -> bool:
+    """Return whether a build's dist tag belongs to the fix_version's release stream.
+
+    Jira ``fixVersion`` queries intentionally match both the Y-stream (``rhel-9.8``)
+    and Z-stream (``rhel-9.8.z``) forms of a release (see ``get_fix_version_variants``).
+
+    For a **Z-stream** fix version (``rhel-9.8.z``) only builds whose dist tag carries
+    the minor (``.el9_8``) match: a z-stream fix ships exclusively through the
+    ``rhel-9.8.0`` maintenance branch, and a plain ``.el9`` (CentOS Stream / Y-stream)
+    build cannot contain it. Accepting a higher-EVR cross-stream build could mask a
+    missing z-stream build and skip a needed rebuild.
+
+    For a **Y-stream** fix version (``rhel-9.8``) any build of the same major matches,
+    with or without the minor in the dist tag: fixes developed in CentOS Stream produce
+    ``.el9`` builds, while fixes that shipped as part of the 9.8 GA itself are built on
+    the ``rhel-9.8.0`` branch and carry ``.el9_8``. Both legitimately back a Y-stream
+    ticket, so neither may be discarded.
+
+    The dist tag is read from the parsed ``NEVR.release`` so it cannot be confused with
+    look-alike text elsewhere in the NVR. Returns True when the stream cannot be
+    determined from either input, so callers do not drop builds they can't classify.
+    """
+    parsed = parse_rhel_version(fix_version)
+    if not parsed:
+        return True
+    major, minor, is_zstream = parsed
+    match = _DIST_TAG_RE.search(nevr.release)
+    if not match:
+        return True
+    build_major, build_minor = match.group(1), match.group(2)  # build_minor is "_8" or None
+    if build_major != major:
+        return False
+    if is_zstream:
+        return build_minor == f"_{minor}"
+    # Y-stream: accept both .elX (CentOS Stream) and .elX_Y (RHEL branch) builds.
+    return True
 
 
 async def is_older_zstream(

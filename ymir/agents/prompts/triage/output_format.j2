@@ -170,6 +170,26 @@ Not-affected resolution (CVE does not apply):
 }
 ```
 
+Already-fixed resolution (the rebase is already done):
+```json
+{
+    "resolution": "already-fixed",
+    "data": {
+        "explanation": "Package is already at version 2.3.4 in the rhel-9.8 branch (tracked by RHEL-67890 with Fixed in Build: libfoo-2.3.4-1.el9). Please add this ticket to that build's Errata.",
+        "jira_issue": "RHEL-12345",
+        "package": "libfoo",
+        "package_nvr": "libfoo-2.3.4-1.el9",
+        "package_issue_key": "RHEL-67890",
+        "target_version": "2.3.4",
+        "dependency_issue_key": null,
+        "dependency_nvr": null,
+        "cve_id": "CVE-2025-12345",
+        "fix_version": "rhel-9.8"
+    }
+}
+```
+Note: Use this ONLY for rebase scenarios where a completed (Closed/Done/Resolved with resolution Done or Done-Errata) Jira issue with a non-empty Fixed in Build field confirms the package is already at the target version. NEVER use already-fixed for rebuilds (dependency fixes): return "rebuild" instead and the workflow will automatically verify from build logs whether the package was already rebuilt with the fixed dependency and resolve it as already-fixed itself. NEVER use already-fixed for backports: a backported fix is not recognizable from the build's version, so return "clarification-needed" instead. For rebases, set dependency fields to null. If no completed issue with a Fixed in Build value is found, use "clarification-needed" instead.
+
 Open-ended analysis resolution:
 ```json
 {

@@ -276,19 +276,21 @@ async def test_check_zstream_pending_triage_terminal_excluded():
 
 
 @pytest.mark.asyncio
-async def test_check_zstream_pending_triage_excludes_deferred_labels_in_jql():
-    """Deferred clones must be excluded by the query itself.
+async def test_check_zstream_pending_triage_excludes_terminal_labels_in_jql():
+    """Terminal triage labels must be excluded by the query itself.
 
     The mocked search returns pre-filtered results, so only asserting the returned
-    keys would let a removed exclusion pass unnoticed.
+    keys would let a removed exclusion pass unnoticed. Both the already-fixed
+    decision and the deferred-triage decisions are terminal for the Z-stream
+    clone: its fix path is decided, so the Y-stream must not wait for it.
     """
-    captured_jql = {}
+    captured = {}
 
-    async def capture_run(*_args, **kwargs):
-        captured_jql["jql"] = kwargs["input"]["jql"]
+    async def _capture_run(input=None, **kwargs):
+        captured["input"] = input
         return JSONToolOutput(result=[])
 
-    flexmock(SearchJiraIssuesTool).should_receive("run").replace_with(capture_run).once()
+    flexmock(SearchJiraIssuesTool).should_receive("run").replace_with(_capture_run).once()
     flexmock(jira_tools).should_receive("load_rhel_config").and_return(
         _create_async_return(RHEL_CONFIG)
     ).once()
@@ -297,10 +299,14 @@ async def test_check_zstream_pending_triage_excludes_deferred_labels_in_jql():
         "CVE-2026-12345", "curl", "RHEL-999", "9", "CVE-2026-12345 buffer overflow in curl [rhel-9.8]"
     )
 
-    jql = captured_jql["jql"]
+    jql = captured["input"]["jql"]
+    assert 'labels != "ymir_triaged_already_fixed"' in jql
     assert 'labels != "ymir_triaged_deferred_backport"' in jql
     assert 'labels != "ymir_triaged_deferred_rebase"' in jql
     assert 'labels != "ymir_triaged_deferred_rebuild"' in jql
+    # The exclusions sit alongside the other terminal triage labels.
+    assert 'labels != "ymir_triaged_not_affected"' in jql
+    assert 'labels != "ymir_triaged_rebuild"' in jql
 
 
 @pytest.mark.asyncio

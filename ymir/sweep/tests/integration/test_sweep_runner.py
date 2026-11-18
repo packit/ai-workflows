@@ -19,6 +19,7 @@ from flexmock import flexmock
 
 from ymir.common import CVEEligibilityResult, TriageEligibility
 from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.utils import BrewBuild
 from ymir.supervisor.supervisor_types import Issue, IssueStatus
 from ymir.sweep.dependency import DependencySweep
 from ymir.sweep.no_patch import NoPatchSweep
@@ -30,6 +31,10 @@ from ymir.sweep.y_stream import YStreamSweep
 # ---------------------------------------------------------------------------
 # Async helpers
 # ---------------------------------------------------------------------------
+
+
+async def _resolve_fixed_build(_nvr):
+    return BrewBuild({"name": "golang", "version": "1.21.0", "release": "1.el9", "epoch": 0})
 
 
 async def _async_true(*a, **kw) -> bool:
@@ -136,6 +141,9 @@ async def test_dependency_sweep_unblocks_when_build_in_buildroot(monkeypatch, ca
         "ymir.sweep.dependency.get_issue",
         lambda key, full=False: _make_blocker(fixed_in_build="golang-1.21.0-1.el9"),
     )
+    # The buildroot check is stubbed, but the fixed build is still resolved in
+    # Brew first — stub that too so the test never contacts the network.
+    monkeypatch.setattr("ymir.sweep.dependency.resolve_brew_build", _resolve_fixed_build)
     monkeypatch.setattr("ymir.sweep.dependency.check_build_in_buildroot", _async_true)
     mock_redis, pushed = make_redis()
 
@@ -175,6 +183,7 @@ async def test_dependency_sweep_still_blocked_when_build_not_in_buildroot(monkey
         "ymir.sweep.dependency.get_issue",
         lambda key, full=False: _make_blocker(fixed_in_build="golang-1.21.0-1.el9"),
     )
+    monkeypatch.setattr("ymir.sweep.dependency.resolve_brew_build", _resolve_fixed_build)
     monkeypatch.setattr("ymir.sweep.dependency.check_build_in_buildroot", _async_false)
     mock_redis, pushed = make_redis()
 

@@ -114,10 +114,12 @@ class _LogWriteable:
 
 
 def get_trajectory_writeable() -> _LogWriteable:
+    """Create a logging adapter for BeeAI trajectory output."""
     return _LogWriteable()
 
 
 def flush_task_logs(issue: str) -> None:
+    """Flush buffered lines for an issue when task buffering is enabled."""
     if _buffered_handler is not None:
         _buffered_handler.flush_task(issue)
 

@@ -4,11 +4,11 @@ Checks whether the identified upstream pull/merge request has been merged.
 Supports both GitLab MRs (via the GitLab REST API) and GitHub PRs (via the
 GitHub REST API).
 
-GitLab: uses ``gitlab_utils.gitlab_api_get()`` with the ``gitlab_url``
+GitLab: uses ``ymir.common.gitlab_api.gitlab_api_get()`` with the ``gitlab_url``
 parameter to support both ``gitlab.com`` and internal hosts such as
 ``gitlab.cee.redhat.com``.
 
-GitHub: uses ``github_utils.github_api_get()``.  Authentication is
+GitHub: uses ``ymir.common.github_api.github_api_get()``. Authentication is
 optional (set ``GITHUB_READONLY_TOKEN``); all upstream projects tracked by
 Ymir are public. Authentication increases rate limits (5,000 req/hr vs 60
 unauthenticated) but is not required for access.
@@ -25,10 +25,11 @@ State transitions:
 import re
 from urllib.parse import quote as urlquote
 
-from ymir.common.constants import JiraLabels
-from ymir.supervisor.github_utils import github_api_get
-from ymir.supervisor.gitlab_utils import ALLOWED_GITLAB_HOSTS, gitlab_api_get
-from ymir.supervisor.supervisor_types import FullIssue, MergeRequestState
+from ymir.common.base_utils import fix_await
+from ymir.common.constants import ALLOWED_GITLAB_HOSTS, JiraLabels
+from ymir.common.github_api import github_api_get
+from ymir.common.gitlab_api import gitlab_api_get
+from ymir.common.models import FullIssue, GitlabMergeRequestState
 from ymir.sweep.base import SweepResult, SweepStrategy
 from ymir.sweep.comment_parser import CommentData
 
@@ -42,38 +43,38 @@ _GITLAB_MR_RE = re.compile(rf"https://({_GITLAB_HOSTS_ALT})/(.+?)/-/merge_reques
 _GITHUB_PR_RE = re.compile(r"https://github\.com/([^/]+/[^/]+)/pull/(\d+)")
 
 
-def _fetch_gitlab_mr_state(mr_url: str, m: re.Match) -> tuple[str, str | None]:
+async def _fetch_gitlab_mr_state(mr_url: str, m: re.Match) -> tuple[str, str | None]:
     """Return ``(state, error_detail)`` for a GitLab MR. error_detail is None on success."""
     host, project_path, mr_iid = m.group(1), m.group(2), m.group(3)
     path = f"projects/{urlquote(project_path, safe='')}/merge_requests/{mr_iid}"
     try:
-        data = gitlab_api_get(path, gitlab_url=f"https://{host}")
+        data = await fix_await(gitlab_api_get(path, gitlab_url=f"https://{host}"))
     except Exception as exc:
         return "", f"GitLab API call failed for {mr_url}: {exc}"
     return data.get("state", ""), None
 
 
-def _fetch_github_pr_state(pr_url: str, m: re.Match) -> tuple[str, str | None]:
+async def _fetch_github_pr_state(pr_url: str, m: re.Match) -> tuple[str, str | None]:
     """Return ``(state, error_detail)`` for a GitHub PR. error_detail is None on success.
 
     GitHub PRs use ``state: open|closed`` plus ``merged_at`` to distinguish a
     merged close from an abandoned close.  The returned state is normalised to
-    the same values ``MergeRequestState`` uses (``opened``, ``merged``,
+    the same values ``GitlabMergeRequestState`` uses (``opened``, ``merged``,
     ``closed``) so downstream logic is identical for both platforms.
     """
     owner_repo, pr_number = m.group(1), m.group(2)
     try:
-        data = github_api_get(f"repos/{owner_repo}/pulls/{pr_number}")
+        data = await fix_await(github_api_get(f"repos/{owner_repo}/pulls/{pr_number}"))
     except Exception as exc:
         return "", f"GitHub API call failed for {pr_url}: {exc}"
 
     gh_state = data.get("state", "")
     if gh_state == "open":
-        return MergeRequestState.OPEN, None
+        return GitlabMergeRequestState.OPEN, None
     if gh_state == "closed":
         if data.get("merged_at"):
-            return MergeRequestState.MERGED, None
-        return MergeRequestState.CLOSED, None
+            return GitlabMergeRequestState.MERGED, None
+        return GitlabMergeRequestState.CLOSED, None
     # Unknown state — pass through; the caller maps it to still_blocked.
     return gh_state, None
 
@@ -110,9 +111,9 @@ class PRPendingSweep(SweepStrategy):
         gh_match = _GITHUB_PR_RE.match(pr_url)
 
         if gl_match:
-            state, error = _fetch_gitlab_mr_state(pr_url, gl_match)
+            state, error = await _fetch_gitlab_mr_state(pr_url, gl_match)
         elif gh_match:
-            state, error = _fetch_github_pr_state(pr_url, gh_match)
+            state, error = await _fetch_github_pr_state(pr_url, gh_match)
         else:
             return SweepResult(
                 issue_key=issue_key,
@@ -126,23 +127,25 @@ class PRPendingSweep(SweepStrategy):
         if error:
             return SweepResult(issue_key=issue_key, action="error", detail=error)
 
-        if state == MergeRequestState.MERGED:
+        if state == GitlabMergeRequestState.MERGED:
             return SweepResult(
                 issue_key=issue_key,
                 action="unblocked",
                 detail=f"Upstream PR/MR {pr_url} has been merged. Re-triaging.",
             )
 
-        if state == MergeRequestState.CLOSED:
+        if state == GitlabMergeRequestState.CLOSED:
             # PR/MR was abandoned — no fix is coming via this URL any more.
             # Transition to no_patch so the no-patch sweep re-evaluates.
-            self.on_transition(
-                issue_key,
-                JiraLabels.YMIR_POSTPONED_NO_PATCH,
-                comment=(
-                    f"Upstream PR/MR {pr_url} was closed without merging. "
-                    "Transitioning to no-patch state for re-evaluation."
-                ),
+            await fix_await(
+                self.on_transition(
+                    issue_key,
+                    JiraLabels.YMIR_POSTPONED_NO_PATCH,
+                    comment=(
+                        f"Upstream PR/MR {pr_url} was closed without merging. "
+                        "Transitioning to no-patch state for re-evaluation."
+                    ),
+                )
             )
             return SweepResult(
                 issue_key=issue_key,

@@ -40,6 +40,7 @@ return 0
 
 
 def _lock_key(issue_key: str, prefix: str = LOCK_KEY_PREFIX) -> str:
+    """Build a Redis lock key from the uppercased Jira issue key."""
     return f"{prefix}{issue_key.upper()}"
 
 
@@ -102,6 +103,10 @@ async def _heartbeat_loop(
     ttl_ms: int,
     prefix: str = LOCK_KEY_PREFIX,
 ) -> None:
+    """Refresh an issue lock every third of its TTL until cancelled or lost.
+
+    Redis errors are logged and retried on the next interval.
+    """
     interval = ttl_ms / 3000.0
     while True:
         await asyncio.sleep(interval)

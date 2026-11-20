@@ -7,8 +7,10 @@ from ymir.common.version_utils import (
     get_maintenance_rhel_branch,
     is_modular,
     is_older_zstream,
+    module_stream_matches_branch,
     parse_branch_name,
     parse_module_stream,
+    parse_module_stream_from_branch,
     parse_rhel_version,
     parse_zstream_branch_name,
 )
@@ -105,6 +107,41 @@ def test_parse_zstream_branch_name(branch, expected):
 def test_parse_branch_name(branch, expected):
     result = parse_branch_name(branch)
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    "branch, expected",
+    [
+        ("stream-squid-4-rhel-8.10.0", "squid:4"),
+        ("stream-nginx-1.26-rhel-9.9.0", "nginx:1.26"),
+        ("stream-nodejs-18-rhel-10.2", "nodejs:18"),
+        ("stream-go-toolset-rhel8-rhel-8.10.0", "go-toolset:rhel8"),
+        ("STREAM-nginx-1.26-rhel-9.9.0", "nginx:1.26"),
+        ("stream-idm-DL1-rhel-8.10.0", "idm:DL1"),
+        ("rhel-8.10.0", None),
+        ("c8s", None),
+        ("stream-nginx-1.26", None),
+    ],
+)
+def test_parse_module_stream_from_branch(branch, expected):
+    assert parse_module_stream_from_branch(branch) == expected
+
+
+@pytest.mark.parametrize(
+    "module_stream, branch, expected",
+    [
+        ("squid:4", "stream-squid-4-rhel-8.10.0", True),
+        ("rust-toolset:rhel-next", "stream-rust-toolset-rhel-next-rhel-8.10.0", True),
+        ("ruby:3.1-beta", "stream-ruby-3.1-beta-rhel-9.8.0", True),
+        ("idm:DL1", "STREAM-idm-DL1-rhel-8.10.0", True),
+        ("squid:5", "stream-squid-4-rhel-8.10.0", False),
+        ("squid:4", "rhel-8.10.0", False),
+        ("squid", "stream-squid-4-rhel-8.10.0", False),
+        (":4", "stream-squid-4-rhel-8.10.0", False),
+    ],
+)
+def test_module_stream_matches_branch(module_stream, branch, expected):
+    assert module_stream_matches_branch(module_stream, branch) is expected
 
 
 @pytest.mark.asyncio

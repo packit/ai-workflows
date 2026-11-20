@@ -540,6 +540,55 @@ def test_build_backend_helpers(monkeypatch):
     assert build_agent.build_tool_name(modular=True) == "build_package"
 
 
+@pytest.mark.parametrize(
+    "copr_rhel_majors,branch,uses_konflux",
+    [
+        (None, "rhel-8.10.0", False),
+        (None, "rhel-8-main", False),
+        (None, "c8s", False),
+        (None, "stream-squid-4-rhel-8.10.0", False),
+        (None, "rhel-9.6.0", True),
+        (None, "c9s", True),
+        (None, "c10s", True),
+        (None, "rhel-10.1", True),
+        (None, "not-a-branch", True),
+        (None, None, True),
+        ("", "rhel-8.10.0", True),
+        (" 8 , 9 ,", "rhel-9.6.0", False),
+        ("8, 9", "c10s", True),
+        ("10", "rhel-8.10.0", True),
+    ],
+)
+def test_copr_rhel_majors_select_backend(monkeypatch, copr_rhel_majors, branch, uses_konflux):
+    """Branches whose RHEL major is in COPR_RHEL_MAJORS (default "8") stay on Copr."""
+    monkeypatch.setenv("BUILD_BACKEND", "konflux")
+    if copr_rhel_majors is None:
+        monkeypatch.delenv("COPR_RHEL_MAJORS", raising=False)
+    else:
+        monkeypatch.setenv("COPR_RHEL_MAJORS", copr_rhel_majors)
+
+    assert build_agent.use_konflux_backend(dist_git_branch=branch) is uses_konflux
+    expected_tool = "build_package" if uses_konflux else "build_package_copr"
+    assert build_agent.build_tool_name(dist_git_branch=branch) == expected_tool
+    # Modular packages stay on Copr regardless of the branch.
+    assert not build_agent.use_konflux_backend(modular=True, dist_git_branch=branch)
+    assert build_agent.build_tool_name(modular=True, dist_git_branch=branch) == "build_package_copr"
+
+    # Under the Copr backend nothing uses Konflux and the default tool is used.
+    monkeypatch.setenv("BUILD_BACKEND", "copr")
+    assert not build_agent.use_konflux_backend(dist_git_branch=branch)
+    assert build_agent.build_tool_name(dist_git_branch=branch) == "build_package"
+
+
+def test_copr_rhel_majors_parsing(monkeypatch):
+    monkeypatch.delenv("COPR_RHEL_MAJORS", raising=False)
+    assert build_agent.copr_rhel_majors() == {"8"}
+    monkeypatch.setenv("COPR_RHEL_MAJORS", "")
+    assert build_agent.copr_rhel_majors() == set()
+    monkeypatch.setenv("COPR_RHEL_MAJORS", " 8, 9 ,,")
+    assert build_agent.copr_rhel_majors() == {"8", "9"}
+
+
 @pytest.mark.asyncio
 async def test_konflux_log_urls_trigger_diagnosis(build_input, monkeypatch):
     """Konflux Kubearchive pod-log URLs lack a .log.gz suffix but must be diagnosed."""

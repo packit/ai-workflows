@@ -802,8 +802,9 @@ class TriageOutputSchema(BaseModel):
 # Build Agent Schemas
 # ============================================================================
 
-# Konflux registers build_package itself. Modular packages stay on Copr, so the
-# gateway also advertises Copr under these names when BUILD_BACKEND=konflux.
+# Konflux registers build_package itself. Modular packages and RHEL majors listed
+# in COPR_RHEL_MAJORS stay on Copr, so the gateway also advertises Copr under
+# these names when BUILD_BACKEND=konflux.
 MODULAR_COPR_BUILD_TOOL = "build_package_copr"
 MODULAR_COPR_DOWNLOAD_TOOL = "download_artifacts_copr"
 

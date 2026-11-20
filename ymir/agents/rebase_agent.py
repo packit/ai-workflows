@@ -457,8 +457,11 @@ async def run_workflow(
             )
 
         async def run_build_agent(state):
-            # Modular packages stay on Copr: Konflux cannot enable a module stream.
-            konflux_build = use_konflux_backend(modular=is_modular_issue)
+            # Modular packages stay on Copr (Konflux cannot enable a module
+            # stream), as do RHEL majors listed in COPR_RHEL_MAJORS.
+            konflux_build = use_konflux_backend(
+                modular=is_modular_issue, dist_git_branch=state.dist_git_branch
+            )
             if konflux_build:
                 revision = await _prepare_konflux_rebase_ref(state)
                 build_input = BuildInputSchema(
@@ -485,7 +488,9 @@ async def run_workflow(
                     build_input=build_input,
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
-                    tool_name=build_tool_name(modular=is_modular_issue),
+                    tool_name=build_tool_name(
+                        modular=is_modular_issue, dist_git_branch=state.dist_git_branch
+                    ),
                 )
 
             if konflux_build:
@@ -630,7 +635,10 @@ async def run_workflow(
 
         async def commit_push_and_open_mr(state):
             try:
-                if use_konflux_backend(modular=is_modular_issue) and state.rebase_base_head:
+                if (
+                    use_konflux_backend(modular=is_modular_issue, dist_git_branch=state.dist_git_branch)
+                    and state.rebase_base_head
+                ):
                     # Collapse the Konflux build-candidate commit into the
                     # final MR commit: soft-reset to the pristine base so the
                     # already-staged tree commits as a single commit.

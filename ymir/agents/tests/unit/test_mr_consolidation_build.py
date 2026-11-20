@@ -341,6 +341,95 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(
     assert state.jira_issue == "RHEL-12345"
 
 
+@pytest.mark.asyncio
+async def test_rhel8_consolidation_builds_with_copr_when_backend_is_konflux(monkeypatch):
+    """RHEL 8 (default COPR_RHEL_MAJORS) builds the SRPM with Copr and pushes no scratch ref."""
+    monkeypatch.setenv("BUILD_BACKEND", "konflux")
+    monkeypatch.delenv("COPR_RHEL_MAJORS", raising=False)
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+
+    @contextlib.asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    flexmock(mr_consolidation_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(mr_consolidation_agent).should_receive("create_log_agent").and_return(flexmock())
+    flexmock(mr_consolidation_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(mr_consolidation_agent.tasks).should_receive("push_changes").never()
+    flexmock(mr_consolidation_agent).should_receive("_files_to_stage_for_patches").never()
+
+    build_calls = []
+
+    async def _mock_run_build(**kwargs):
+        build_calls.append(kwargs)
+        return BuildOutputSchema(success=True, error=None)
+
+    flexmock(mr_consolidation_agent).should_receive("run_build").replace_with(_mock_run_build)
+
+    run_workflow = Workflow.run
+    completed = []
+
+    def stop_after_build(state):
+        completed.append(state)
+        return Workflow.END
+
+    def start_at_build(workflow, state, options=None):
+        if workflow.name == "MRConsolidationWorkflow":
+            state.jira_issue = "RHEL-12345"
+            state.local_clone = Path("/git-repos/package")
+            state.spec_name = "package.spec"
+            state.consolidation_result = MRConsolidationOutputSchema(
+                success=True,
+                status="Prepared SRPM",
+                srpm_path=Path("/git-repos/package/package-1-1.src.rpm"),
+            )
+            workflow.set_start("run_build_agent")
+            workflow.steps["push_and_open_mr"].handler = stop_after_build
+            workflow.steps["update_release"].handler = stop_after_build
+        return run_workflow(workflow, state, options)
+
+    monkeypatch.setattr(Workflow, "run", start_at_build)
+
+    state = await mr_consolidation_agent.run_workflow(
+        package="package",
+        dist_git_branch="rhel-8.10.0",
+        dry_run=True,
+        consolidation_agent_factory=lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+
+    assert len(completed) == 1
+    assert state.build_verified is True
+    assert len(build_calls) == 1
+    assert build_calls[0]["tool_name"] == "build_package_copr"
+    build_input = build_calls[0]["build_input"]
+    assert build_input.dist_git_branch == "rhel-8.10.0"
+    assert build_input.git_url is None
+    assert build_input.revision is None
+
+
+@pytest.mark.parametrize("backend", ["konflux", "copr"])
+@pytest.mark.parametrize("branch", ["stream-squid-4-rhel-8.10.0", "stream-postgresql-16-rhel-9.8.0"])
+@pytest.mark.asyncio
+async def test_modular_consolidation_is_rejected_before_any_work(monkeypatch, backend, branch):
+    """Manual submissions (API, Jira command) of a modular target are refused
+    before the gateway, dist-git, or a build is touched."""
+    monkeypatch.setenv("BUILD_BACKEND", backend)
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+    flexmock(mr_consolidation_agent).should_receive("mcp_tools").never()
+    flexmock(mr_consolidation_agent).should_receive("run_build").never()
+
+    state = await mr_consolidation_agent.run_workflow(
+        package="squid",
+        dist_git_branch=branch,
+        dry_run=True,
+        source_issues=["RHEL-111", "RHEL-222"],
+    )
+
+    assert state.consolidation_result.success is False
+    assert state.consolidation_result.error == f"Consolidation is not supported for modular branch {branch}"
+    assert state.build_verified is False
+
+
 @pytest.mark.parametrize("failure_kind", ["build_failed", "build_error", "missing_srpm", "prepare_error"])
 @pytest.mark.asyncio
 async def test_terminal_build_failure_is_reported(monkeypatch, failure_kind):

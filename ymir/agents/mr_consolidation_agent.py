@@ -21,7 +21,7 @@ from pydantic import Field
 from specfile import Specfile
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import is_konflux_backend, run_build
+from ymir.agents.build_agent import build_tool_name, run_build, use_konflux_backend
 from ymir.agents.constants import (
     I_AM_YMIR,
     ZSTREAM_TARGET_LABEL,
@@ -57,7 +57,13 @@ from ymir.agents.utils import (
     run_subprocess,
     run_tool,
 )
-from ymir.common.base_utils import install_shutdown_handler, is_cs_branch, redis_client, run_task_loop
+from ymir.common.base_utils import (
+    install_shutdown_handler,
+    is_cs_branch,
+    is_modular_branch,
+    redis_client,
+    run_task_loop,
+)
 from ymir.common.constants import JiraLabels
 from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
@@ -448,6 +454,22 @@ async def run_workflow(
         source_issues: When set, resolve MRs for these specific Jira issue
             keys instead of picking the two oldest open MRs (label-triggered).
     """
+    if is_modular_branch(dist_git_branch):
+        # Modular consolidation is unsupported: automatic producers skip it,
+        # and the build step would lack the module stream. Refuse manual
+        # submissions (API, Jira command) before touching dist-git or builds.
+        error = f"Consolidation is not supported for modular branch {dist_git_branch}"
+        logger.warning("%s (package %s)", error, package)
+        return ConsolidationState(
+            package=package,
+            dist_git_branch=dist_git_branch,
+            jira_issue=None,
+            release_strategy=release_strategy,
+            consolidation_result=MRConsolidationOutputSchema(
+                success=False, status="Unsupported modular branch", error=error
+            ),
+        )
+
     local_tool_options: dict[str, Any] = {"working_directory": None}
     working_id = f"consolidation-{package}-{dist_git_branch}"
     if mock_env := get_mock_local_tool_env(working_id):
@@ -874,8 +896,10 @@ async def run_workflow(
                     return "per_commit_flow"
                 return "run_consolidation_agent"
 
+            konflux_build = use_konflux_backend(dist_git_branch=dist_git_branch)
+            tool_name = build_tool_name(dist_git_branch=dist_git_branch)
             try:
-                if is_konflux_backend():
+                if konflux_build:
                     build_input = await _prepare_konflux_build_input(state)
                 else:
                     build_input = BuildInputSchema(
@@ -885,7 +909,7 @@ async def run_workflow(
                         # Keep the fallback out of the workflow's Jira metadata.
                         jira_issue=state.jira_issue or _build_project_name(package, dist_git_branch),
                     )
-                if is_konflux_backend():
+                if konflux_build:
                     async with tasks.scratch_build_branch(
                         state.local_clone,
                         state.fork_url,
@@ -898,12 +922,14 @@ async def run_workflow(
                             build_input=build_input,
                             available_tools=gateway_tools,
                             local_tool_options=local_tool_options,
+                            tool_name=tool_name,
                         )
                 else:
                     build_output = await run_build(
                         build_input=build_input,
                         available_tools=gateway_tools,
                         local_tool_options=local_tool_options,
+                        tool_name=tool_name,
                     )
                 if not build_output.success:
                     state.build_error = build_output.error or "Package build failed without details"

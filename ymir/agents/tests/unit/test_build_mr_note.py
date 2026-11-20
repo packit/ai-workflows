@@ -18,7 +18,7 @@ from beeai_framework.workflows import Workflow
 from flexmock import flexmock
 
 from ymir.agents import backport_agent, tasks
-from ymir.agents.package_update_steps import build_mr_note
+from ymir.agents.package_update_steps import build_mr_note, parse_mr_note_module_stream
 from ymir.common.models import BackportOutputSchema, LogOutputSchema
 
 
@@ -44,6 +44,26 @@ def test_build_mr_note_includes_modular_stream():
 
 def test_build_mr_note_empty_when_nothing_to_report():
     assert build_mr_note(build_url=None, is_modular_issue=False, module_stream=None) == ""
+
+
+@pytest.mark.parametrize("module_stream", ["postgresql:16", "rust-toolset:rhel-next", "ruby:3.1-beta"])
+def test_mr_note_module_stream_round_trip(module_stream):
+    note = build_mr_note(build_url=None, is_modular_issue=True, module_stream=module_stream)
+    description = f"Resolves: RHEL-1\n\n{note}\n\nMore text"
+    assert parse_mr_note_module_stream(description) == module_stream
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        None,
+        "",
+        build_mr_note(build_url=None, is_modular_issue=True, module_stream=None),
+        build_mr_note(build_url="https://copr.example/build/1/", is_modular_issue=False, module_stream=None),
+    ],
+)
+def test_mr_note_module_stream_absent(description):
+    assert parse_mr_note_module_stream(description) is None
 
 
 async def _run_comment_in_jira(

@@ -59,6 +59,17 @@ def test_add_jira_tickets_to_latest_changelog_entry(tmp_path):
     )
 
 
+def test_add_jira_tickets_recognizes_unusual_separator_in_resolves_footer(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(
+        _spec("* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n- Resolves: RHEL-100 and RHEL-200\n")
+    )
+    original = spec.read_text()
+
+    assert not add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200"])
+    assert spec.read_text() == original
+
+
 def test_add_jira_tickets_recognizes_and_extends_suffix_references(tmp_path):
     spec = tmp_path / "package.spec"
     spec.write_text(
@@ -67,6 +78,16 @@ def test_add_jira_tickets_recognizes_and_extends_suffix_references(tmp_path):
 
     assert add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200", "RHEL-300"])
     assert spec.read_text().endswith("- Update package (RHEL-100/RHEL-200/RHEL-300)\n")
+
+
+def test_add_jira_tickets_recognizes_and_extends_inline_resolves_reference(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(
+        _spec("* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n- Resolves: RHEL-100 - Update package\n")
+    )
+
+    assert add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200"])
+    assert spec.read_text().endswith("- Resolves: RHEL-100, RHEL-200 - Update package\n")
 
 
 def test_add_jira_tickets_preserves_suffix_trailing_whitespace(tmp_path):
@@ -145,6 +166,16 @@ def test_add_jira_tickets_does_not_treat_prose_as_a_reference(tmp_path):
         "- Resolves: RHEL-100\n"
         "- Resolves: RHEL-200\n"
     )
+
+
+def test_add_jira_tickets_does_not_rewrite_related_prose_suffix(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(
+        _spec("* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n- Related: issue context (RHEL-200)\n")
+    )
+
+    assert add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100"])
+    assert spec.read_text().endswith("- Related: issue context (RHEL-200)\n- Resolves: RHEL-100\n")
 
 
 def test_add_jira_tickets_preserves_star_bulleted_resolves_reference(tmp_path):
@@ -821,6 +852,348 @@ async def test_queued_sibling_keeps_its_triage_only_marker(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_queued_sibling_loses_stale_waiting_label(monkeypatch):
+    """A candidate marked as a sibling must drop its own waiting marker.
+
+    A leftover ``ymir_rebase_waiting_for_siblings`` on the candidate (e.g. from a
+    run where it briefly acted as a primary) otherwise defers its terminal label
+    forever: the sibling finishes triage, strips its in-progress/sibling labels,
+    writes nothing terminal, and the primary re-queues it in an endless loop.
+    """
+    pushed = []
+    label_writes = []
+
+    async def run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            return [{"key": "RHEL-400", "fields": {"labels": []}}]
+        if name == "check_cve_triage_eligibility":
+            return {"is_cve": True, "eligibility": "immediately", "reason": "tracked"}
+        raise AssertionError(f"unexpected tool {name}")
+
+    async def get_metadata(_issue_key, *, raise_on_error=False):
+        return [JiraLabels.WAITING_FOR_SIBLINGS.value], None
+
+    async def record(*args, **kwargs):
+        if kwargs.get("jira_issue"):
+            label_writes.append(kwargs)
+        return
+
+    class FakeRedis:
+        async def lpush(self, queue, payload):
+            pushed.append((queue, payload))
+
+    @asynccontextmanager
+    async def fake_redis_client(_url):
+        yield FakeRedis()
+
+    async def fake_fix_await(value):
+        return await value
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
+    monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
+    monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
+    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
+    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+
+    queued = await rebase_consolidation.queue_siblings_for_triage(
+        primary_issue="RHEL-100",
+        rebase_data=RebaseData(
+            package="bash", version="5.2", jira_issue="RHEL-100", fix_version="rhel-10.3.z"
+        ),
+        available_tools=[],
+        user_triggered=False,
+    )
+
+    assert queued == 1
+    sibling_marks = [
+        write for write in label_writes if JiraLabels.REBASE_SIBLING.value in write.get("labels_to_add", [])
+    ]
+    assert sibling_marks, "sibling marker label was never written"
+    # The stale waiting marker was removed by the shared clear_stale_waiting_marker.
+    removals = [
+        write
+        for write in label_writes
+        if write.get("labels_to_remove") == [JiraLabels.WAITING_FOR_SIBLINGS.value]
+        and not write.get("labels_to_add")
+    ]
+    assert removals, "stale waiting marker was never removed"
+
+
+@pytest.mark.asyncio
+async def test_active_waiting_group_is_not_queued_as_sibling(monkeypatch):
+    """A candidate whose own sibling group is active keeps its waiting marker.
+
+    Clearing the marker or queueing the candidate under a new primary would
+    strand its original group, so the candidate is left to its own
+    consolidation.
+    """
+    pushed = []
+    label_writes = []
+
+    async def run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            if 'labels = "ymir_rebase_sibling"' in kwargs["jql"]:
+                # The candidate's own group still has a queued sibling.
+                return [{"key": "RHEL-500", "fields": {"labels": [JiraLabels.REBASE_SIBLING.value]}}]
+            return [{"key": "RHEL-400", "fields": {"labels": []}}]
+        if name == "check_cve_triage_eligibility":
+            return {"is_cve": True, "eligibility": "immediately", "reason": "tracked"}
+        raise AssertionError(f"unexpected tool {name}")
+
+    async def get_metadata(_issue_key, *, raise_on_error=False):
+        return [JiraLabels.WAITING_FOR_SIBLINGS.value], None
+
+    async def record(*args, **kwargs):
+        if kwargs.get("jira_issue"):
+            label_writes.append(kwargs)
+        return
+
+    class FakeRedis:
+        async def lpush(self, queue, payload):
+            pushed.append((queue, payload))
+
+    @asynccontextmanager
+    async def fake_redis_client(_url):
+        yield FakeRedis()
+
+    async def fake_fix_await(value):
+        return await value
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
+    monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
+    monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
+    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
+    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+
+    queued = await rebase_consolidation.queue_siblings_for_triage(
+        primary_issue="RHEL-100",
+        rebase_data=RebaseData(
+            package="bash", version="5.2", jira_issue="RHEL-100", fix_version="rhel-10.3.z"
+        ),
+        available_tools=[],
+        user_triggered=False,
+    )
+
+    assert queued == 0
+    assert pushed == []
+    assert not [
+        write for write in label_writes if JiraLabels.REBASE_SIBLING.value in write.get("labels_to_add", [])
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reappeared_active_marker_rolls_back_sibling_queueing(monkeypatch):
+    """A waiting marker added after the metadata read must not nest the candidate.
+
+    Queueing the candidate as another primary's sibling while its own group is
+    active would defer its terminal label forever, so the sibling marker is
+    rolled back, no marker comment is posted, and nothing is enqueued.
+    """
+    pushed = []
+    label_writes = []
+    comments = []
+    metadata_reads = []
+
+    async def run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            if 'labels = "ymir_rebase_sibling"' in kwargs["jql"]:
+                return [{"key": "RHEL-500", "fields": {"labels": [JiraLabels.REBASE_SIBLING.value]}}]
+            return [{"key": "RHEL-400", "fields": {"labels": []}}]
+        if name == "check_cve_triage_eligibility":
+            return {"is_cve": True, "eligibility": "immediately", "reason": "tracked"}
+        raise AssertionError(f"unexpected tool {name}")
+
+    async def get_metadata(_issue_key, *, raise_on_error=False):
+        metadata_reads.append(raise_on_error)
+        if len(metadata_reads) == 1:
+            return [], None  # no waiting marker in the pre-write snapshot
+        # A concurrent run added an active marker between the read and the write.
+        return [JiraLabels.WAITING_FOR_SIBLINGS.value], None
+
+    async def record(*args, **kwargs):
+        if kwargs.get("jira_issue"):
+            if "comment_text" in kwargs:
+                comments.append(kwargs)
+            else:
+                label_writes.append(kwargs)
+        return
+
+    class FakeRedis:
+        async def lpush(self, queue, payload):
+            pushed.append((queue, payload))
+
+    @asynccontextmanager
+    async def fake_redis_client(_url):
+        yield FakeRedis()
+
+    async def fake_fix_await(value):
+        return await value
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
+    monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
+    monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
+    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
+    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+
+    queued = await rebase_consolidation.queue_siblings_for_triage(
+        primary_issue="RHEL-100",
+        rebase_data=RebaseData(
+            package="bash", version="5.2", jira_issue="RHEL-100", fix_version="rhel-10.3.z"
+        ),
+        available_tools=[],
+        user_triggered=False,
+    )
+
+    assert queued == 0
+    assert pushed == []
+    # No sibling relationship comment was posted on the candidate.
+    assert not [comment for comment in comments if comment.get("jira_issue") == "RHEL-400"]
+    # The sibling marker was rolled back.
+    rollbacks = [
+        write
+        for write in label_writes
+        if write.get("jira_issue") == "RHEL-400"
+        and JiraLabels.REBASE_SIBLING.value in write.get("labels_to_remove", [])
+    ]
+    assert rollbacks
+
+
+@pytest.mark.asyncio
+async def test_sibling_marker_write_failure_fails_the_run(monkeypatch):
+    """A failing sibling-marker write must retry the triage, not skip silently.
+
+    Skipping would let the primary rebase without the sibling and split a
+    shared rebase.
+    """
+    pushed = []
+
+    async def run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            return [{"key": "RHEL-400", "fields": {"labels": []}}]
+        if name == "check_cve_triage_eligibility":
+            return {"is_cve": True, "eligibility": "immediately", "reason": "tracked"}
+        raise AssertionError(f"unexpected tool {name}")
+
+    async def get_metadata(_issue_key, *, raise_on_error=False):
+        return [], None
+
+    async def failing_set_jira_labels(*_args, **_kwargs):
+        raise RuntimeError("Jira unavailable")
+
+    class FakeRedis:
+        async def lpush(self, queue, payload):
+            pushed.append((queue, payload))
+
+    @asynccontextmanager
+    async def fake_redis_client(_url):
+        yield FakeRedis()
+
+    async def fake_fix_await(value):
+        return await value
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
+    monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", failing_set_jira_labels)
+    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
+    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+
+    with pytest.raises(rebase_consolidation.SiblingLabelsUnreadableError):
+        await rebase_consolidation.queue_siblings_for_triage(
+            primary_issue="RHEL-100",
+            rebase_data=RebaseData(
+                package="bash", version="5.2", jira_issue="RHEL-100", fix_version="rhel-10.3.z"
+            ),
+            available_tools=[],
+            user_triggered=False,
+        )
+
+    assert pushed == []
+
+
+@pytest.mark.asyncio
+async def test_waiting_marker_readded_after_write_is_cleaned_up(monkeypatch):
+    """A waiting marker added after the metadata read is removed post-write.
+
+    The combined sibling-marker write only clears markers visible in the
+    earlier snapshot, so the resulting labels are verified and a marker that
+    reappeared (and is still stale) is cleaned up separately.
+    """
+    pushed = []
+    label_writes = []
+    metadata_reads = []
+
+    async def run_tool(name, **kwargs):
+        if name == "search_jira_issues":
+            return [{"key": "RHEL-400", "fields": {"labels": []}}]
+        if name == "check_cve_triage_eligibility":
+            return {"is_cve": True, "eligibility": "immediately", "reason": "tracked"}
+        raise AssertionError(f"unexpected tool {name}")
+
+    async def get_metadata(_issue_key, *, raise_on_error=False):
+        metadata_reads.append(raise_on_error)
+        if len(metadata_reads) == 1:
+            return [], None  # no waiting marker in the pre-write snapshot
+        # A concurrent run added the marker between the read and the write.
+        return [JiraLabels.WAITING_FOR_SIBLINGS.value], None
+
+    async def record(*args, **kwargs):
+        if kwargs.get("jira_issue"):
+            label_writes.append(kwargs)
+        return
+
+    class FakeRedis:
+        async def lpush(self, queue, payload):
+            pushed.append((queue, payload))
+
+    @asynccontextmanager
+    async def fake_redis_client(_url):
+        yield FakeRedis()
+
+    async def fake_fix_await(value):
+        return await value
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
+    monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
+    monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
+    monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
+    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
+    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+
+    queued = await rebase_consolidation.queue_siblings_for_triage(
+        primary_issue="RHEL-100",
+        rebase_data=RebaseData(
+            package="bash", version="5.2", jira_issue="RHEL-100", fix_version="rhel-10.3.z"
+        ),
+        available_tools=[],
+        user_triggered=False,
+    )
+
+    assert queued == 1
+    marker_writes = [
+        write for write in label_writes if JiraLabels.REBASE_SIBLING.value in write.get("labels_to_add", [])
+    ]
+    assert marker_writes
+    # The marker was not in the snapshot, so the sibling-marker write did not clear it.
+    assert all(not write.get("labels_to_remove") for write in marker_writes)
+    # The post-write verification removed the reappeared stale marker.
+    cleanup_writes = [
+        write
+        for write in label_writes
+        if write.get("labels_to_remove") == [JiraLabels.WAITING_FOR_SIBLINGS.value]
+        and not write.get("labels_to_add")
+    ]
+    assert cleanup_writes
+
+
+@pytest.mark.asyncio
 async def test_unreadable_sibling_labels_retry_instead_of_splitting_the_rebase(monkeypatch):
     """A sibling whose labels cannot be read must fail the discovery.
 
@@ -870,3 +1243,22 @@ async def test_unreadable_sibling_labels_retry_instead_of_splitting_the_rebase(m
 
     assert pushed == []
     assert read_kwargs == [{"raise_on_error": True}]
+
+
+def test_rebase_cluster_lock_key_mirrors_sibling_cluster_identity():
+    """The lock key must separate clusters exactly like the sibling JQL does."""
+    # Y-stream and Z-stream spellings of one release lock the same cluster,
+    # because the sibling discovery JQL matches both variants.
+    assert rebase_consolidation.rebase_cluster_lock_key("bash", "rhel-10.3") == "bash:rhel-10.3"
+    assert rebase_consolidation.rebase_cluster_lock_key("bash", "rhel-10.3.z") == "bash:rhel-10.3"
+    # Unparsable versions fall back to the raw spelling on both sides.
+    assert rebase_consolidation.rebase_cluster_lock_key("bash", "future") == "bash:future"
+    # Modular streams lock independently of each other.
+    assert (
+        rebase_consolidation.rebase_cluster_lock_key("postgis", "rhel-10.3.z", "postgresql:16/postgis")
+        == "postgresql:16/postgis/postgis:rhel-10.3"
+    )
+    assert (
+        rebase_consolidation.rebase_cluster_lock_key("postgis", "rhel-10.3", "postgresql:12/postgis")
+        == "postgresql:12/postgis/postgis:rhel-10.3"
+    )

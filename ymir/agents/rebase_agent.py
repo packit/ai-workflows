@@ -33,6 +33,7 @@ from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
     changelog_entry_headers,
     find_triaged_rebase_siblings,
+    get_rebase_primary_issue,
     has_new_latest_changelog_entry,
     uses_autochangelog,
 )
@@ -71,7 +72,7 @@ from ymir.common.models import (
     TitleInputSchema,
     TitleOutputSchema,
 )
-from ymir.common.utils import extract_text_from_adf, init_sentry
+from ymir.common.utils import init_sentry
 from ymir.common.version_utils import detect_modular_issue, parse_module_stream
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
@@ -314,17 +315,13 @@ async def run_workflow(
                     issue_key=state.jira_issue,
                     available_tools=gateway_tools,
                 )
-                comments = details.get("fields", {}).get("comment", {}).get("comments", [])
-                for comment in comments:
-                    # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
-                    comment_text = extract_text_from_adf(comment.get("body", ""))
-                    if "Queued for triage as potential sibling of" in comment_text:
-                        logger.info(
-                            f"Issue {state.jira_issue} is a sibling (found sibling comment). "
-                            "Siblings do not create their own MR - the primary will consolidate them. "
-                            "Exiting without processing."
-                        )
-                        return Workflow.END
+                if get_rebase_primary_issue(details) is not None:
+                    logger.info(
+                        f"Issue {state.jira_issue} is a sibling (found sibling comment). "
+                        "Siblings do not create their own MR - the primary will consolidate them. "
+                        "Exiting without processing."
+                    )
+                    return Workflow.END
             except Exception as e:
                 logger.warning(f"Failed to check if {state.jira_issue} is a sibling: {e}, proceeding")
             return "change_jira_status"

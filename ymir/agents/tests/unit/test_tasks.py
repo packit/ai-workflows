@@ -32,6 +32,7 @@ from ymir.agents.tasks import (
     fork_and_prepare_dist_git,
     get_jira_issue_metadata,
     needs_zstream_target_label,
+    parse_changelog_reference,
     post_user_ack_once,
     push_changes,
     request_mr_qe_reviews,
@@ -566,6 +567,79 @@ def test_canonical_changelog_title_replaces_only_new_entry(tmp_path):
     assert changelog[1].content == ["- Canonical title", "- Resolves: RHEL-1"]
 
 
+def test_canonical_changelog_title_does_not_overwrite_unparseable_reference(tmp_path):
+    class Entry:
+        def __init__(self, content):
+            self.content = content
+
+    class Changelog(list):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    changelog = Changelog([Entry(["- Previous title"]), Entry(["- Resolves: rhbz#12345"])])
+
+    class FakeSpecfile:
+        has_autochangelog = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def changelog(self):
+            return changelog
+
+    flexmock(agent_tasks).should_receive("find_spec").with_args(tmp_path, "curl").and_return(
+        "curl.spec"
+    ).once()
+    flexmock(agent_tasks).should_receive("Specfile").and_return(FakeSpecfile()).once()
+
+    with pytest.raises(RuntimeError, match="has no descriptive line"):
+        ensure_canonical_changelog_title(tmp_path, "curl", "Canonical title", expected_entry_count=1)
+
+    assert changelog[1].content == ["- Resolves: rhbz#12345"]
+
+
+def test_canonical_changelog_title_preserves_unparseable_tagged_continuation(tmp_path):
+    class Entry:
+        def __init__(self, content):
+            self.content = content
+
+    class Changelog(list):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    continuation = "  Related: rhbz#12345"
+    changelog = Changelog([Entry(["- Previous title"]), Entry(["- Old title", continuation])])
+
+    class FakeSpecfile:
+        has_autochangelog = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def changelog(self):
+            return changelog
+
+    flexmock(agent_tasks).should_receive("find_spec").with_args(tmp_path, "curl").and_return(
+        "curl.spec"
+    ).once()
+    flexmock(agent_tasks).should_receive("Specfile").and_return(FakeSpecfile()).once()
+    ensure_canonical_changelog_title(tmp_path, "curl", "Canonical title", expected_entry_count=1)
+
+    assert changelog[1].content == ["- Canonical title", continuation]
+
+
 @pytest.mark.parametrize(
     ("line", "suffix"),
     [
@@ -581,6 +655,41 @@ def test_extract_jira_suffix(line, suffix):
 @pytest.mark.parametrize("line", ["- Paraphrased title", "- Mentioned RHEL-1 in prose"])
 def test_extract_jira_suffix_requires_trailing_reference(line):
     assert _extract_jira_suffix(line) is None
+
+
+@pytest.mark.parametrize(
+    ("line", "delimiter"),
+    [
+        ("- Resolves: RHEL-1 - Fix the issue", " - "),
+        ("- Resolves: RHEL-1 -- Fix the issue", " -- "),
+        ("- Resolves: RHEL-1: Fix the issue", ": "),
+        ("- Resolves: RHEL-1; Fix the issue", "; "),
+    ],
+)
+def test_parse_changelog_reference_supports_inline_delimiters(line, delimiter):
+    reference = parse_changelog_reference(line)
+
+    assert reference is not None
+    assert reference.is_inline
+    assert reference.issues == ("RHEL-1",)
+    assert reference.delimiter == delimiter
+    assert reference.description == "Fix the issue"
+
+
+def test_parse_changelog_reference_supports_multiple_issue_separators():
+    reference = parse_changelog_reference("- Resolves: RHEL-1/RHEL-2 & RHEL-3 - Fix the issue")
+
+    assert reference is not None
+    assert reference.issues == ("RHEL-1", "RHEL-2", "RHEL-3")
+    assert reference.render(issues=["RHEL-10", "RHEL-20"]) == ("- Resolves: RHEL-10/RHEL-20 - Fix the issue")
+
+
+@pytest.mark.parametrize("line", ["- Resolves: RHEL-1", "- Resolves: RHEL-1 arbitrary prose"])
+def test_parse_changelog_reference_does_not_guess_unknown_inline_formats(line):
+    reference = parse_changelog_reference(line)
+
+    assert reference is not None
+    assert not reference.is_inline
 
 
 @pytest.mark.parametrize(
@@ -628,6 +737,132 @@ def test_canonical_changelog_title_preserves_jira_suffix(tmp_path):
     ensure_canonical_changelog_title(tmp_path, "curl", "Canonical title", expected_entry_count=1)
 
     assert changelog[1].content == ["- Canonical title (RHEL-1)"]
+
+
+def test_canonical_changelog_title_replaces_legacy_inline_reference(tmp_path):
+    class Entry:
+        def __init__(self, content):
+            self.content = content
+
+    class Changelog(list):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    changelog = Changelog([Entry(["- Previous title"]), Entry(["- Resolves: RHEL-999 - Old description"])])
+
+    class FakeSpecfile:
+        has_autochangelog = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def changelog(self):
+            return changelog
+
+    flexmock(agent_tasks).should_receive("find_spec").with_args(tmp_path, "curl").and_return(
+        "curl.spec"
+    ).once()
+    flexmock(agent_tasks).should_receive("Specfile").and_return(FakeSpecfile()).once()
+    ensure_canonical_changelog_title(
+        tmp_path,
+        "curl",
+        "Canonical title",
+        expected_entry_count=1,
+        jira_issues=["RHEL-1"],
+    )
+
+    assert changelog[1].content == ["- Resolves: RHEL-1 - Canonical title"]
+
+
+def test_canonical_changelog_title_escapes_inline_rpm_macro(tmp_path):
+    class Entry:
+        def __init__(self, content):
+            self.content = content
+
+    class Changelog(list):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    changelog = Changelog([Entry(["- Previous title"]), Entry(["- Resolves: RHEL-1 - Old description"])])
+
+    class FakeSpecfile:
+        has_autochangelog = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def changelog(self):
+            return changelog
+
+    flexmock(agent_tasks).should_receive("find_spec").with_args(tmp_path, "curl").and_return(
+        "curl.spec"
+    ).once()
+    flexmock(agent_tasks).should_receive("Specfile").and_return(FakeSpecfile()).once()
+    ensure_canonical_changelog_title(
+        tmp_path,
+        "curl",
+        "%{__python} --version",
+        expected_entry_count=1,
+        jira_issues=["RHEL-1"],
+    )
+
+    assert changelog[1].content == ["- Resolves: RHEL-1 - %%{__python} --version"]
+
+
+def test_canonical_changelog_title_preserves_indented_inline_details(tmp_path):
+    class Entry:
+        def __init__(self, content):
+            self.content = content
+
+    class Changelog(list):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    details = "  Additional explanatory detail"
+    changelog = Changelog(
+        [Entry(["- Previous title"]), Entry(["- Resolves: RHEL-1 - Old description", details])]
+    )
+
+    class FakeSpecfile:
+        has_autochangelog = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def changelog(self):
+            return changelog
+
+    flexmock(agent_tasks).should_receive("find_spec").with_args(tmp_path, "curl").and_return(
+        "curl.spec"
+    ).once()
+    flexmock(agent_tasks).should_receive("Specfile").and_return(FakeSpecfile()).once()
+    ensure_canonical_changelog_title(
+        tmp_path,
+        "curl",
+        "Canonical title",
+        expected_entry_count=1,
+        jira_issues=["RHEL-1"],
+    )
+
+    assert changelog[1].content == ["- Resolves: RHEL-1 - Canonical title", details]
 
 
 def test_canonical_changelog_title_rewrites_stale_jira_suffix(tmp_path):

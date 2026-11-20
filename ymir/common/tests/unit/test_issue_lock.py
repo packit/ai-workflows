@@ -11,6 +11,7 @@ from ymir.common.issue_lock import (
     extend_issue_lock,
     issue_lock,
     release_issue_lock,
+    waiting_issue_lock,
 )
 
 
@@ -308,3 +309,68 @@ class TestIssueLockContextManager:
             assert tok1 is not None
             assert tok2 is not None
             assert tok1 != tok2
+
+
+@pytest.mark.asyncio
+async def test_waiting_issue_lock_acquires_free_lock():
+    fake = FakeRedis()
+
+    async with waiting_issue_lock(fake, "bash:rhel-10.3.z", prefix="lock:cluster:") as acquired:
+        assert acquired is True
+        # Still held while inside the context.
+        assert await fake.get("lock:cluster:BASH:RHEL-10.3.Z") is not None
+
+    # Released on exit.
+    assert await fake.get("lock:cluster:BASH:RHEL-10.3.Z") is None
+
+
+@pytest.mark.asyncio
+async def test_waiting_issue_lock_fails_open_after_deadline():
+    fake = FakeRedis()
+    fake.inject("lock:cluster:BASH:RHEL-10.3.Z", "someone-else")
+
+    async with waiting_issue_lock(
+        fake,
+        "bash:rhel-10.3.z",
+        prefix="lock:cluster:",
+        max_wait_seconds=0,
+        poll_seconds=0.01,
+    ) as acquired:
+        assert acquired is False
+
+    # The foreign lock is untouched.
+    assert (
+        await fake.get("lock:cluster:BASH:RHEL-10.3.Z") == b"someone-else"
+        or (await fake.get("lock:cluster:BASH:RHEL-10.3.Z")) == "someone-else"
+    )
+
+
+@pytest.mark.asyncio
+async def test_waiting_issue_lock_fails_open_when_redis_unreachable():
+    class BrokenRedis:
+        async def set(self, *_args, **_kwargs):
+            raise ConnectionError("Redis down")
+
+    async with waiting_issue_lock(BrokenRedis(), "bash:rhel-10.3.z", prefix="lock:cluster:") as acquired:
+        assert acquired is False
+
+
+@pytest.mark.asyncio
+async def test_waiting_issue_lock_takes_over_released_lock():
+    fake = FakeRedis()
+    fake.inject("lock:cluster:BASH:RHEL-10.3.Z", "someone-else")
+
+    async def release_soon():
+        await asyncio.sleep(0.01)
+        del fake._store["lock:cluster:BASH:RHEL-10.3.Z"]
+
+    releaser = asyncio.create_task(release_soon())
+    async with waiting_issue_lock(
+        fake,
+        "bash:rhel-10.3.z",
+        prefix="lock:cluster:",
+        max_wait_seconds=5,
+        poll_seconds=0.001,
+    ) as acquired:
+        assert acquired is True
+    await releaser

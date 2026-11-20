@@ -218,6 +218,18 @@ flag → 3 retry attempts with exponential backoff. If all fail, primary remains
 **Timeout**: Sibling hangs → primary waits forever. No timeout implemented yet.
 Future: timeout (e.g., 24h) to force-queue primary.
 
+**Two primary clusters in the same component/fixVersion**: A rare, residual case —
+not a race between two primaries triaged at the same time (the primary decision is
+serialized by a per-cluster Redis lock, so concurrent triages of the same cluster
+cannot mark each other and one always ends up as the other's sibling). Two clusters
+can still form when, for example, a new bunch of issues comes in after a first bunch
+was already triaged into its own group. If this happens and the user is unhappy with
+the outcome, recovery is manual: remove all `ymir_*` labels from the affected issues
+and immediately re-run the pipeline with `ymir_todo` on the primary to keep. Its
+triage re-queues the demoted issues as its own siblings (the newest marker comment
+wins) and consolidates them — expect a single primary and a single merged MR at the
+end.
+
 ## Benefits
 
 - **Accurate consolidation**: Each sibling gets full triage (version check, CVE applicability)

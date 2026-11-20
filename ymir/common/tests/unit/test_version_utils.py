@@ -4,6 +4,7 @@ from flexmock import flexmock
 from ymir.common.version_utils import (
     detect_modular_issue,
     extract_downstream_package,
+    get_inherited_dependency_fix_version,
     get_maintenance_rhel_branch,
     is_modular,
     is_older_zstream,
@@ -327,3 +328,25 @@ class TestDetectModularIssue:
             )
             is True
         )
+
+
+@pytest.mark.parametrize(
+    ("fix_version", "rhel_config", "expected"),
+    [
+        # Current Y-stream inherits the previous minor's Z-stream.
+        ("rhel-9.10", {"current_y_streams": {"9": "rhel-9.10"}}, "rhel-9.9.z"),
+        ("rhel-10.3", {"current_y_streams": {"10": "rhel-10.3"}}, "rhel-10.2.z"),
+        # Z-streams only accept their own stream.
+        ("rhel-9.9.z", {"current_y_streams": {"9": "rhel-9.10"}}, None),
+        ("rhel-9.2.0.z", {"current_y_streams": {"9": "rhel-9.10"}}, None),
+        # A stale Y-stream (after GA) is a Z-stream.
+        ("rhel-9.9", {"current_y_streams": {"9": "rhel-9.10"}}, None),
+        # Minor 0 has no previous minor.
+        ("rhel-10.0", {"current_y_streams": {"10": "rhel-10.0"}}, None),
+        # Unparseable or empty input.
+        ("invalid", {}, None),
+        ("", {}, None),
+    ],
+)
+def test_get_inherited_dependency_fix_version(fix_version, rhel_config, expected):
+    assert get_inherited_dependency_fix_version(fix_version, rhel_config) == expected

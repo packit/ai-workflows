@@ -839,3 +839,25 @@ def test_error_list_entry_non_requeueable_when_task_missing():
     )
     assert entry.queue is None
     assert entry.task is None
+
+
+def test_clarification_needed_formatting_with_rebuild_cve_fields():
+    data = ClarificationNeededData(
+        findings="No dependency tracker with an accepted fixVersion was found",
+        additional_info_needed="A golang tracker whose fix is inherited into rhel-9.10",
+        jira_issue="RHEL-11111",
+        package="some-package",
+        cve_id="CVE-2025-12345",
+        fix_version="rhel-9.10",
+        dependency_component="golang",
+    )
+    result = TriageOutputSchema(resolution=Resolution.CLARIFICATION_NEEDED, data=data)
+
+    assert result.format_for_comment() == (
+        "*Resolution*: clarification-needed\n"
+        "*Findings*: No dependency tracker with an accepted fixVersion was found\n"
+        "*Additional info needed*: A golang tracker whose fix is inherited into rhel-9.10\n"
+        "*Package*: some-package\n"
+        "*Dependency Component*: golang"
+        f"{TRIAGE_DISCLAIMER}"
+    )

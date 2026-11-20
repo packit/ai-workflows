@@ -193,6 +193,23 @@ Clarification-needed resolution:
     }
 }
 ```
+Note: For a rebuild CVE where no usable dependency ticket could be found,
+also set `package`, `cve_id`, `fix_version` and `dependency_component` so the
+CVE applicability check can still run:
+```json
+{
+    "resolution": "clarification-needed",
+    "data": {
+        "findings": "No golang tracker with an accepted fixVersion was found for this CVE.",
+        "additional_info_needed": "A golang tracker whose fix is inherited into rhel-9.10.",
+        "jira_issue": "RHEL-12345",
+        "package": "some-package",
+        "cve_id": "CVE-1234-98765",
+        "fix_version": "rhel-9.10",
+        "dependency_component": "golang"
+    }
+}
+```
 
 Error resolution:
 ```json

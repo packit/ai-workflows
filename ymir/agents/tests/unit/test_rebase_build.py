@@ -179,14 +179,20 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(monkeypatch, 
     assert state.rebase_result.success is True
 
 
+@pytest.mark.parametrize(
+    "is_modular_issue,dist_git_branch",
+    [(True, "c10s"), (False, "rhel-8.10.0")],
+    ids=["modular", "rhel-8"],
+)
 @pytest.mark.asyncio
-async def test_modular_rebase_stays_on_copr_when_backend_is_konflux(monkeypatch):
-    """Modular rebases do not push a Konflux scratch ref; they call the Copr tool."""
+async def test_copr_rebase_when_backend_is_konflux(monkeypatch, is_modular_issue, dist_git_branch):
+    """Modular and RHEL 8 rebases do not push a Konflux scratch ref; they call the Copr tool."""
     package = "postgresql"
     fork_url = "https://fork.invalid/postgresql.git"
     update_branch = "rebase-update"
 
     monkeypatch.setenv("BUILD_BACKEND", "konflux")
+    monkeypatch.delenv("COPR_RHEL_MAJORS", raising=False)
 
     call_tool_args = []
 
@@ -234,7 +240,7 @@ async def test_modular_rebase_stays_on_copr_when_backend_is_konflux(monkeypatch)
     monkeypatch.setattr(rebase_agent.tasks, "commit_changes", lambda *_a, **_k: _async_value("deadbeef"))
 
     async def _mock_check_subprocess(*_args, **_kwargs):
-        raise AssertionError("modular Copr build must not prepare a Konflux git ref")
+        raise AssertionError("Copr build must not prepare a Konflux git ref")
 
     monkeypatch.setattr(rebase_agent, "check_subprocess", _mock_check_subprocess)
 
@@ -269,19 +275,20 @@ async def test_modular_rebase_stays_on_copr_when_backend_is_konflux(monkeypatch)
 
     await rebase_agent.run_workflow(
         package=package,
-        dist_git_branch="c10s",
+        dist_git_branch=dist_git_branch,
         version="16",
         jira_issue="RHEL-999",
         dry_run=True,
-        is_modular_issue=True,
-        module_stream="postgresql:16",
+        is_modular_issue=is_modular_issue,
+        module_stream="postgresql:16" if is_modular_issue else None,
     )
 
     assert len(completed) == 1
     assert push_calls == []
     assert len(call_tool_args) == 1
     _, build_kwargs = call_tool_args[0]
-    assert build_kwargs["arguments"]["module_stream"] == "postgresql:16"
+    assert build_kwargs["arguments"]["module_stream"] == ("postgresql:16" if is_modular_issue else None)
+    assert build_kwargs["arguments"]["dist_git_branch"] == dist_git_branch
     assert build_kwargs["arguments"]["git_url"] is None
     assert build_kwargs["arguments"]["revision"] is None
     assert completed[0].rebase_result.success is True

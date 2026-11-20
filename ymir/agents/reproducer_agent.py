@@ -69,7 +69,7 @@ from ymir.common.reproducer_lock import (
     try_acquire_reproducer_lock,
 )
 from ymir.common.utils import init_sentry
-from ymir.common.version_utils import construct_internal_branch_name, parse_rhel_version
+from ymir.common.version_utils import construct_internal_branch_name, is_older_zstream, parse_rhel_version
 from ymir.tools.privileged.jira import fetch_jira_issue_issuelinks
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.text import CreateTool, SearchTextTool, ViewTool
@@ -2029,6 +2029,15 @@ async def main() -> None:
                     f"already has labels: {terminal_ymir_labels}"
                 )
                 return
+
+            for version_hint in (input_data.fix_version, input_data.target_branch):
+                if version_hint and await is_older_zstream(version_hint):
+                    logger.info(
+                        "Skipping reproducer for %s — older z-stream (%s) not yet supported",
+                        input_data.jira_issue,
+                        version_hint,
+                    )
+                    return
 
             async def retry(
                 task,

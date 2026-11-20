@@ -16,10 +16,22 @@ from ymir.agents import backport_agent, tasks
 from ymir.common.models import BackportOutputSchema, BuildInputSchema, BuildOutputSchema, LogOutputSchema
 
 
-async def _run_from_build_step(monkeypatch, *, is_modular_issue, module_stream, backend=None):
+async def _run_from_build_step(
+    monkeypatch,
+    *,
+    is_modular_issue,
+    module_stream,
+    backend=None,
+    dist_git_branch="c10s",
+    copr_rhel_majors=None,
+):
     """Start the real workflow at commit_push_and_build and capture the BuildInputSchema used."""
     captured_build_inputs = []
     captured_tool_names = []
+    if copr_rhel_majors is None:
+        monkeypatch.delenv("COPR_RHEL_MAJORS", raising=False)
+    else:
+        monkeypatch.setenv("COPR_RHEL_MAJORS", copr_rhel_majors)
 
     async def _fake_run_build(*, build_input, tool_name="build_package", **_kwargs):
         captured_build_inputs.append(build_input)
@@ -75,7 +87,7 @@ async def _run_from_build_step(monkeypatch, *, is_modular_issue, module_stream, 
 
     await backport_agent.run_workflow(
         package="postgresql",
-        dist_git_branch="c10s",
+        dist_git_branch=dist_git_branch,
         upstream_patches=[],
         jira_issue="RHEL-999",
         cve_id=None,
@@ -134,3 +146,39 @@ async def test_modular_issue_stays_on_copr_when_backend_is_konflux(monkeypatch):
 
     assert build_input.module_stream == "postgresql:16"
     assert tool_name == "build_package_copr"
+
+
+@pytest.mark.parametrize(
+    "dist_git_branch,copr_rhel_majors,expected_tool",
+    [
+        ("rhel-8.10.0", None, "build_package_copr"),
+        ("rhel-8.10.0", "", "build_package"),
+        ("rhel-9.6.0", None, "build_package"),
+        ("rhel-9.6.0", "8,9", "build_package_copr"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_copr_rhel_majors_select_copr_when_backend_is_konflux(
+    monkeypatch, dist_git_branch, copr_rhel_majors, expected_tool
+):
+    """Branches whose RHEL major is listed in COPR_RHEL_MAJORS (default 8) build with Copr."""
+    fake_scratch_calls = []
+
+    @asynccontextmanager
+    async def _fake_scratch_build_branch(*args, **_kwargs):
+        fake_scratch_calls.append(args)
+        yield
+
+    flexmock(tasks).should_receive("scratch_build_branch").replace_with(_fake_scratch_build_branch)
+
+    _build_input, tool_name = await _run_from_build_step(
+        monkeypatch,
+        is_modular_issue=False,
+        module_stream=None,
+        backend="konflux",
+        dist_git_branch=dist_git_branch,
+        copr_rhel_majors=copr_rhel_majors,
+    )
+
+    assert tool_name == expected_tool
+    assert bool(fake_scratch_calls) is (expected_tool == "build_package")

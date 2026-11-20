@@ -20,7 +20,9 @@ from mcp.types import CallToolResult, TextContent
 from mcp.types import Tool as MCPToolInfo
 
 from ymir.agents import merge_request_agent
-from ymir.common.models import MergeRequestOutputSchema
+from ymir.agents.package_update_steps import build_mr_note
+from ymir.agents.triage_agent import _map_version_to_module_branch
+from ymir.common.models import BuildOutputSchema, MergeRequestOutputSchema
 
 
 def _konflux_build_tool(session):
@@ -284,6 +286,127 @@ async def test_build_failure_retries_via_registered_step(monkeypatch):
     assert state.build_error == "boom"
     assert len(deleted) == 1
     assert deleted[0][2].startswith("mr-source-branch-ymir-konflux-build-")
+
+
+def _modular_note(module_stream):
+    return build_mr_note(build_url=None, is_modular_issue=True, module_stream=module_stream)
+
+
+@pytest.mark.parametrize(
+    "dist_git_branch,copr_rhel_majors,description,module_stream",
+    [
+        ("rhel-8.10.0", None, "Resolves: RHEL-12345", None),
+        ("stream-squid-4-rhel-8.10.0", None, "Resolves: RHEL-12345", "squid:4"),
+        # Modular branches stay on Copr even when no major is forced onto it.
+        ("stream-squid-4-rhel-8.10.0", "", "Resolves: RHEL-12345", "squid:4"),
+        ("stream-postgresql-16-rhel-9.8.0", None, "Resolves: RHEL-12345", "postgresql:16"),
+        # The branch name alone would split a hyphenated stream wrongly.
+        (
+            "stream-rust-toolset-rhel-next-rhel-8.10.0",
+            None,
+            _modular_note("rust-toolset:rhel-next"),
+            "rust-toolset:rhel-next",
+        ),
+        # A recorded stream that does not match the branch is ignored.
+        ("stream-squid-4-rhel-8.10.0", None, _modular_note("squid:5"), "squid:4"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_mr_builds_with_copr_when_backend_is_konflux(
+    monkeypatch, dist_git_branch, copr_rhel_majors, description, module_stream
+):
+    """RHEL 8 and modular MRs build the SRPM with Copr, enable the branch's module
+    stream, and push no scratch ref."""
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+    monkeypatch.setenv("BUILD_BACKEND", "konflux")
+    if copr_rhel_majors is None:
+        monkeypatch.delenv("COPR_RHEL_MAJORS", raising=False)
+    else:
+        monkeypatch.setenv("COPR_RHEL_MAJORS", copr_rhel_majors)
+
+    @contextlib.asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    flexmock(merge_request_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    flexmock(merge_request_agent).should_receive("create_merge_request_agent").and_return(flexmock())
+    flexmock(merge_request_agent.tasks).should_receive("push_changes").never()
+    flexmock(merge_request_agent.tasks).should_receive("delete_remote_branch").never()
+
+    build_calls = []
+
+    async def _mock_run_build(**kwargs):
+        build_calls.append(kwargs)
+        return BuildOutputSchema(success=True, error=None)
+
+    monkeypatch.setattr(merge_request_agent, "run_build", _mock_run_build)
+
+    async def _mock_check_subprocess(*_args, **_kwargs):
+        raise AssertionError("Copr build must not prepare a Konflux git ref")
+
+    monkeypatch.setattr(merge_request_agent, "check_subprocess", _mock_check_subprocess)
+
+    run_workflow = Workflow.run
+    reached = []
+
+    def start_at_build(workflow, state, options=None):
+        if workflow.name == "MergeRequestWorkflow":
+            state.local_clone = Path("/git-repos/package")
+            state.fork_url = "https://fork.invalid/package.git"
+            state.update_branch = "mr-source-branch"
+            state.spec_name = "package.spec"
+            state.jira_issue = "RHEL-12345"
+            state.package = "package"
+            state.dist_git_branch = dist_git_branch
+            state.merge_request_description = description
+            state.mr_update_result = MergeRequestOutputSchema(
+                success=True,
+                status="Updated",
+                srpm_path=Path("/git-repos/package/package.src.rpm"),
+                files_to_git_add=None,
+                error=None,
+            )
+            workflow.set_start("run_build_agent")
+            workflow.steps["stage_changes"].handler = lambda _: (
+                reached.append("stage_changes") or Workflow.END
+            )
+            workflow.steps["comment_in_mr"].handler = lambda _: (
+                reached.append("comment_in_mr") or Workflow.END
+            )
+        return run_workflow(workflow, state, options)
+
+    monkeypatch.setattr(Workflow, "run", start_at_build)
+    await merge_request_agent.run_workflow("https://gitlab.invalid/pkg/-/merge_requests/1", dry_run=True)
+
+    assert reached == ["stage_changes"]
+    assert len(build_calls) == 1
+    assert build_calls[0]["tool_name"] == "build_package_copr"
+    build_input = build_calls[0]["build_input"]
+    assert build_input.dist_git_branch == dist_git_branch
+    assert build_input.module_stream == module_stream
+    assert build_input.git_url is None
+    assert build_input.revision is None
+
+
+@pytest.mark.parametrize(
+    "summary,component,module_stream",
+    [
+        ("CVE-2026-1 squid:4/squid: DoS", "squid", "squid:4"),
+        ("CVE-2026-2 rust-toolset:rhel-next/rust: bug", "rust", "rust-toolset:rhel-next"),
+        ("CVE-2026-3 ruby:3.1-beta/ruby: bug", "ruby", "ruby:3.1-beta"),
+    ],
+)
+def test_module_stream_round_trips_from_triage_branch_and_mr_note(summary, component, module_stream):
+    """The stream triage encodes in the branch is recovered exactly from a Ymir MR."""
+    branch = _map_version_to_module_branch("rhel-8.10.z", summary, component)
+    assert branch is not None
+    description = f"Resolves: RHEL-1\n\n{_modular_note(module_stream)}"
+    assert merge_request_agent._resolve_module_stream(description, branch) == module_stream
+
+
+def test_resolve_module_stream_non_modular_branch():
+    assert merge_request_agent._resolve_module_stream(_modular_note("squid:4"), "rhel-8.10.0") is None
+    assert merge_request_agent._resolve_module_stream("Resolves: RHEL-1", None) is None
 
 
 @pytest.mark.parametrize("failure", ["rev_parse", "stage", "commit", "branch", "push", "reset"])

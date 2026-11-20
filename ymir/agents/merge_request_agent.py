@@ -18,9 +18,10 @@ from beeai_framework.workflows import Workflow
 from pydantic import BaseModel, Field
 
 import ymir.agents.tasks as tasks
-from ymir.agents.build_agent import is_konflux_backend, run_build
+from ymir.agents.build_agent import build_tool_name, run_build, use_konflux_backend
 from ymir.agents.constants import I_AM_YMIR
 from ymir.agents.observability import setup_observability
+from ymir.agents.package_update_steps import parse_mr_note_module_stream
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.utils import (
     check_subprocess,
@@ -37,6 +38,7 @@ from ymir.common.models import (
     MergeRequestInputSchema,
     MergeRequestOutputSchema,
 )
+from ymir.common.version_utils import module_stream_matches_branch, parse_module_stream_from_branch
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool, RemoveTool
 from ymir.tools.unprivileged.text import (
@@ -50,6 +52,28 @@ from ymir.tools.unprivileged.text import (
 from ymir.tools.unprivileged.wicked_git import BuildSrpmTool, RunPackagePrepTool
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_module_stream(mr_description: str | None, dist_git_branch: str | None) -> str | None:
+    """``module:stream`` for an MR targeting a modular branch, or None.
+
+    MR updates carry no Jira summary. Ymir-created MRs record the exact
+    stream in their description; the branch name is only a fallback because
+    hyphens in module and stream names make it ambiguous.
+    """
+    if not dist_git_branch:
+        return None
+    noted = parse_mr_note_module_stream(mr_description)
+    if noted and module_stream_matches_branch(noted, dist_git_branch):
+        return noted
+    guessed = parse_module_stream_from_branch(dist_git_branch)
+    if guessed:
+        logger.warning(
+            "Module stream for %s not recorded in the MR description; guessed %s from the branch name",
+            dist_git_branch,
+            guessed,
+        )
+    return guessed
 
 
 def get_instructions() -> str:
@@ -292,8 +316,10 @@ async def run_workflow(
 
         async def run_build_agent(state):
             scratch_branch = None
+            module_stream = _resolve_module_stream(state.merge_request_description, state.dist_git_branch)
+            modular = module_stream is not None
             try:
-                if is_konflux_backend():
+                if use_konflux_backend(modular=modular, dist_git_branch=state.dist_git_branch):
                     try:
                         revision, scratch_branch = await _prepare_konflux_mr_ref(state)
                     except Exception as error:
@@ -316,11 +342,13 @@ async def run_workflow(
                         srpm_path=state.mr_update_result.srpm_path,
                         dist_git_branch=state.dist_git_branch,
                         jira_issue=state.jira_issue,
+                        module_stream=module_stream,
                     )
                 build_result = await run_build(
                     build_input=build_input,
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
+                    tool_name=build_tool_name(modular=modular, dist_git_branch=state.dist_git_branch),
                 )
             finally:
                 if scratch_branch:

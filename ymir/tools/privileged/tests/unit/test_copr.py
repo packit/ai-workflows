@@ -66,8 +66,8 @@ async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_
             "internal_repos_host": internal_repos_host,
         }
 
-    async def _get_exclusive_arches(*_):
-        return {exclusive_arch} if exclusive_arch else set()
+    async def _get_allowed_arches(*_):
+        return {exclusive_arch} if exclusive_arch else set(copr_tools.COPR_ARCHES)
 
     async def sleep(*_):
         # do not waste time
@@ -75,8 +75,8 @@ async def test_build_package(build_failure, build_timeout, exclusive_arch, dist_
 
     flexmock(copr_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
     flexmock(copr_tools).should_receive("load_rhel_config").replace_with(load_rhel_config).once()
-    flexmock(copr_tools.BuildPackageTool).should_receive("get_exclusive_arches").replace_with(
-        _get_exclusive_arches
+    flexmock(copr_tools.BuildPackageTool).should_receive("get_allowed_arches").replace_with(
+        _get_allowed_arches
     ).once()
     flexmock(asyncio).should_receive("sleep").replace_with(sleep)
 
@@ -202,16 +202,16 @@ async def test_build_package_enables_module_stream_in_buildroot(module_stream_al
             "internal_repos_host": internal_repos_host,
         }
 
-    async def _get_exclusive_arches(*_):
-        return set()
+    async def _get_allowed_arches(*_):
+        return set(copr_tools.COPR_ARCHES)
 
     async def sleep(*_):
         return
 
     flexmock(copr_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
     flexmock(copr_tools).should_receive("load_rhel_config").replace_with(load_rhel_config).once()
-    flexmock(copr_tools.BuildPackageTool).should_receive("get_exclusive_arches").replace_with(
-        _get_exclusive_arches
+    flexmock(copr_tools.BuildPackageTool).should_receive("get_allowed_arches").replace_with(
+        _get_allowed_arches
     ).once()
     flexmock(asyncio).should_receive("sleep").replace_with(sleep)
 
@@ -315,16 +315,16 @@ async def test_build_package_adds_appstream_repo_for_modular_build(appstream_rep
             "internal_repos_host": internal_repos_host,
         }
 
-    async def _get_exclusive_arches(*_):
-        return set()
+    async def _get_allowed_arches(*_):
+        return set(copr_tools.COPR_ARCHES)
 
     async def sleep(*_):
         return
 
     flexmock(copr_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket).once()
     flexmock(copr_tools).should_receive("load_rhel_config").replace_with(load_rhel_config).once()
-    flexmock(copr_tools.BuildPackageTool).should_receive("get_exclusive_arches").replace_with(
-        _get_exclusive_arches
+    flexmock(copr_tools.BuildPackageTool).should_receive("get_allowed_arches").replace_with(
+        _get_allowed_arches
     ).once()
     flexmock(asyncio).should_receive("sleep").replace_with(sleep)
 
@@ -404,6 +404,97 @@ def test_branch_to_buildroot(branch, rhel_config, expected):
 def test_branch_to_buildroot_requires_current_stream():
     with pytest.raises(ValueError, match="No current stream configured"):
         BuildPackageTool.branch_to_buildroot("c9s", {})
+
+
+@pytest.mark.parametrize(
+    ("exclusive_arches", "exclude_arches", "expected"),
+    [
+        (None, None, {"x86_64", "aarch64", "s390x", "ppc64le"}),
+        ([], [], {"x86_64", "aarch64", "s390x", "ppc64le"}),
+        ([], ["x86_64"], {"aarch64", "s390x", "ppc64le"}),
+        (["ppc64le"], [], {"ppc64le"}),
+        (["x86_64", "s390x"], ["x86_64"], {"s390x"}),
+        (["noarch", "riscv64"], [], set()),
+        ([], ["x86_64", "aarch64", "s390x", "ppc64le"], set()),
+    ],
+)
+@pytest.mark.asyncio
+async def test_get_allowed_arches(tmp_path, exclusive_arches, exclude_arches, expected):
+    """ExcludeArch is honored even without ExclusiveArch."""
+    srpm_path = tmp_path / "test.src.rpm"
+    srpm_path.touch()
+    header = {
+        copr_tools.rpm.RPMTAG_EXCLUSIVEARCH: exclusive_arches,
+        copr_tools.rpm.RPMTAG_EXCLUDEARCH: exclude_arches,
+    }
+    transaction = flexmock()
+    transaction.should_receive("setVSFlags").once()
+    transaction.should_receive("hdrFromFdno").and_return(header).once()
+    flexmock(copr_tools.rpm).should_receive("TransactionSet").and_return(transaction).once()
+
+    assert await BuildPackageTool.get_allowed_arches(srpm_path) == expected
+
+
+@pytest.mark.parametrize(
+    ("allowed", "expected_chroot"),
+    [
+        ({"aarch64", "s390x", "ppc64le"}, "custom-1-aarch64"),
+        ({"s390x", "ppc64le"}, "custom-1-s390x"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_build_package_skips_excluded_x86_64(allowed, expected_chroot):
+    """An SRPM excluding x86_64 builds on the next preferred allowed arch."""
+
+    async def init_kerberos_ticket():
+        return "jotnar-bot@EXAMPLE.COM"
+
+    async def load_rhel_config():
+        return {"current_y_streams": {"10": "rhel-10.2"}, "internal_repos_host": "http://example.com"}
+
+    async def _get_allowed_arches(*_):
+        return allowed
+
+    flexmock(copr_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket)
+    flexmock(copr_tools).should_receive("load_rhel_config").replace_with(load_rhel_config)
+    flexmock(copr_tools.BuildPackageTool).should_receive("get_allowed_arches").replace_with(
+        _get_allowed_arches
+    )
+    requested_chroots = []
+
+    def _add(*_args, **kwargs):
+        # Stop after the chroot is chosen; the rest of the flow is covered elsewhere.
+        requested_chroots.append(kwargs["chroots"])
+        raise RuntimeError("stop")
+
+    flexmock(ProjectProxy).should_receive("add").replace_with(_add).once()
+
+    with pytest.raises(ToolError):
+        await BuildPackageTool().run(
+            input={"srpm_path": "/tmp/test.src.rpm", "dist_git_branch": "c10s", "jira_issue": "RHEL-1"}
+        )
+    assert requested_chroots == [[expected_chroot]]
+
+
+@pytest.mark.asyncio
+async def test_build_package_fails_early_without_usable_arch():
+    async def init_kerberos_ticket():
+        return "jotnar-bot@EXAMPLE.COM"
+
+    async def _get_allowed_arches(*_):
+        return set()
+
+    flexmock(copr_tools).should_receive("init_kerberos_ticket").replace_with(init_kerberos_ticket)
+    flexmock(copr_tools.BuildPackageTool).should_receive("get_allowed_arches").replace_with(
+        _get_allowed_arches
+    )
+    flexmock(copr_tools).should_receive("load_rhel_config").never()
+    flexmock(ProjectProxy).should_receive("add").never()
+
+    with pytest.raises(ToolError, match="No Copr build architecture is usable"):
+        await BuildPackageTool().run(
+            input={"srpm_path": "/tmp/test.src.rpm", "dist_git_branch": "c10s", "jira_issue": "RHEL-1"}
+        )
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,9 @@
 apiVersion: v1
 data:
   BUILD_BACKEND: konflux
+  # Comma-separated RHEL major versions that always build with Copr, even when
+  # BUILD_BACKEND is konflux. Empty means every non-modular build uses Konflux.
+  COPR_RHEL_MAJORS: "8"
   MAX_RETRIES: "3"
   MAX_CONCURRENT_TASKS: "2"
   LOG_BUFFER_SIZE: "0"

@@ -235,7 +235,9 @@ consolidation use a shared `BuildWorkflow`. Its `execute_build` step calls
 and polls Copr; `BUILD_BACKEND=konflux` builds the pushed fork commit
 as a scratch Konflux PipelineRun. Modular packages are the exception: they
 always build with Copr, even when `BUILD_BACKEND=konflux`, because Konflux
-cannot enable a module stream. The gateway then also exposes Copr as
+cannot enable a module stream. Branches whose RHEL major is listed in the
+agents' `COPR_RHEL_MAJORS` (default `8`, so RHEL 8 builds use Copr) also build
+with Copr. The gateway then also exposes Copr as
 `build_package_copr`. The discovered spec filename is passed to
 Konflux when it differs from the package name. The generated SRPM determines
 which single architecture Konflux validates, preferring x86_64 when supported. See

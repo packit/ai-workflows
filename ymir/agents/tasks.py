@@ -1308,11 +1308,74 @@ def canonical_title_mentions_components(title: str, components: list[str]) -> bo
 _JIRA_KEY_PATTERN = r"RHEL-\d+"
 _JIRA_KEY_RE = re.compile(_JIRA_KEY_PATTERN, re.IGNORECASE)
 _JIRA_SUFFIX_KEYS = rf"{_JIRA_KEY_PATTERN}(?:\s*[,/&]\s*{_JIRA_KEY_PATTERN})*"
+_CHANGELOG_TAG_RE = re.compile(r"^\s*(?:[-*]\s*)?(?:Resolves|Related):", re.IGNORECASE)
+_CHANGELOG_REFERENCE_RE = re.compile(
+    rf"^(?P<prefix>\s*(?:[-*]\s*)?)(?P<tag>Resolves|Related):\s*"
+    rf"(?P<issues>{_JIRA_SUFFIX_KEYS})(?P<rest>.*)$",
+    re.IGNORECASE,
+)
 _JIRA_SUFFIX_RE = re.compile(
     rf"(?P<suffix>(?:\s+(?:\({_JIRA_SUFFIX_KEYS}\)|\[{_JIRA_SUFFIX_KEYS}\])|"
     rf"\s+-\s+{_JIRA_SUFFIX_KEYS}|:\s+{_JIRA_SUFFIX_KEYS}))\s*$",
     re.IGNORECASE,
 )
+
+
+@dataclass(frozen=True)
+class ChangelogReference:
+    """A Jira reference in a changelog footer or legacy inline entry."""
+
+    line: str
+    prefix: str
+    tag: str
+    issue_text: str
+    issues: tuple[str, ...]
+    delimiter: str | None = None
+    description: str | None = None
+
+    @property
+    def is_inline(self) -> bool:
+        return self.delimiter is not None
+
+    def render(self, description: str | None = None, issues: list[str] | None = None) -> str:
+        rendered_issues = issues or list(self.issues)
+        issue_text = rendered_issues[0]
+        separators = re.findall(r"\s*[,/&]\s*", self.issue_text)
+        for index, issue in enumerate(rendered_issues[1:]):
+            separator = separators[min(index, len(separators) - 1)] if separators else ", "
+            issue_text += separator + issue
+        result = f"{self.prefix}{self.tag}: {issue_text}"
+        if self.is_inline:
+            result += f"{self.delimiter}{self.description if description is None else description}"
+        return result
+
+
+def parse_changelog_reference(line: str) -> ChangelogReference | None:
+    """Parse standalone and legacy inline Jira references from a changelog line."""
+    match = _CHANGELOG_REFERENCE_RE.match(line)
+    if not match:
+        return None
+
+    rest = match.group("rest")
+    delimiter = next(
+        (candidate for candidate in (" -- ", " - ", ": ", "; ") if rest.startswith(candidate)),
+        None,
+    )
+    description = rest[len(delimiter) :] if delimiter else None
+    return ChangelogReference(
+        line=line,
+        prefix=match.group("prefix"),
+        tag=match.group("tag"),
+        issue_text=match.group("issues"),
+        issues=tuple(_JIRA_KEY_RE.findall(match.group("issues"))),
+        delimiter=delimiter,
+        description=description,
+    )
+
+
+def is_changelog_reference_line(line: str) -> bool:
+    """Return whether a line starts with a changelog Jira-reference tag."""
+    return _CHANGELOG_TAG_RE.match(line) is not None
 
 
 def _extract_jira_suffix(line: str) -> str | None:
@@ -1361,8 +1424,14 @@ def ensure_canonical_changelog_title(
                 )
             entry = changelog[-1]
             for index, line in enumerate(entry.content):
-                is_jira_reference = re.match(r"^\s*(?:[-*]\s*)?(?:Resolves|Related):", line, re.IGNORECASE)
-                if line.strip() and not is_jira_reference:
+                changelog_reference = parse_changelog_reference(line)
+                if changelog_reference and changelog_reference.is_inline:
+                    entry.content[index] = changelog_reference.render(
+                        escape_rpm_changelog_text(title),
+                        jira_issues,
+                    )
+                    return
+                if line.strip() and not is_changelog_reference_line(line):
                     jira_suffix = _extract_jira_suffix(line) or ""
                     entry.content[index] = f"- {escape_rpm_changelog_text(title)}"
                     if jira_suffix:
@@ -1371,10 +1440,8 @@ def ensure_canonical_changelog_title(
                         entry.content[index] += jira_suffix
                     while index + 1 < len(entry.content):
                         continuation = entry.content[index + 1]
-                        if not continuation.startswith((" ", "\t")) or re.match(
-                            r"^\s*(?:[-*]\s*)?(?:Resolves|Related):",
-                            continuation,
-                            re.IGNORECASE,
+                        if not continuation.startswith((" ", "\t")) or is_changelog_reference_line(
+                            continuation
                         ):
                             break
                         del entry.content[index + 1]

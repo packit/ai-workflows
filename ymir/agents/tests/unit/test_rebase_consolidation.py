@@ -59,6 +59,17 @@ def test_add_jira_tickets_to_latest_changelog_entry(tmp_path):
     )
 
 
+def test_add_jira_tickets_recognizes_unusual_separator_in_resolves_footer(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(
+        _spec("* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n- Resolves: RHEL-100 and RHEL-200\n")
+    )
+    original = spec.read_text()
+
+    assert not add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200"])
+    assert spec.read_text() == original
+
+
 def test_add_jira_tickets_recognizes_and_extends_suffix_references(tmp_path):
     spec = tmp_path / "package.spec"
     spec.write_text(
@@ -67,6 +78,16 @@ def test_add_jira_tickets_recognizes_and_extends_suffix_references(tmp_path):
 
     assert add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200", "RHEL-300"])
     assert spec.read_text().endswith("- Update package (RHEL-100/RHEL-200/RHEL-300)\n")
+
+
+def test_add_jira_tickets_recognizes_and_extends_inline_resolves_reference(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(
+        _spec("* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n- Resolves: RHEL-100 - Update package\n")
+    )
+
+    assert add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100", "RHEL-200"])
+    assert spec.read_text().endswith("- Resolves: RHEL-100, RHEL-200 - Update package\n")
 
 
 def test_add_jira_tickets_preserves_suffix_trailing_whitespace(tmp_path):
@@ -145,6 +166,16 @@ def test_add_jira_tickets_does_not_treat_prose_as_a_reference(tmp_path):
         "- Resolves: RHEL-100\n"
         "- Resolves: RHEL-200\n"
     )
+
+
+def test_add_jira_tickets_does_not_rewrite_related_prose_suffix(tmp_path):
+    spec = tmp_path / "package.spec"
+    spec.write_text(
+        _spec("* Mon Sep 14 2026 Ymir <ymir@example.com> - 1-1\n- Related: issue context (RHEL-200)\n")
+    )
+
+    assert add_jira_tickets_to_latest_changelog_entry(spec, ["RHEL-100"])
+    assert spec.read_text().endswith("- Related: issue context (RHEL-200)\n- Resolves: RHEL-100\n")
 
 
 def test_add_jira_tickets_preserves_star_bulleted_resolves_reference(tmp_path):

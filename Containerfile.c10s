@@ -35,6 +35,7 @@ RUN dnf -y install --allowerasing \
       rpmlint \
       tmt \
       autoconf \
+      autoconf-archive \
       automake \
       gettext-devel \
       libgcrypt-devel \
@@ -70,6 +71,14 @@ RUN dnf -y install --allowerasing \
       xmlto \
       ${EXTRA_PACKAGES} \
     && dnf clean all
+
+# Workaround: lujavrite.so fails to load via Python rpm bindings (RTLD_LOCAL
+# hides liblua symbols). Patch xmvn-generator.lua to degrade gracefully —
+# Java RPM generators become no-ops but spec parsing works.
+RUN if [ -f /usr/lib/rpm/lua/xmvn-generator.lua ]; then \
+      sed -i 's/^local lujavrite = require "lujavrite"/local ok, lujavrite = pcall(require, "lujavrite")\nif not ok then\n    local function noop() end\n    return { generate = noop, os_install_post = noop }\nend/' \
+        /usr/lib/rpm/lua/xmvn-generator.lua; \
+    fi
 
 COPY openinference-reasoning.patch /tmp
 COPY openinference-streaming.patch /tmp

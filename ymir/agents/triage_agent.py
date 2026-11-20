@@ -445,6 +445,14 @@ async def _enqueue_reproducer(redis, state, user_triggered: bool, gateway_tools)
             state.jira_issue,
         )
         return
+    for version_hint in (reproducer_input.fix_version, reproducer_input.target_branch):
+        if version_hint and await is_older_zstream(version_hint):
+            logger.info(
+                "Skipping reproducer enqueue for %s — older z-stream (%s) not yet supported",
+                state.jira_issue,
+                version_hint,
+            )
+            return
     if reproducer_input.package:
         try:
             config = await tasks.fetch_reproducer_config(reproducer_input.package, gateway_tools)

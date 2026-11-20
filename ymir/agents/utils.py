@@ -1,6 +1,5 @@
 import logging
 import os
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -11,10 +10,6 @@ from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel
 
 from ymir.common.base_utils import check_subprocess, run_subprocess  # noqa: F401 — re-exported
-from ymir.common.mock_repos import (
-    apply_zstream_override_from_env,
-    setup_mock_repos_from_env,
-)
 from ymir.common.utils import get_absolute_path, mcp_tools, run_tool  # noqa: F401 — re-exported
 
 logger = logging.getLogger(__name__)
@@ -187,38 +182,6 @@ def set_litellm_debug() -> None:
     from beeai_framework.adapters.litellm.utils import litellm_debug
 
     litellm_debug(True)
-
-
-def build_agent_factory_with_mock_repos(
-    agent_factory: Callable[[list, dict[str, Any] | None], Any], jira_issue: str
-) -> Callable[[list, dict[str, Any] | None], Any]:
-    """Prepare mock repos for the standalone agent path.
-
-    If ``MOCK_REPOS_DIR`` is set, prepares bare clones and writes
-    ``insteadOf`` rewrites to both the shared ``.mock_gitconfig`` and a
-    per-issue file.  The agent container picks up the shared file via
-    ``include.path`` in its global gitconfig; the MCP gateway uses the
-    per-issue file scoped through ``_meta`` (see ``_get_mock_git_env``
-    in ``ymir/tools/privileged/gitlab.py``).
-
-    Args:
-        agent_factory: The original agent factory callable
-            (e.g. ``create_triage_agent``).
-        jira_issue: The Jira issue key (e.g. ``RHEL-15216``).
-
-    Returns:
-        The original factory unchanged (mock repos are visible through
-        gitconfig files, no per-tool env injection needed).
-    """
-    apply_zstream_override_from_env()
-
-    git_env = setup_mock_repos_from_env(jira_issue)
-    if git_env is None:
-        return agent_factory
-
-    logger.info("Mock repos configured for %s via MOCK_REPOS_DIR", jira_issue)
-
-    return agent_factory
 
 
 def wrap_details(summary: str, body: str) -> str:

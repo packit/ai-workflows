@@ -83,7 +83,8 @@ async def load_rhel_config() -> dict[str, Any]:
 
     The file path is read from the ``RHEL_CONFIG_PATH`` environment variable,
     falling back to ``rhel-config.json`` in the current working directory.
-    Optional fixture overrides are merged recursively: dictionaries retain
+    A task-local override takes precedence over permitted MCP metadata.
+    Only the selected override is merged with the file: dictionaries retain
     unspecified entries, while lists and scalar values are replaced.
 
     Returns:
@@ -91,7 +92,8 @@ async def load_rhel_config() -> dict[str, Any]:
 
     Raises:
         FileNotFoundError: If the config file does not exist.
-        ValueError: If the config file contains invalid JSON.
+        ValueError: If the config file contains invalid JSON, or the selected
+            MCP metadata override is not a JSON object.
     """
     config_file = os.environ.get("RHEL_CONFIG_PATH", "rhel-config.json")
 

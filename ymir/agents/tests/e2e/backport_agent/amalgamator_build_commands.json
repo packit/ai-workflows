@@ -1,0 +1,23 @@
+{
+  "_comment": "Per-issue build/test commands for Amalgamator's verification (eval-only; the PR passes none). They run at the upstream repo root and build out of tree under /tmp/amalbuild/<hash of cwd>, so build products never enter the patch. nginx has none: the patched regex-capture code only compiles with PCRE1, which EL10 does not ship, so a build would not exercise the fix.",
+  "RHEL-112546": {
+    "build": "B=/tmp/amalbuild/$(pwd | md5sum | cut -c1-12); cmake -S . -B \"$B\" -Dtiff-docs=OFF >/dev/null && cmake --build \"$B\" -j8",
+    "test": "B=/tmp/amalbuild/$(pwd | md5sum | cut -c1-12); cmake -S . -B \"$B\" -Dtiff-docs=OFF >/dev/null && cmake --build \"$B\" -j8 && ctest --test-dir \"$B\" -j8 --output-on-failure"
+  },
+  "RHEL-114618": {
+    "build": "B=/tmp/amalbuild/$(pwd | md5sum | cut -c1-12); rm -rf \"$B\" && mkdir -p \"$B\" && cp -a expat/. \"$B\"/ && cd \"$B\" && ./buildconf.sh >/dev/null 2>&1 && ./configure --without-docbook >/dev/null && make -j8 -C lib >/dev/null && make -j8 -C xmlwf >/dev/null",
+    "test": "B=/tmp/amalbuild/$(pwd | md5sum | cut -c1-12); rm -rf \"$B\" && mkdir -p \"$B\" && cp -a expat/. \"$B\"/ && cd \"$B\" && ./buildconf.sh >/dev/null 2>&1 && ./configure --without-docbook >/dev/null && make -j8 -C lib >/dev/null && make -j8 -C xmlwf >/dev/null && make -j8 -C tests check"
+  },
+  "RHEL-114643": {
+    "build": "B=/tmp/amalbuild/$(pwd | md5sum | cut -c1-12); rm -rf \"$B\" && mkdir -p \"$B\" && cp -a expat/. \"$B\"/ && cd \"$B\" && ./buildconf.sh >/dev/null 2>&1 && ./configure --without-docbook >/dev/null && make -j8 -C lib >/dev/null && make -j8 -C xmlwf >/dev/null",
+    "test": "B=/tmp/amalbuild/$(pwd | md5sum | cut -c1-12); rm -rf \"$B\" && mkdir -p \"$B\" && cp -a expat/. \"$B\"/ && cd \"$B\" && ./buildconf.sh >/dev/null 2>&1 && ./configure --without-docbook >/dev/null && make -j8 -C lib >/dev/null && make -j8 -C xmlwf >/dev/null && make -j8 -C tests check"
+  },
+  "RHEL-177992": {
+    "build": "B=/tmp/amalbuild/$(pwd | md5sum | cut -c1-12); cmake -S expat -B \"$B\" -DEXPAT_BUILD_DOCS=OFF >/dev/null && cmake --build \"$B\" -j8",
+    "test": "B=/tmp/amalbuild/$(pwd | md5sum | cut -c1-12); cmake -S expat -B \"$B\" -DEXPAT_BUILD_DOCS=OFF >/dev/null && cmake --build \"$B\" -j8 && ctest --test-dir \"$B\" -j8 --output-on-failure"
+  },
+  "RHEL-179083": {
+    "build": "B=/tmp/amalbuild/$(pwd | md5sum | cut -c1-12); S=$PWD; ./autogen.sh >/dev/null 2>&1; mkdir -p \"$B\" && cd \"$B\" && \"$S/configure\" -q --enable-sasl --enable-sasl-pwdb && make -j8",
+    "test": ""
+  }
+}

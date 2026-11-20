@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from specfile.utils import EVR
 
+import ymir.agents.backport_agent as backport_module
 from ymir.agents import tasks as agent_tasks
 from ymir.agents.backport_agent import (
     BackportState,
@@ -30,7 +31,7 @@ from ymir.common.mock_repos import (
     load_all_fixture_configs,
     setup_mock_repos,
 )
-from ymir.common.models import ShippedZStreamCandidate
+from ymir.common.models import BuildOutputSchema, ShippedZStreamCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +238,16 @@ def _load_reference_patch(test_case: "BackportAgentTestCase") -> str | None:
     return None
 
 
+async def _skip_build(*, build_input, available_tools, local_tool_options, tool_name="build_package"):
+    """Stand-in for ``run_build`` when BACKPORT_E2E_SKIP_BUILD=true.
+
+    Opt-in for evaluations where Copr is unavailable: the workflow's own build
+    step is skipped and the resulting SRPMs are built locally afterwards.
+    """
+    logger.info("Skipping build of %s (BACKPORT_E2E_SKIP_BUILD)", build_input.srpm_path)
+    return BuildOutputSchema(success=True, error=None, build_url=None)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def run_test_cases_concurrently(request, mock_centos_stream_repos, observability_fixture):
     """Execute selected backport test cases concurrently via asyncio.gather, then collect metrics.
@@ -269,6 +280,10 @@ def run_test_cases_concurrently(request, mock_centos_stream_repos, observability
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr(agent_tasks, "get_latest_candidate_build", _fixed_or_live_candidate)
         monkeypatch.setattr(agent_tasks, "get_latest_z_pending_build", _fixed_or_live_z_pending)
+        if os.getenv("BACKPORT_E2E_SKIP_BUILD", "").lower() == "true":
+            # Copr-free runs: skip the workflow's build step, build the SRPMs
+            # locally afterwards. Off by default so normal e2e runs still build.
+            monkeypatch.setattr(backport_module, "run_build", _skip_build)
         asyncio.run(_run_all())
 
     yield

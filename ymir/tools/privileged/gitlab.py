@@ -1974,21 +1974,6 @@ class SearchGitlabProjectMrsTool(
         search = tool_input.search
         state = tool_input.state
 
-        encoded_project = quote(project, safe="")
-        url = f"https://gitlab.com/api/v4/projects/{encoded_project}/merge_requests"
-
-        params: dict[str, str] = {}
-        if search:
-            params["search"] = search
-        if state is not None:
-            params["state"] = state
-        if tool_input.label:
-            params["labels"] = tool_input.label
-        if tool_input.exclude_drafts:
-            params["wip"] = "no"
-
-        headers = _get_auth_headers(f"https://gitlab.com/{project}")
-
         logger.info("Searching MRs for %s in %s (state=%s)", search, project, state)
 
         with tool_error_context(

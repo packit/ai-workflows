@@ -400,7 +400,10 @@ async def run_mr_testing_analyst(
                     await _mark_mr_analyzed(state.mr_url, gateway_tools, state.dry_run)
                 state.result = MrTestingAnalystResult(
                     analyzed=False,
-                    summary=f"No `Resolves: RHEL-XXXXX` line found in the commits or description of {state.mr_url}.",
+                    summary=(
+                        "No `Resolves: RHEL-XXXXX` line found in the commits or "
+                        f"description of {state.mr_url}."
+                    ),
                 )
                 return Workflow.END
 

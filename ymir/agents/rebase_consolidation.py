@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field, model_validator
 from specfile import Specfile
 
 import ymir.agents.tasks as tasks
-from ymir.agents.constants import RESOLVES_FOOTER_RE
 from ymir.agents.utils import (
     run_tool,
 )
@@ -158,19 +157,21 @@ def add_jira_tickets_to_latest_changelog_entry(
             return False
 
         entry = changelog[-1]
-        reference_lines = [
-            reference_match for line in entry.content if (reference_match := RESOLVES_FOOTER_RE.match(line))
+        references = [
+            reference for line in entry.content if (reference := tasks.parse_changelog_reference(line))
+        ]
+        resolves_references = [
+            reference for reference in references if reference.tag.casefold() == "resolves"
         ]
         suffix_lines = [
             (index, suffix)
             for index, line in enumerate(entry.content)
-            if not re.match(r"^\s*(?:[-*]\s*)?(?:Resolves|Related):", line, re.IGNORECASE)
-            and (suffix := tasks._extract_jira_suffix(line))
+            if not tasks.is_changelog_reference_line(line) and (suffix := tasks._extract_jira_suffix(line))
         ]
         existing_issues = {
             issue.upper()
-            for reference_line in reference_lines
-            for issue in re.findall(r"\bRHEL-\d+\b", reference_line.group("value"), re.IGNORECASE)
+            for reference in resolves_references
+            for issue in re.findall(r"\bRHEL-\d+\b", reference.line, re.IGNORECASE)
         }
         existing_issues.update(
             issue.upper()
@@ -182,6 +183,17 @@ def add_jira_tickets_to_latest_changelog_entry(
         ]
         if not missing_issues:
             return False
+
+        inline_references = [reference for reference in resolves_references if reference.is_inline]
+        if inline_references:
+            reference = inline_references[0]
+            index = next(
+                index
+                for index, line in enumerate(entry.content)
+                if tasks.parse_changelog_reference(line) == reference
+            )
+            entry.content[index] = reference.render(issues=[*reference.issues, *missing_issues])
+            return True
 
         if suffix_lines:
             index, suffix = suffix_lines[0]
@@ -196,8 +208,8 @@ def add_jira_tickets_to_latest_changelog_entry(
             )
             return True
 
-        reference_prefix = reference_lines[0].group("prefix") if reference_lines else "- "
-        reference_tag = reference_lines[0].group("tag") if reference_lines else "Resolves"
+        reference_prefix = resolves_references[0].prefix if resolves_references else "- "
+        reference_tag = resolves_references[0].tag if resolves_references else "Resolves"
         entry.content.extend(f"{reference_prefix}{reference_tag}: {issue}" for issue in missing_issues)
         return True
 

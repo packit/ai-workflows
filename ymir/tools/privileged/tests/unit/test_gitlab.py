@@ -1975,7 +1975,11 @@ async def test_get_merge_request_commit_messages():
         .with_args(123)
         .and_return(
             flexmock(
-                _raw_pr=flexmock().should_receive("commits").with_args(get_all=True).and_return(commits).mock()
+                _raw_pr=flexmock()
+                .should_receive("commits")
+                .with_args(get_all=True)
+                .and_return(commits)
+                .mock()
             )
         )
         .mock()

@@ -769,7 +769,9 @@ async def main() -> None:
     max_retries = int(os.getenv("MAX_RETRIES", 3))
     queue = RedisQueues.MR_TESTING_QUEUE.value
     async with redis_client(os.environ["REDIS_URL"]) as redis:
-        redis_logger.info(f"Connected to Redis, max retries set to {max_retries}, listening to queue: {queue}")
+        redis_logger.info(
+            f"Connected to Redis, max retries set to {max_retries}, listening to queue: {queue}"
+        )
 
         async def push_error(details: str, task: Task | None = None) -> None:
             error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))

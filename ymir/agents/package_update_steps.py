@@ -1,4 +1,5 @@
 import logging
+import re
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -72,6 +73,15 @@ def build_mr_note(
                 "Please verify the MR and build result manually."
             )
     return "\n\n".join(parts)
+
+
+_MR_NOTE_MODULE_STREAM_RE = re.compile(r"module stream `([^`\s:]+:[^`\s]+)` enabled")
+
+
+def parse_mr_note_module_stream(description: str | None) -> str | None:
+    """Return the exact ``module:stream`` recorded by build_mr_note, if present."""
+    match = _MR_NOTE_MODULE_STREAM_RE.search(description or "")
+    return match.group(1) if match else None
 
 
 class PackageUpdateStep:

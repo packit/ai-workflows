@@ -3,7 +3,7 @@
 Local Compose and production OpenShift deployments use Konflux (`kflux-rhel-p01`)
 by default. Set `BUILD_BACKEND=copr` to use Copr instead. Modular packages stay on Copr either way: Konflux cannot enable a module stream, and there is no separate override.
 When the backend is Konflux, the gateway also registers Copr as
-`build_package_copr` and modular builds call that tool. This document covers
+`build_package_copr` and modular builds call that tool. Branches whose RHEL major is listed in the agents' `COPR_RHEL_MAJORS` (comma-separated, default `8`; empty disables it) also build with Copr. This document covers
 the extra configuration that backend needs and how its service-account token
 is rotated.
 

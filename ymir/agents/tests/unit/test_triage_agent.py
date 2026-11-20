@@ -1878,6 +1878,82 @@ async def test_is_rebase_sibling_runs_own_fix_after_primary_deferred(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_stale_link_clears_own_waiting_marker(monkeypatch):
+    """A run released from a finished primary must not defer on its own stale marker.
+
+    The issue's ymir_rebase_waiting_for_siblings cannot be released by its group
+    anymore (the primary is finished), so it is cleared and recorded: the label
+    captured at task start must not defer the terminal label or the rebase
+    dispatch of the run that now acts as its own primary.
+    """
+    label_writes = []
+
+    async def fake_run_tool(name, **kwargs):
+        if kwargs["issue_key"] == "RHEL-200":
+            return {
+                "fields": {
+                    "labels": [JiraLabels.WAITING_FOR_SIBLINGS.value],
+                    "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
+                }
+            }
+        assert kwargs["issue_key"] == "RHEL-100"
+        return {"fields": {"status": {"name": "New"}, "labels": [JiraLabels.REBASED.value]}}
+
+    async def fake_set_jira_labels(**kwargs):
+        label_writes.append(kwargs)
+
+    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(rebase_consolidation, "run_tool", fake_run_tool)
+    monkeypatch.setattr(agent_tasks, "set_jira_labels", fake_set_jira_labels)
+
+    state = TriageState(jira_issue="RHEL-200")
+    state.rebase_waiting_for_siblings = True
+    assert await _is_rebase_sibling(state, [], user_triggered=False) is False
+    assert state.waiting_marker_cleared is True
+    assert state.rebase_waiting_for_siblings is False
+    assert label_writes == [
+        {
+            "jira_issue": "RHEL-200",
+            "labels_to_remove": [JiraLabels.WAITING_FOR_SIBLINGS.value],
+            "dry_run": False,
+            "user_triggered": False,
+            "critical": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stale_link_keeps_deferral_when_cleanup_fails(monkeypatch):
+    """If the stale marker cannot be removed, the run keeps the deferral behavior."""
+
+    async def fake_run_tool(name, **kwargs):
+        if kwargs["issue_key"] == "RHEL-200":
+            return {
+                "fields": {
+                    "labels": [JiraLabels.WAITING_FOR_SIBLINGS.value],
+                    "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
+                }
+            }
+        assert kwargs["issue_key"] == "RHEL-100"
+        return {"fields": {"status": {"name": "New"}, "labels": [JiraLabels.REBASED.value]}}
+
+    async def failing_set_jira_labels(**_kwargs):
+        raise RuntimeError("Jira unavailable")
+
+    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
+    monkeypatch.setattr(rebase_consolidation, "run_tool", fake_run_tool)
+    monkeypatch.setattr(agent_tasks, "set_jira_labels", failing_set_jira_labels)
+
+    state = TriageState(jira_issue="RHEL-200")
+    state.rebase_waiting_for_siblings = True
+    assert await _is_rebase_sibling(state, [], user_triggered=False) is False
+    assert state.waiting_marker_cleared is False
+    # The in-memory wait stays untouched: the terminal label must keep deferring
+    # on the marker that could not be removed.
+    assert state.rebase_waiting_for_siblings is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("user_triggered", "expects_raise"), [(True, True), (False, False)])
 async def test_is_rebase_sibling_unknown_primary_state(monkeypatch, user_triggered, expects_raise):
     """An unreadable primary keeps an automatic run deferring but fails an explicit one.

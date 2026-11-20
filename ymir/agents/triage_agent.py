@@ -254,7 +254,7 @@ def _should_defer_terminal_label(
     return resolution == Resolution.REBASE and waiting_for_siblings and not triage_only
 
 
-async def _is_rebase_sibling(state, available_tools, user_triggered: bool) -> bool:
+async def _is_rebase_sibling(state, available_tools, user_triggered: bool, dry_run: bool = False) -> bool:
     """Whether this issue is a sibling whose primary still awaits it.
 
     The sibling marker is a permanent Jira comment (plus a label), so a link to a
@@ -298,6 +298,27 @@ async def _is_rebase_sibling(state, available_tools, user_triggered: bool) -> bo
         logger.info(
             f"Ignoring stale sibling link on {state.jira_issue}: primary {primary_issue} already finished"
         )
+        # The primary is finished, so this issue's own waiting marker (captured
+        # in the labels above) cannot be released by anyone anymore. Clear it
+        # now and record that, so the terminal label is written and the rebase
+        # is dispatched instead of the run deferring on a permanently stale
+        # marker and leaving the issue parked non-terminal.
+        if JiraLabels.WAITING_FOR_SIBLINGS.value in labels and not dry_run:
+            try:
+                await tasks.set_jira_labels(
+                    jira_issue=state.jira_issue,
+                    labels_to_remove=[JiraLabels.WAITING_FOR_SIBLINGS.value],
+                    dry_run=False,
+                    user_triggered=user_triggered,
+                    critical=True,
+                )
+                state.waiting_marker_cleared = True
+                state.rebase_waiting_for_siblings = False
+            except Exception as e:
+                logger.warning(
+                    f"Failed to clear stale waiting marker on {state.jira_issue}: {e}; "
+                    "the terminal label may be deferred"
+                )
         return False
     return True
 
@@ -638,6 +659,14 @@ class TriageState(BaseModel):
         default=False,
         description=(
             "Set to True when siblings are queued and this issue should wait for them to finish triaging."
+        ),
+    )
+    waiting_marker_cleared: bool = Field(
+        default=False,
+        description=(
+            "Set to True when a stale sibling link was ignored and this issue's own "
+            "ymir_rebase_waiting_for_siblings was removed: the marker captured at task "
+            "start must no longer defer the terminal label or the rebase dispatch."
         ),
     )
     is_rebase_sibling: bool = False
@@ -1604,7 +1633,9 @@ async def run_workflow(
             # Siblings must not search for their own siblings (prevents circular
             # dependencies). The marker is permanent, so re-check it every run: once
             # the primary has finished, this issue must run its own fix.
-            state.is_rebase_sibling = await _is_rebase_sibling(state, gateway_tools, user_triggered)
+            state.is_rebase_sibling = await _is_rebase_sibling(
+                state, gateway_tools, user_triggered, dry_run=dry_run
+            )
             if state.is_rebase_sibling:
                 logger.info(f"Issue {state.jira_issue} is a sibling, skipping consolidation")
                 state.rebase_waiting_for_siblings = False
@@ -2210,9 +2241,9 @@ async def main() -> None:
                         # A full run waiting for siblings is re-triaged when they
                         # finish, so its terminal label is added then. A triage-only
                         # run ends the wait here instead of leaving it dangling.
-                        waiting_for_siblings = (
-                            state.rebase_waiting_for_siblings
-                            or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                        waiting_for_siblings = state.rebase_waiting_for_siblings or (
+                            JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                            and not state.waiting_marker_cleared
                         )
                         if _should_defer_terminal_label(
                             output.resolution, state.triage_only, waiting_for_siblings
@@ -2387,9 +2418,9 @@ async def main() -> None:
                                 # Skip queueing if issue is waiting for siblings to finish triaging.
                                 # Check both state flag (set mid-workflow) and
                                 # Jira label (persisted across restarts).
-                                elif (
-                                    state.rebase_waiting_for_siblings
-                                    or JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                                elif state.rebase_waiting_for_siblings or (
+                                    JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
+                                    and not state.waiting_marker_cleared
                                 ):
                                     logger.info(
                                         f"Issue {input.issue} is waiting for siblings to finish triaging, "

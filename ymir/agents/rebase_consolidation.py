@@ -29,6 +29,39 @@ from ymir.common.version_utils import get_fix_version_variants
 logger = logging.getLogger(__name__)
 
 
+# Prefix of the permanent comment that marks an issue as a rebase sibling of
+# a primary. Posted when the candidate is queued and matched everywhere the
+# relationship is detected, so the writer and the readers cannot diverge.
+SIBLING_MARKER_PREFIX = "Queued for triage as potential sibling of"
+
+
+def build_sibling_marker_comment(primary_issue: str) -> str:
+    """The marker comment posted on a candidate queued as a sibling."""
+    return (
+        f"{SIBLING_MARKER_PREFIX} {primary_issue}. "
+        "If triage confirms this issue needs a rebase to the same version, "
+        f"it will be rebased together with {primary_issue} after all "
+        "siblings have been triaged. "
+        f"The shared MR will be linked to {primary_issue}."
+    )
+
+
+def comment_marks_sibling_of(body: str, primary_issue: str) -> bool:
+    """Whether a comment body is a sibling marker naming ``primary_issue``."""
+    _, marker, reference = body.partition(SIBLING_MARKER_PREFIX)
+    # Jira may turn the issue key into an ADF inlineCard or HTML smartlink.
+    return bool(marker) and bool(re.search(rf"\b{re.escape(primary_issue)}\b", reference))
+
+
+def is_marked_sibling_of(details: dict, primary_issue: str) -> bool:
+    """Whether any comment on the issue marks it as a sibling of ``primary_issue``."""
+    comments = details.get("fields", {}).get("comment", {}).get("comments", [])
+    return any(
+        comment_marks_sibling_of(extract_text_from_adf(comment.get("body", "")), primary_issue)
+        for comment in comments
+    )
+
+
 def get_rebase_primary_issue(details: dict) -> str | None:
     """Read the primary issue from the most recent sibling marker comment.
 
@@ -40,7 +73,7 @@ def get_rebase_primary_issue(details: dict) -> str | None:
     comments = details.get("fields", {}).get("comment", {}).get("comments", [])
     for comment in reversed(comments):
         body = extract_text_from_adf(comment.get("body", ""))
-        _, marker, reference = body.partition("Queued for triage as potential sibling of")
+        _, marker, reference = body.partition(SIBLING_MARKER_PREFIX)
         # Jira may turn the issue key into an ADF inlineCard or HTML smartlink.
         if marker and (match := re.search(r"\bRHEL-\d+\b", reference)):
             return match.group(0)
@@ -308,6 +341,148 @@ class SiblingLabelsUnreadableError(Exception):
     """Raised when a sibling's labels cannot be read, so discovery is incomplete."""
 
 
+async def _pending_rebase_siblings(
+    primary_issue: str,
+    component: str | None,
+    fix_version: str | None,
+    downstream_component: str | None,
+    available_tools: list[Tool],
+) -> list[str]:
+    """Siblings of ``primary_issue`` that are still pending (queued or triaging).
+
+    Shared by the sibling-completion readiness check and the queueing path:
+    a waiting marker on an issue whose own group still has pending siblings is
+    an active wait, not stale state.
+
+    Raises when the search fails, mirroring the fail-closed behavior of the
+    label reads: an undeterminable group must not be treated as finished.
+    """
+    if not component or not fix_version:
+        raise RuntimeError(f"{primary_issue} missing component or fix_version")
+
+    jql = build_rebase_siblings_jql(
+        issue_key=primary_issue,
+        component=component,
+        fix_version=fix_version,
+        downstream_component=downstream_component,
+    )
+    terminal_labels = [
+        # Triage decisions
+        JiraLabels.TRIAGED_REBASE.value,
+        JiraLabels.TRIAGED_BACKPORT.value,
+        JiraLabels.TRIAGED_REBUILD.value,
+        *JiraLabels.deferred_triage_labels(),
+        JiraLabels.TRIAGED_NOT_AFFECTED.value,
+        JiraLabels.TRIAGED_POSTPONED.value,
+        # Completions
+        JiraLabels.BACKPORTED.value,
+        JiraLabels.REBASED.value,
+        JiraLabels.REBUILT.value,
+        # Errors (won't proceed even if retriable)
+        JiraLabels.TRIAGE_ERRORED.value,
+        JiraLabels.BACKPORT_ERRORED.value,
+        JiraLabels.REBASE_ERRORED.value,
+        JiraLabels.REBUILD_ERRORED.value,
+        # Failures (won't proceed)
+        JiraLabels.BACKPORT_FAILED.value,
+        JiraLabels.REBASE_FAILED.value,
+        JiraLabels.REBUILD_FAILED.value,
+    ]
+    excluded = ", ".join(f'"{label}"' for label in terminal_labels)
+    # Find siblings that are pending (have sibling/in-progress label) AND not terminal
+    jql_pending = (
+        f'{jql} AND (labels = "{JiraLabels.REBASE_SIBLING.value}" '
+        f'OR labels = "{JiraLabels.TRIAGE_IN_PROGRESS.value}") '
+        f"AND labels not in ({excluded})"
+    )
+
+    pending_siblings = await run_tool(
+        "search_jira_issues",
+        available_tools=available_tools,
+        jql=jql_pending,
+        fields=["key", "labels", "comment"],
+        max_results=50,
+    )
+
+    # Filter to only siblings of THIS primary (verify via comment)
+    actual_siblings = []
+    for candidate in pending_siblings:
+        candidate_key = candidate.get("key", "")
+        # If it has ymir_rebase_sibling, it's definitely a sibling (not started yet)
+        candidate_labels = candidate.get("fields", {}).get("labels", [])
+        if JiraLabels.REBASE_SIBLING.value in candidate_labels:
+            actual_siblings.append(candidate_key)
+            continue
+        # If it has ymir_triage_in_progress, check if it's a sibling of THIS primary
+        if JiraLabels.TRIAGE_IN_PROGRESS.value in candidate_labels and is_marked_sibling_of(
+            candidate, primary_issue
+        ):
+            actual_siblings.append(candidate_key)
+    return actual_siblings
+
+
+async def clear_stale_waiting_marker(
+    jira_issue: str,
+    component: str | None,
+    fix_version: str | None,
+    downstream_component: str | None,
+    available_tools: list[Tool],
+    user_triggered: bool = False,
+) -> bool:
+    """Remove the issue's own waiting marker when no pending sibling is left.
+
+    A waiting marker is stale when the issue's rebase group has no pending
+    siblings: nobody would release it anymore, and keeping it defers the
+    terminal label of whatever run picks the issue up next. An active group
+    keeps the marker - its completion path still needs it.
+
+    Single decision point for every removal of a candidate's waiting marker,
+    used both before queueing the candidate as a sibling and to verify the
+    labels afterwards (a concurrent run may re-add the marker at any time).
+    Removing a label that is not present is a no-op, so callers never need
+    to test for it first.
+
+    Returns:
+        True when no marker is present or it was removed.
+        False when the group is still active (marker left in place).
+
+    Raises:
+        SiblingLabelsUnreadableError: when the labels or the group state
+            cannot be read; guessing "stale" would risk stranding an active
+            group, so the caller must retry instead.
+    """
+    try:
+        labels, _ = await tasks.get_jira_issue_metadata(jira_issue, raise_on_error=True)
+        if JiraLabels.WAITING_FOR_SIBLINGS.value not in labels:
+            return True
+        pending = await _pending_rebase_siblings(
+            primary_issue=jira_issue,
+            component=component,
+            fix_version=fix_version,
+            downstream_component=downstream_component,
+            available_tools=available_tools,
+        )
+    except SiblingLabelsUnreadableError:
+        raise
+    except Exception as e:
+        raise SiblingLabelsUnreadableError(jira_issue) from e
+    if pending:
+        logger.info(
+            f"{jira_issue} still waits on its own pending sibling(s) "
+            f"{', '.join(pending)} - keeping its waiting marker"
+        )
+        return False
+    await tasks.set_jira_labels(
+        jira_issue=jira_issue,
+        labels_to_remove=[JiraLabels.WAITING_FOR_SIBLINGS.value],
+        dry_run=False,
+        user_triggered=user_triggered,
+        critical=True,
+    )
+    logger.info(f"Cleared stale waiting marker from {jira_issue}")
+    return True
+
+
 async def queue_siblings_for_triage(
     primary_issue: str,
     rebase_data: RebaseData,
@@ -424,17 +599,69 @@ async def queue_siblings_for_triage(
             if not dry_run:
                 # Add label BEFORE queueing so the sibling sees it when it starts processing
                 # This prevents the sibling from treating itself as a primary
+                #
+                # A candidate carrying its own ymir_rebase_waiting_for_siblings must
+                # drop it when stale: the leftover marker would defer the sibling's
+                # terminal label forever and the primary would re-queue it in a loop.
+                # A marker whose own group is still active, however, is a genuine
+                # wait: clearing it would strand that group, so the candidate is
+                # left to its own consolidation instead of being queued here.
+                if JiraLabels.WAITING_FOR_SIBLINGS.value in candidate_labels and not (
+                    await clear_stale_waiting_marker(
+                        jira_issue=candidate_key,
+                        component=rebase_data.package,
+                        fix_version=rebase_data.fix_version,
+                        downstream_component=downstream_component,
+                        available_tools=available_tools,
+                        user_triggered=user_triggered,
+                    )
+                ):
+                    continue
                 try:
                     await tasks.set_jira_labels(
                         jira_issue=candidate_key,
                         labels_to_add=[JiraLabels.REBASE_SIBLING.value],
                         dry_run=False,
                         user_triggered=user_triggered,
+                        critical=True,  # The marker is load-bearing; retry and raise
                     )
                 except Exception as e:
-                    logger.warning(f"Failed to label sibling {candidate_key}: {e}")
-                    # If we can't label it, don't queue it (would be treated as primary)
-                    continue
+                    # A silent skip would let the primary rebase without this
+                    # sibling and split a shared rebase, so fail the run instead.
+                    raise SiblingLabelsUnreadableError(candidate_key) from e
+
+                # A waiting marker may have been (re-)added by a concurrent run
+                # after the cleanup above. Run the same check again: a marker
+                # that is still stale is removed, while an active one means the
+                # candidate must not be queued into two groups at once - roll
+                # back the sibling marker and leave it to its own group.
+                try:
+                    if not await clear_stale_waiting_marker(
+                        jira_issue=candidate_key,
+                        component=rebase_data.package,
+                        fix_version=rebase_data.fix_version,
+                        downstream_component=downstream_component,
+                        available_tools=available_tools,
+                        user_triggered=user_triggered,
+                    ):
+                        logger.warning(
+                            f"Sibling {candidate_key} regained an active waiting marker "
+                            "- rolling back the sibling marker"
+                        )
+                        try:
+                            await tasks.set_jira_labels(
+                                jira_issue=candidate_key,
+                                labels_to_remove=[JiraLabels.REBASE_SIBLING.value],
+                                dry_run=False,
+                                user_triggered=user_triggered,
+                            )
+                        except Exception as rollback_error:
+                            logger.warning(
+                                f"Failed to rollback sibling label for {candidate_key}: {rollback_error}"
+                            )
+                        continue
+                except Exception as e:
+                    logger.warning(f"Could not verify waiting-marker cleanup on {candidate_key}: {e}")
 
                 # Post comment BEFORE queueing (fallback detection if label not visible yet)
                 # This comment is CRITICAL - it's how we detect sibling status and find the primary
@@ -442,13 +669,7 @@ async def queue_siblings_for_triage(
                     await tasks.comment_in_jira(
                         jira_issue=candidate_key,
                         agent_type="Triage",
-                        comment_text=(
-                            f"Queued for triage as potential sibling of {primary_issue}. "
-                            "If triage confirms this issue needs a rebase to the same version, "
-                            f"it will be rebased together with {primary_issue} after all "
-                            "siblings have been triaged. "
-                            f"The shared MR will be linked to {primary_issue}."
-                        ),
+                        comment_text=build_sibling_marker_comment(primary_issue),
                         available_tools=available_tools,
                         is_error=False,
                         user_triggered=user_triggered,
@@ -517,7 +738,6 @@ async def queue_siblings_for_triage(
 
         # Post comment on primary with links to siblings
         try:
-            # Format sibling links
             sibling_links = ", ".join(queued_siblings)
             comment_text = (
                 f"Waiting for {queued_count} sibling(s) to finish triaging before starting rebase:\n"
@@ -567,7 +787,7 @@ async def check_and_queue_primary_if_ready(
             issue_key=sibling_issue,
         )
 
-        # Look for comment matching "Queued for triage as potential sibling of {primary}"
+        # Look for a sibling marker comment naming this primary (SIBLING_MARKER_PREFIX)
         primary_issue = get_rebase_primary_issue(sibling_details)
 
         if not primary_issue:
@@ -596,88 +816,16 @@ async def check_and_queue_primary_if_ready(
         fix_version = fix_versions[0].get("name") if fix_versions else None
         downstream_component = fields.get("customfield_10669")
 
-        if not component or not fix_version:
-            logger.warning(
-                f"Primary {primary_issue} missing component or fix_version, cannot check for pending siblings"
-            )
-            return
-
-        # Find siblings that are still pending (not finished processing).
-        # build_rebase_siblings_jql() excludes terminal triage states but NOT ymir_rebase_sibling,
-        # so queued-but-not-started siblings will be found (critical for correct readiness check).
-        jql = build_rebase_siblings_jql(
-            issue_key=primary_issue,
+        # A sibling is "pending" (blocks the primary) if it has NOT finished processing:
+        # ymir_rebase_sibling (queued but not started) or ymir_triage_in_progress,
+        # without any terminal triage/completion/error label.
+        actual_siblings = await _pending_rebase_siblings(
+            primary_issue=primary_issue,
             component=component,
             fix_version=fix_version,
             downstream_component=downstream_component,
-        )
-
-        # A sibling is "pending" (blocks the primary) if it has NOT finished processing.
-        # Pending states:
-        #   - ymir_rebase_sibling (queued but not started)
-        #   - ymir_triage_in_progress (currently being triaged)
-        #
-        # Terminal states (sibling is done, won't block primary):
-        #   - Any ymir_triaged_* label (triage complete, decision made)
-        #   - Any completion label (backported/rebased/rebuilt)
-        #   - Any error/failed label (won't proceed, even if retriable later)
-        sibling_label = JiraLabels.REBASE_SIBLING.value
-        in_progress_label = JiraLabels.TRIAGE_IN_PROGRESS.value
-        terminal_labels = [
-            # Triage decisions
-            JiraLabels.TRIAGED_REBASE.value,
-            JiraLabels.TRIAGED_BACKPORT.value,
-            JiraLabels.TRIAGED_REBUILD.value,
-            *JiraLabels.deferred_triage_labels(),
-            JiraLabels.TRIAGED_NOT_AFFECTED.value,
-            JiraLabels.TRIAGED_POSTPONED.value,
-            # Completions
-            JiraLabels.BACKPORTED.value,
-            JiraLabels.REBASED.value,
-            JiraLabels.REBUILT.value,
-            # Errors (won't proceed even if retriable)
-            JiraLabels.TRIAGE_ERRORED.value,
-            JiraLabels.BACKPORT_ERRORED.value,
-            JiraLabels.REBASE_ERRORED.value,
-            JiraLabels.REBUILD_ERRORED.value,
-            # Failures (won't proceed)
-            JiraLabels.BACKPORT_FAILED.value,
-            JiraLabels.REBASE_FAILED.value,
-            JiraLabels.REBUILD_FAILED.value,
-        ]
-        excluded = ", ".join(f'"{label}"' for label in terminal_labels)
-        # Find siblings that are pending (have sibling/in-progress label) AND not terminal
-        jql_pending = (
-            f'{jql} AND (labels = "{sibling_label}" OR labels = "{in_progress_label}") '
-            f"AND labels not in ({excluded})"
-        )
-
-        pending_siblings = await run_tool(
-            "search_jira_issues",
             available_tools=available_tools,
-            jql=jql_pending,
-            fields=["key", "labels", "comment"],
-            max_results=50,  # Get all potential siblings to verify
         )
-
-        # Filter to only siblings of THIS primary (verify via comment)
-        actual_siblings = []
-        for candidate in pending_siblings:
-            candidate_key = candidate.get("key", "")
-            # If it has ymir_rebase_sibling, it's definitely a sibling (not started yet)
-            candidate_labels = candidate.get("fields", {}).get("labels", [])
-            if JiraLabels.REBASE_SIBLING.value in candidate_labels:
-                actual_siblings.append(candidate_key)
-                continue
-            # If it has ymir_triage_in_progress, check if it's a sibling of THIS primary
-            if JiraLabels.TRIAGE_IN_PROGRESS.value in candidate_labels:
-                comments = candidate.get("fields", {}).get("comment", {}).get("comments", [])
-                for comment in comments:
-                    # Extract text from ADF comment body (MCP returns ADF JSON, not plain text)
-                    body = extract_text_from_adf(comment.get("body", ""))
-                    if "Queued for triage as potential sibling of" in body and primary_issue in body:
-                        actual_siblings.append(candidate_key)
-                        break
 
         if actual_siblings:
             logger.info(
@@ -823,13 +971,7 @@ async def find_triaged_rebase_siblings(
                     issue_key=candidate_key,
                 )
 
-                comments = candidate_details.get("fields", {}).get("comment", {}).get("comments", [])
-                has_primary_reference = any(
-                    "Queued for triage as potential sibling of"
-                    in (body := extract_text_from_adf(comment.get("body", "")))
-                    and re.search(rf"\b{re.escape(jira_issue)}\b", body)
-                    for comment in comments
-                )
+                has_primary_reference = is_marked_sibling_of(candidate_details, jira_issue)
                 if has_primary_reference:
                     logger.info(f"Sibling {candidate_key} confirmed as sibling of {jira_issue}")
                     consolidated_issue = ConsolidatedIssue(

@@ -47,17 +47,23 @@ from ymir.tools.privileged.gitlab import (
     GetAuthorizedCommentsFromMergeRequestTool,
     GetFailedPipelineJobsFromMergeRequestTool,
     GetInternalRhelBranchesTool,
+    GetMergeRequestCommitMessagesTool,
     GetMergeRequestDetailsTool,
+    GetMergeRequestDiscussionsTool,
     GetPatchFromUrlTool,
+    GetPipelineJobTraceTool,
     GetRemoteBranchHeadTool,
     ListProjectMergeRequestsTool,
     OpenMergeRequestTool,
     PushToRemoteRepositoryTool,
+    RemoveMergeRequestLabelsTool,
+    ResolveMergeRequestDiscussionTool,
     ResolveQeReviewersTool,
     ResolveReviewersTool,
     RetryPipelineJobTool,
     SearchGitlabProjectMrsTool,
     SetMergeRequestReviewersTool,
+    UpdateMergeRequestCommentTool,
 )
 from ymir.tools.privileged.jira import (
     AddJiraAttachmentsTool,
@@ -86,6 +92,14 @@ from ymir.tools.privileged.lookaside import (
     UploadSourcesTool,
 )
 from ymir.tools.privileged.maintainer_rules import MaintainerRulesTool
+from ymir.tools.privileged.mr_testing import (
+    ExtractTfRequestFromJobTraceTool,
+    FoldMrCommentBodyTool,
+    FormatMrTestingCommentTool,
+    ParseMrTestResultsTool,
+    ParseNewaMrCommentTool,
+    ParseOsciResultsCommentTool,
+)
 from ymir.tools.privileged.shared_rules import SharedRulesTool
 from ymir.tools.privileged.testing_farm import (
     CancelTestingFarmRequestTool,
@@ -169,7 +183,9 @@ async def _async_main():
             CreateZstreamBranchTool(options=tool_options),
             AddBlockingMergeRequestCommentTool(options=tool_options),
             AddMergeRequestCommentTool(options=tool_options),
+            UpdateMergeRequestCommentTool(options=tool_options),
             AddMergeRequestLabelsTool(options=tool_options),
+            RemoveMergeRequestLabelsTool(options=tool_options),
             CloneRepositoryTool(options=tool_options),
             FetchBranchTool(options=tool_options),
             FetchCommitTool(options=tool_options),
@@ -177,7 +193,11 @@ async def _async_main():
             GetAuthorizedCommentsFromMergeRequestTool(options=tool_options),
             GetFailedPipelineJobsFromMergeRequestTool(options=tool_options),
             GetInternalRhelBranchesTool(options=tool_options),
+            GetMergeRequestCommitMessagesTool(options=tool_options),
             GetMergeRequestDetailsTool(options=tool_options),
+            GetMergeRequestDiscussionsTool(options=tool_options),
+            ResolveMergeRequestDiscussionTool(options=tool_options),
+            GetPipelineJobTraceTool(options=tool_options),
             GetPatchFromUrlTool(options=tool_options),
             GetRemoteBranchHeadTool(options=tool_options),
             ListProjectMergeRequestsTool(options=tool_options),
@@ -230,6 +250,12 @@ async def _async_main():
             UploadSourcesTool(options=tool_options),
             ZStreamSearchTool(options=tool_options),
             MaintainerRulesTool(options=tool_options),
+            ParseMrTestResultsTool(options=tool_options),
+            ParseNewaMrCommentTool(options=tool_options),
+            ParseOsciResultsCommentTool(options=tool_options),
+            ExtractTfRequestFromJobTraceTool(options=tool_options),
+            FormatMrTestingCommentTool(options=tool_options),
+            FoldMrCommentBodyTool(options=tool_options),
             SharedRulesTool(options=tool_options),
             *log_detective_tools,
         ]

@@ -1226,6 +1226,22 @@ class FailedPipelineJob(BaseModel):
     )
 
 
+class MergeRequestDiscussion(BaseModel):
+    """Represents one GitLab merge request discussion thread, including its
+    resolvable/resolved state -- unlike MergeRequestComment, which flattens
+    discussions into plain notes and drops that state entirely. Used to find
+    and resolve the OSCI bot's own pipeline results thread in gating mode."""
+
+    discussion_id: str = Field(description="Discussion ID")
+    resolvable: bool | None = Field(
+        default=None, description="Whether this discussion can be resolved (has a 'Resolve thread' button)"
+    )
+    resolved: bool | None = Field(default=None, description="Whether this discussion is currently resolved")
+    author: str | None = Field(default=None, description="Username of the discussion's first note author")
+    created_at: str | None = Field(default=None, description="Creation timestamp of the first note")
+    body: str | None = Field(default=None, description="Body text of the discussion's first note")
+
+
 class CommentReply(BaseModel):
     """Represents a reply comment in a discussion thread."""
 
@@ -1258,6 +1274,12 @@ class MergeRequestComment(BaseModel):
         "or empty for general comments",
     )
     discussion_id: str = Field(default="", description="Discussion/thread ID this comment belongs to")
+    note_id: int | None = Field(
+        default=None,
+        description="The first note's own numeric GitLab note ID -- distinct from discussion_id, and "
+        "the only value accepted by update_merge_request_comment's note_id parameter. None if the "
+        "underlying note data didn't include one.",
+    )
     replies: list[CommentReply] = Field(
         default_factory=list,
         description="List of replies to this comment in the thread, ordered chronologically",

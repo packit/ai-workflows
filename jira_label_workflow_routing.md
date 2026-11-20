@@ -131,6 +131,7 @@ terminal label is still retried.
 | `ymir_consolidate_base` | Mark a backport MR for consolidation (base) | Paired with `ymir_consolidate_next` on another issue for the same package/branch. The fetcher matches the pair, submits a targeted consolidation job, removes both labels, and posts comments. |
 | `ymir_consolidate_next` | Mark a backport MR for consolidation (next) | Must be on a different issue than `ymir_consolidate_base`, for the same package/branch. |
 | `ymir_cli_triage` | Usage-tracking marker for CLI runs | Set at the start of a user-triggered CLI triage run. Prevents the fetcher from picking up the same issue in parallel. Persists on success as a usage-tracking marker; removed on failure so the fetcher can re-process the issue. Covered by the fetcher's stale-label recovery (IN_FLIGHT_LABELS) to handle SIGKILL/OOM. |
+| `ymir_todo_reproducer` | Maintainer-facing trigger for a reproducer-only re-run | Same author verification as `ymir_todo`. The fetcher builds the reproducer task from Jira fields, pushes it to `reproducer_queue_todo` with `user_triggered=True`, then removes the label. Modular issues and issues without a Downstream Component Name are skipped and the label removed. An authorized `ymir_todo` or `ymir_todo_triage` wins and its flip consumes this label too. Details in [reproducer_architecture.md](docs/reproducer_architecture.md#reproducer-only-re-run-ymir_todo_reproducer). |
 
 ### GitLab MR Labels
 
@@ -162,7 +163,7 @@ These labels are applied to GitLab merge requests (not Jira issues):
 | `error_list` | Output | Any error | `ymir_*_errored` | Active |
 | `open_ended_analysis_list` | Output | Resolution=OPEN_ENDED_ANALYSIS | `ymir_triaged` | Active (AUTO_CHAIN only) |
 | `reproducer_queue` | Input | Triage auto-enqueue (`TRIAGE_ENQUEUE_REPRODUCER`) or `make trigger-reproducer` | `ymir_reproducer_in_progress` → terminal `ymir_reproducer_*` | Active when auto-enqueue enabled |
-| `reproducer_queue_todo` | Input (priority) | Same when `user_triggered` / `USER_TRIGGERED=true` | Same as `reproducer_queue` | Active when auto-enqueue enabled |
+| `reproducer_queue_todo` | Input (priority) | Same when `user_triggered` / `USER_TRIGGERED=true`, or `ymir_todo_reproducer` added by an RH employee | Same as `reproducer_queue` | Active when auto-enqueue enabled |
 | `reproducer_queue_delayed` | Delayed (ZSET) | Retryable TF infra (`retryable_error`) | Keeps `ymir_reproducer_in_progress` until retry completes | Active |
 | `completed_rebase_list` | Output | Rebase success | `ymir_rebased` | Active |
 | `completed_backport_list` | Output | Backport success | `ymir_backported` | Active |
@@ -224,7 +225,7 @@ Ground rules:
 - **`user_triggered=True`** (set on the task when the issue carried `ymir_todo` or `ymir_todo_triage`) enables an immediate private ack comment, normal result comments, and `_failed` labels. Error comments do not depend on this flag — they are posted once after retries are exhausted.
 - **Labels that are state, not notification, are always written.** `ymir_triage_in_progress` at the start of triage, terminal `ymir_*_errored` / `ymir_triaged_*` at the end. Suppressing them would break dedup against the next fetcher sweep.
 - **Jira workflow status changes are opt-in via `JIRA_ALLOW_STATUS_CHANGES`.** When the env var is unset or `false` (the default), the rebase/backport agents do NOT move the issue to "In Progress" on task pop, and the issue-verification agent does NOT transition issues to "Release Pending" / "Closed". When set to `true`, all of those transitions happen. The same flag also gates the preliminary-testing agent setting **`Preliminary Testing = Pass`** — that field admits the build into the next compose, triggers erratum creation, and moves the issue to Integration. Triage and the fetcher never touch the workflow status, regardless of the flag.
-- **`DRY_RUN` is read by both fetcher and agent.** On the fetcher, `DRY_RUN=true` skips the atomic Jira label flip (`ymir_todo` / `ymir_todo_triage` / `ymir_retry_needed` are NOT consumed; `ymir_triage_in_progress` is NOT stamped) but the task is still pushed to Redis with the correct `user_triggered` value, so the agent — also presumably in `DRY_RUN` — can exercise its full dry-mode flow. Implication: the trigger label stays on the issue, so every subsequent fetcher sweep re-picks the same issue. That is fine in a test environment; never run a production cron with `DRY_RUN=true`. `DRY_RUN=true` also implies status changes are skipped, independent of `JIRA_ALLOW_STATUS_CHANGES`.
+- **`DRY_RUN` is read by both fetcher and agent.** On the fetcher, `DRY_RUN=true` skips the atomic Jira label flip (`ymir_todo` / `ymir_todo_triage` / `ymir_retry_needed` are NOT consumed; `ymir_triage_in_progress` is NOT stamped) but the task is still pushed to Redis with the correct `user_triggered` value, so the agent — also presumably in `DRY_RUN` — can exercise its full dry-mode flow. `ymir_todo_reproducer` is not removed either. Implication: the trigger label stays on the issue, so every subsequent fetcher sweep re-picks the same issue (for `ymir_todo_reproducer`, once its 20-minute lock expires). That is fine in a test environment; never run a production cron with `DRY_RUN=true`. `DRY_RUN=true` also implies status changes are skipped, independent of `JIRA_ALLOW_STATUS_CHANGES`.
 
 What happens for each trigger state:
 
@@ -241,4 +242,4 @@ JQL no longer restricts `ymir_todo` / `ymir_todo_triage` by assignee — the fet
 
 ---
 
-**Last Updated:** 2026-07-21
+**Last Updated:** 2026-11-16

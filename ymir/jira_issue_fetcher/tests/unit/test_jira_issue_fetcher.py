@@ -19,6 +19,7 @@ from ymir.common.models import (
     ErrorData,
     OpenEndedAnalysisData,
     RebaseData,
+    ReproducerInputSchema,
     Task,
 )
 from ymir.jira_issue_fetcher.jira_issue_fetcher import JiraIssueFetcher
@@ -188,7 +189,15 @@ async def test_search_issues_single_page(fetcher):
         json_data={
             "jql": 'filter = "Jotnar_1000_packages"',
             "maxResults": 500,
-            "fields": ["key", "labels", "components", "customfield_10669", "fixVersions", "updated"],
+            "fields": [
+                "key",
+                "summary",
+                "labels",
+                "components",
+                "customfield_10669",
+                "fixVersions",
+                "updated",
+            ],
         },
     ).and_return(
         {
@@ -2085,3 +2094,253 @@ async def test_process_consolidation_labels_skips_modular_next_issue(fetcher, mo
     submitted = await fetcher._process_consolidation_labels(issues)
 
     assert submitted == 0
+
+
+# ============================================================================
+# ymir_todo_reproducer trigger
+# ============================================================================
+
+_REPRODUCER_LOCK_TTL_MS = 20 * 60 * 1000
+
+
+def _reproducer_issue(key, **fields):
+    fields.setdefault("labels", [JiraLabels.TRIAGED_REBASE.value, JiraLabels.TODO_REPRODUCER.value])
+    fields.setdefault("customfield_10669", "bind")
+    return {"key": key, "fields": fields}
+
+
+def _no_queued_issues(fetcher):
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+
+def _lock_calls(mock_redis, acquired=True):
+    calls = []
+
+    async def _set(key, token, nx, px):
+        calls.append(("set", key, nx, px))
+        return acquired
+
+    async def _eval(script, numkeys, key, token):
+        calls.append(("release", key))
+        return 1
+
+    mock_redis.should_receive("set").replace_with(_set)
+    mock_redis.should_receive("eval").replace_with(_eval)
+    return calls
+
+
+def test_find_stale_in_flight_label_ignores_todo_reproducer(fetcher):
+    """ymir_todo_reproducer doesn't block stale in-flight label detection."""
+    issue = {"fields": {"updated": _STALE_UPDATED}}
+    result = fetcher._find_stale_in_flight_label(
+        issue,
+        [JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.TODO_REPRODUCER.value],
+    )
+    assert result == JiraLabels.TRIAGE_IN_PROGRESS.value
+
+
+@pytest.mark.asyncio
+async def test_push_todo_reproducer_enqueues_user_triggered_task(fetcher, mock_redis_context):
+    """A trusted trigger is locked, pushed as user_triggered, and its label removed."""
+    mock_redis, _ = mock_redis_context
+    issues = [
+        _reproducer_issue(
+            "REPRO-1",
+            summary="CVE-2026-0001 bind: something bad happens",
+            fixVersions=[{"name": "rhel-9.8"}],
+        )
+    ]
+    _no_queued_issues(fetcher)
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "REPRO-1", label=JiraLabels.TODO_REPRODUCER.value
+    ).and_return(True).once()
+    lock_calls = _lock_calls(mock_redis)
+    expected_input = ReproducerInputSchema(
+        jira_issue="REPRO-1",
+        package="bind",
+        cve_id="CVE-2026-0001",
+        fix_version="rhel-9.8",
+    )
+    expected_task = Task(metadata=expected_input.model_dump(), user_triggered=True)
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.REPRODUCER_QUEUE_TODO.value, expected_task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "REPRO-1", add=[], remove=[JiraLabels.TODO_REPRODUCER.value]
+    ).once()
+
+    assert await fetcher.push_issues_to_queue(issues) == 1
+    assert lock_calls == [("set", "lock:reproducer_trigger:REPRO-1", True, _REPRODUCER_LOCK_TTL_MS)]
+
+
+@pytest.mark.asyncio
+async def test_push_todo_reproducer_waits_while_in_progress(fetcher, mock_redis_context):
+    """The trigger waits while a run is in progress."""
+    mock_redis, _ = mock_redis_context
+    issues = [
+        _reproducer_issue(
+            "REPRO-2", labels=[JiraLabels.TODO_REPRODUCER.value, JiraLabels.TRIAGE_IN_PROGRESS.value]
+        )
+    ]
+    _no_queued_issues(fetcher)
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").never()
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    mock_redis.should_receive("lpush").never()
+
+    assert await fetcher.push_issues_to_queue(issues) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "is_rh_employee, fields",
+    [
+        (False, {}),
+        (True, {"customfield_10669": None}),
+        (True, {"customfield_10669": "postgresql:16/postgis"}),
+        (True, {"customfield_10669": "nodejs", "summary": "CVE-2026-0002 nodejs:20/nodejs: flaw"}),
+    ],
+    ids=["not-rh-employee", "no-downstream-component", "modular-component", "modular-summary"],
+)
+async def test_push_todo_reproducer_skip_removes_label(fetcher, mock_redis_context, is_rh_employee, fields):
+    """An untrusted, package-less or modular trigger is dropped without queueing."""
+    mock_redis, _ = mock_redis_context
+    issues = [_reproducer_issue("REPRO-4", **fields)]
+    _no_queued_issues(fetcher)
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(is_rh_employee)
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "REPRO-4", add=[], remove=[JiraLabels.TODO_REPRODUCER.value]
+    ).once()
+    mock_redis.should_receive("lpush").never()
+
+    assert await fetcher.push_issues_to_queue(issues) == 0
+
+
+@pytest.mark.asyncio
+async def test_push_todo_reproducer_dry_run_keeps_label(fetcher, mock_redis_context):
+    """Under DRY_RUN a skipped trigger only logs."""
+    mock_redis, _ = mock_redis_context
+    fetcher.dry_run = True
+    issues = [_reproducer_issue("REPRO-5", customfield_10669=None)]
+    _no_queued_issues(fetcher)
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    mock_redis.should_receive("lpush").never()
+
+    assert await fetcher.push_issues_to_queue(issues) == 0
+
+
+@pytest.mark.asyncio
+async def test_push_todo_reproducer_dry_run_pushes_and_keeps_label(fetcher, mock_redis_context):
+    """Under DRY_RUN the task is still pushed so the agent can be exercised."""
+    mock_redis, _ = mock_redis_context
+    fetcher.dry_run = True
+    issues = [_reproducer_issue("REPRO-12")]
+    _no_queued_issues(fetcher)
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    _lock_calls(mock_redis)
+    mock_redis.should_receive("lpush").and_return(create_async_mock_return_value(1)).once()
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+
+    assert await fetcher.push_issues_to_queue(issues) == 1
+
+
+@pytest.mark.asyncio
+async def test_push_todo_reproducer_label_removal_failure_still_counts_push(fetcher, mock_redis_context):
+    """A failed label removal after the push doesn't undo the push."""
+    mock_redis, _ = mock_redis_context
+    issues = [_reproducer_issue("REPRO-13")]
+    _no_queued_issues(fetcher)
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    lock_calls = _lock_calls(mock_redis)
+    mock_redis.should_receive("lpush").and_return(create_async_mock_return_value(1)).once()
+    flexmock(fetcher).should_receive("_edit_jira_labels").and_raise(RuntimeError("jira down")).once()
+
+    assert await fetcher.push_issues_to_queue(issues) == 1
+    assert [call[0] for call in lock_calls] == ["set"]
+
+
+@pytest.mark.asyncio
+async def test_push_todo_reproducer_transient_auth_error_keeps_label(fetcher, mock_redis_context):
+    """If the author can't be checked, the trigger waits for the next sweep."""
+    mock_redis, _ = mock_redis_context
+    issues = [_reproducer_issue("REPRO-6")]
+    _no_queued_issues(fetcher)
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_raise(
+        requests.ConnectionError("jira down")
+    )
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    mock_redis.should_receive("lpush").never()
+
+    assert await fetcher.push_issues_to_queue(issues) == 0
+
+
+@pytest.mark.asyncio
+async def test_push_todo_reproducer_skipped_when_locked(fetcher, mock_redis_context):
+    """Only the fetcher run that takes the lock pushes; the label stays for it to remove."""
+    mock_redis, _ = mock_redis_context
+    issues = [_reproducer_issue("REPRO-7")]
+    _no_queued_issues(fetcher)
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    _lock_calls(mock_redis, acquired=False)
+    mock_redis.should_receive("lpush").never()
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+
+    assert await fetcher.push_issues_to_queue(issues) == 0
+
+
+@pytest.mark.asyncio
+async def test_push_todo_reproducer_push_failure_releases_lock(fetcher, mock_redis_context):
+    """A failed push releases the lock and keeps the label."""
+    mock_redis, _ = mock_redis_context
+    issues = [_reproducer_issue("REPRO-8")]
+    _no_queued_issues(fetcher)
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    lock_calls = _lock_calls(mock_redis)
+
+    async def _push_fails(*_args):
+        raise RuntimeError("redis down")
+
+    mock_redis.should_receive("lpush").replace_with(_push_fails)
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+
+    assert await fetcher.push_issues_to_queue(issues) == 0
+    assert lock_calls[-1] == ("release", "lock:reproducer_trigger:REPRO-8")
+
+
+@pytest.mark.asyncio
+async def test_push_todo_reproducer_respects_max_issues_cap(fetcher, mock_redis_context):
+    """Reproducer pushes count towards the per-cycle push cap."""
+    mock_redis, _ = mock_redis_context
+    issues = [_reproducer_issue("REPRO-9"), _reproducer_issue("REPRO-10")]
+    _no_queued_issues(fetcher)
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").and_return(True)
+    _lock_calls(mock_redis)
+    mock_redis.should_receive("lpush").and_return(create_async_mock_return_value(1)).once()
+    flexmock(fetcher).should_receive("_edit_jira_labels").once()
+
+    assert await fetcher.push_issues_to_queue(issues, max_issues_override=1) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trigger_label", [JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value])
+async def test_push_triage_trigger_consumes_todo_reproducer(fetcher, mock_redis_context, trigger_label):
+    """An authorized triage trigger wins and consumes ymir_todo_reproducer too."""
+    mock_redis, _ = mock_redis_context
+    issues = [{"key": "REPRO-11", "fields": {"labels": [trigger_label, JiraLabels.TODO_REPRODUCER.value]}}]
+    _no_queued_issues(fetcher)
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
+        "REPRO-11", label=trigger_label
+    ).and_return(True).once()
+    labels_to_add = [JiraLabels.TRIAGE_IN_PROGRESS.value]
+    if trigger_label == JiraLabels.TODO_TRIAGE.value:
+        labels_to_add.append(JiraLabels.TRIAGE_ONLY.value)
+    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
+        "REPRO-11", add=labels_to_add, remove=[trigger_label, JiraLabels.TODO_REPRODUCER.value]
+    ).once()
+    mock_redis.should_receive("lpush").with_args(RedisQueues.TRIAGE_QUEUE_TODO.value, str).and_return(
+        create_async_mock_return_value(1)
+    ).once()
+
+    assert await fetcher.push_issues_to_queue(issues) == 1

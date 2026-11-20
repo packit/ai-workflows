@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urljoin
@@ -33,7 +34,8 @@ import requests
 
 from ymir.common.base_utils import fix_await, get_jira_auth_headers, redis_client
 from ymir.common.constants import JIRA_SEARCH_PATH, JiraLabels, RedisQueues
-from ymir.common.issue_lock import LOCK_KEY_PREFIX
+from ymir.common.cve import extract_cve_ids
+from ymir.common.issue_lock import LOCK_KEY_PREFIX, acquire_issue_lock, release_issue_lock
 from ymir.common.logging_setup import configure_logging
 from ymir.common.merge_queue import SubmitResult, submit_merge_job
 from ymir.common.models import (
@@ -42,10 +44,16 @@ from ymir.common.models import (
     ErrorListEntry,
     OpenEndedAnalysisData,
     RebaseOutputSchema,
+    ReproducerInputSchema,
     Task,
     TriageInputSchema,
 )
-from ymir.common.version_utils import construct_internal_branch_name, parse_rhel_version
+from ymir.common.version_utils import (
+    construct_internal_branch_name,
+    detect_modular_issue,
+    extract_downstream_package,
+    parse_rhel_version,
+)
 
 configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -79,6 +87,11 @@ class JiraIssueFetcher:
         JiraLabels.CLI_TRIAGE.value,
         JiraLabels.REPRODUCER_IN_PROGRESS.value,
     )
+
+    # Both fetcher CronJobs can see the same ymir_todo_reproducer issue; the claim
+    # outlasts a fetcher cycle so only one of them pushes it.
+    REPRODUCER_TRIGGER_LOCK_TTL_MS = 20 * 60 * 1000
+    REPRODUCER_TRIGGER_LOCK_PREFIX = "lock:reproducer_trigger:"
 
     def __init__(self):
         self.jira_url = os.environ["JIRA_URL"]
@@ -390,6 +403,7 @@ class JiraIssueFetcher:
             JiraLabels.TODO.value,
             JiraLabels.TODO_TRIAGE.value,
             JiraLabels.TRIAGE_ONLY.value,
+            JiraLabels.TODO_REPRODUCER.value,
             JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
             JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
             JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
@@ -420,6 +434,7 @@ class JiraIssueFetcher:
 
         fields = [
             "key",  # Issue key (e.g., RHEL-12345)
+            "summary",  # CVE IDs for ymir_todo_reproducer tasks
             "labels",  # Issue labels
             "components",  # Issue components
             "customfield_10669",  # Downstream Component Name
@@ -617,8 +632,10 @@ class JiraIssueFetcher:
             user_triggered_keys = set()
             retry_needed_keys = set()
             triage_only_keys = set()
+            reproducer_triggered: dict[str, ReproducerInputSchema] = {}
             # Extend existing_keys with issues that have Ymir labels (except ymir_retry_needed,
-            # ymir_todo and ymir_todo_triage, which all signal a re-run is wanted).
+            # ymir_todo, ymir_todo_triage and ymir_todo_reproducer, which all signal a re-run
+            # is wanted).
             for issue in issues:
                 issue_key = issue.get("key")
                 if not issue_key:
@@ -701,6 +718,14 @@ class JiraIssueFetcher:
                     user_triggered_keys.add(issue_key)
                     if trigger_label == JiraLabels.TODO_TRIAGE.value:
                         triage_only_keys.add(issue_key)
+                    continue
+
+                # In-progress issues fall through so stale-label recovery still runs.
+                if JiraLabels.TODO_REPRODUCER.value in ymir_labels and not has_in_progress:
+                    existing_keys.add(issue_key)
+                    reproducer_input = self._reproducer_trigger_input(issue)
+                    if reproducer_input is not None:
+                        reproducer_triggered[issue_key] = reproducer_input
                     continue
 
                 # Safety net for tasks lost to a hard crash/OOM/SIGKILL (planned
@@ -831,6 +856,9 @@ class JiraIssueFetcher:
                         # so clear a persisted triage-only marker along with it.
                         if not triage_only and JiraLabels.TRIAGE_ONLY.value in fields.get("labels", []):
                             labels_to_consume.append(JiraLabels.TRIAGE_ONLY.value)
+                        # Triage re-queues the reproducer itself when the resolution calls for it.
+                        if JiraLabels.TODO_REPRODUCER.value in fields.get("labels", []):
+                            labels_to_consume.append(JiraLabels.TODO_REPRODUCER.value)
                     elif retry_needed:
                         labels_to_consume = [JiraLabels.RETRY_NEEDED.value]
 
@@ -892,12 +920,97 @@ class JiraIssueFetcher:
                     logger.error(f"Error pushing issue {issue.get('key', 'unknown')} to queue: {e}")
                     continue
 
-            logger.info(f"Successfully pushed {pushed_count}/{len(issues)} issues to triage_queue")
+            for issue_key, reproducer_input in reproducer_triggered.items():
+                if effective_max_issues is not None and pushed_count >= effective_max_issues:
+                    logger.info(f"Reached per-cycle push limit ({effective_max_issues})")
+                    break
+                try:
+                    if await self._push_reproducer_trigger(redis_conn, issue_key, reproducer_input):
+                        pushed_count += 1
+                except Exception as e:
+                    logger.error(f"Error pushing reproducer task for {issue_key}: {e}")
+
+            logger.info(
+                f"Successfully pushed {pushed_count}/{len(issues)} issues to triage/reproducer queues"
+            )
             if skipped_count > 0:
                 logger.info(f"Skipped {skipped_count} issues that already exist in queue")
             if modular_count > 0:
                 logger.info(f"Skipped {modular_count} modular issues")
             return pushed_count
+
+    def _reproducer_trigger_input(self, issue: dict[str, Any]) -> ReproducerInputSchema | None:
+        """Build the task for a trusted ymir_todo_reproducer, or remove the label and return None."""
+        issue_key = issue["key"]
+        fields = issue.get("fields") or {}
+        label = JiraLabels.TODO_REPRODUCER.value
+
+        try:
+            is_rh_employee = self._label_added_by_rh_employee(issue_key, label=label)
+        except requests.RequestException as e:
+            logger.warning(
+                f"Transient error verifying {label} author on {issue_key}: {e}; skipping this sweep"
+            )
+            return None
+
+        downstream_component = fields.get("customfield_10669")
+        package = extract_downstream_package(downstream_component)
+        if not is_rh_employee:
+            skip_reason = "the label was not added by a Red Hat Employee"
+        elif not package:
+            skip_reason = "it has no Downstream Component Name"
+        elif detect_modular_issue(fields.get("summary"), downstream_component, package):
+            # Triage never queues the reproducer for modular issues either.
+            skip_reason = f"it is a modular issue ({downstream_component})"
+        else:
+            skip_reason = None
+        if skip_reason:
+            logger.warning(f"Issue {issue_key} has {label} but {skip_reason} - removing the label")
+            self._remove_reproducer_label(issue_key)
+            return None
+
+        logger.info(f"Issue {issue_key} has {label} added by an RH employee - marking for reproducer run")
+        fix_versions = fields.get("fixVersions") or []
+        return ReproducerInputSchema(
+            jira_issue=issue_key,
+            package=package,
+            cve_id=extract_cve_ids(fields.get("summary")),
+            fix_version=next((fv.get("name") for fv in fix_versions if fv.get("name")), None),
+        )
+
+    async def _push_reproducer_trigger(
+        self, redis_conn: redis.Redis, issue_key: str, reproducer_input: ReproducerInputSchema
+    ) -> bool:
+        """Claim, push and then remove the label; False when another fetcher run holds the claim."""
+        token = str(uuid.uuid4())
+        prefix = self.REPRODUCER_TRIGGER_LOCK_PREFIX
+        if not await acquire_issue_lock(
+            redis_conn, issue_key, token, ttl_ms=self.REPRODUCER_TRIGGER_LOCK_TTL_MS, prefix=prefix
+        ):
+            logger.info(f"Issue {issue_key} was pushed by another fetcher run - skipping")
+            return False
+
+        task = Task(metadata=reproducer_input.model_dump(), user_triggered=True)
+        queue = RedisQueues.get_reproducer_queue(user_triggered=True)
+        try:
+            await fix_await(redis_conn.lpush(queue, task.to_json()))
+        except Exception:
+            await release_issue_lock(redis_conn, issue_key, token, prefix=prefix)
+            raise
+        logger.info(f"Pushed {issue_key} to {queue}")
+        # Removing the label only after the push means a failed push never loses the trigger.
+        self._remove_reproducer_label(issue_key)
+        return True
+
+    def _remove_reproducer_label(self, issue_key: str) -> None:
+        label = JiraLabels.TODO_REPRODUCER.value
+        if self.dry_run:
+            logger.info(f"DRY_RUN: would remove {label} from {issue_key}")
+            return
+        try:
+            self._edit_jira_labels(issue_key, add=[], remove=[label])
+        except Exception as e:
+            logger.warning(f"Failed to remove {label} from {issue_key}: {e}")
 
     @staticmethod
     def _resolve_branch_from_fix_versions(fix_versions: list[dict]) -> str | None:
@@ -1163,7 +1276,7 @@ class JiraIssueFetcher:
 
             if push_cap != 0:
                 pushed_count = await self.push_issues_to_queue(issues, max_issues_override=push_cap)
-                logger.info(f"Completed: {pushed_count} issues added to triage_queue")
+                logger.info(f"Completed: {pushed_count} issues added to triage/reproducer queues")
             else:
                 logger.info("Queue depth at/above threshold - skipping triage push this cycle")
 

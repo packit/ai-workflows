@@ -103,6 +103,10 @@ def test_closed_mr_label_is_not_terminal():
     assert _terminal_ymir_labels([JiraLabels.MR_CLOSED.value]) == []
 
 
+def test_todo_reproducer_trigger_is_not_terminal():
+    assert _terminal_ymir_labels([JiraLabels.TODO_REPRODUCER.value]) == []
+
+
 @pytest.mark.parametrize(
     "resolution",
     [

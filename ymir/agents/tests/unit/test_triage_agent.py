@@ -1160,6 +1160,8 @@ def test_build_reproducer_input_skips_postponed():
         "waiting",
         "consolidated",
         "comment_error",
+        "lock_demotes",
+        "lock_busy",
     ],
 )
 @pytest.mark.parametrize(
@@ -1279,6 +1281,31 @@ async def test_branch_creation_notice_uses_final_resolution(
     monkeypatch.setattr(
         t_agent, "queue_siblings_for_triage", _async_return(2 if scenario == "waiting" else 0)
     )
+
+    # The cluster lock serializes the primary decision; in tests it is always
+    # acquired (or busy for the fail-open scenario) and never touches Redis.
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+
+    @asynccontextmanager
+    async def _fake_redis(*_args, **_kwargs):
+        yield None
+
+    @asynccontextmanager
+    async def _fake_cluster_lock(*_args, **_kwargs):
+        yield scenario != "lock_busy"
+
+    monkeypatch.setattr(t_agent, "redis_client", _fake_redis)
+    monkeypatch.setattr(t_agent, "waiting_issue_lock", _fake_cluster_lock)
+    if scenario in ("lock_demotes", "lock_busy"):
+        # First check: not a sibling. Re-check under the cluster lock: another
+        # primary has marked this issue as its sibling in the meantime.
+        sibling_checks = []
+
+        async def _flip_sibling(*_args, **_kwargs):
+            sibling_checks.append(1)
+            return len(sibling_checks) > 1
+
+        monkeypatch.setattr(t_agent, "_is_rebase_sibling", _flip_sibling)
     labels = []
     comments = []
 
@@ -1318,7 +1345,7 @@ async def test_branch_creation_notice_uses_final_resolution(
         JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
     }
     labels = [call for call in labels if call not in confidence_updates]
-    if initial_resolution == Resolution.REBASE and scenario in ("sibling", "waiting"):
+    if initial_resolution == Resolution.REBASE and scenario in ("sibling", "waiting", "lock_demotes"):
         assert not state.hold_for_manual_branch_creation
         assert not labels
         assert not comments

@@ -1212,3 +1212,22 @@ async def test_unreadable_sibling_labels_retry_instead_of_splitting_the_rebase(m
 
     assert pushed == []
     assert read_kwargs == [{"raise_on_error": True}]
+
+
+def test_rebase_cluster_lock_key_mirrors_sibling_cluster_identity():
+    """The lock key must separate clusters exactly like the sibling JQL does."""
+    # Y-stream and Z-stream spellings of one release lock the same cluster,
+    # because the sibling discovery JQL matches both variants.
+    assert rebase_consolidation.rebase_cluster_lock_key("bash", "rhel-10.3") == "bash:rhel-10.3"
+    assert rebase_consolidation.rebase_cluster_lock_key("bash", "rhel-10.3.z") == "bash:rhel-10.3"
+    # Unparsable versions fall back to the raw spelling on both sides.
+    assert rebase_consolidation.rebase_cluster_lock_key("bash", "future") == "bash:future"
+    # Modular streams lock independently of each other.
+    assert (
+        rebase_consolidation.rebase_cluster_lock_key("postgis", "rhel-10.3.z", "postgresql:16/postgis")
+        == "postgresql:16/postgis/postgis:rhel-10.3"
+    )
+    assert (
+        rebase_consolidation.rebase_cluster_lock_key("postgis", "rhel-10.3", "postgresql:12/postgis")
+        == "postgresql:12/postgis/postgis:rhel-10.3"
+    )

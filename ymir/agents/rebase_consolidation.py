@@ -202,6 +202,30 @@ def add_jira_tickets_to_latest_changelog_entry(
         return True
 
 
+# Redis lock prefix for the per-cluster primary decision. One triage agent at
+# a time may act as the primary of a component/fixVersion cluster, so
+# concurrently triaged issues cannot mark each other and form two clusters.
+CLUSTER_LOCK_PREFIX = "lock:cluster:"
+
+
+def rebase_cluster_lock_key(component: str, fix_version: str, downstream_component: str | None = None) -> str:
+    """Redis lock key identifying a rebase sibling cluster.
+
+    Mirrors the cluster identity used by ``build_siblings_jql``: same
+    component and fix version — canonicalized across the Y-stream/Z-stream
+    spellings the JQL matches as one cluster (``rhel-X.Y`` and ``rhel-X.Y.z``
+    during GA transitions) — narrowed to the module stream for modular
+    packages so e.g. postgresql:16 and postgresql:12 clusters lock
+    independently.
+    """
+    # The same release spelled either way must lock the same key: the
+    # discovery JQL treats both variants as one cluster.
+    canonical_fix_version = sorted(get_fix_version_variants(fix_version))[0]
+    if downstream_component and "/" in downstream_component:
+        return f"{downstream_component}/{component}:{canonical_fix_version}"
+    return f"{component}:{canonical_fix_version}"
+
+
 def build_siblings_jql(
     issue_key: str,
     component: str,

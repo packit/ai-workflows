@@ -24,9 +24,11 @@ from ymir.agents.cve_applicability_agent import build_applicability_prompt, crea
 from ymir.agents.observability import setup_observability
 from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.rebase_consolidation import (
+    CLUSTER_LOCK_PREFIX,
     check_and_queue_primary_if_ready,
     get_rebase_primary_issue,
     queue_siblings_for_triage,
+    rebase_cluster_lock_key,
     sibling_link_is_stale,
 )
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
@@ -48,7 +50,7 @@ from ymir.common.config import load_rhel_config
 from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels, RedisQueues
 from ymir.common.cve import extract_cve_ids
 from ymir.common.error_list import clear_resolved_errors
-from ymir.common.issue_lock import issue_lock
+from ymir.common.issue_lock import issue_lock, waiting_issue_lock
 from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
@@ -321,6 +323,64 @@ async def _is_rebase_sibling(state, available_tools, user_triggered: bool, dry_r
                 )
         return False
     return True
+
+
+def cluster_serialized(discover):
+    """Run sibling discovery as the cluster's single primary.
+
+    Acquires the cluster's Redis lock, re-checks the sibling link while
+    holding it (the lock winner may have marked this issue as its sibling
+    while we waited for the lock — in that case the issue demotes itself
+    instead of forming a second cluster), and only then runs the discovery.
+    Concurrently triaged issues of the same cluster cannot both act as
+    primaries and mark each other.
+
+    A dry run performs no cluster mutations and skips the lock. When the lock
+    cannot be acquired (slow holder, Redis outage) the discovery still runs,
+    unlocked — failing open falls back to the rare pre-lock race instead of
+    blocking triage.
+    """
+
+    @functools.wraps(discover)
+    async def wrapper(state, gateway_tools, user_triggered, dry_run):
+        if dry_run:
+            return await discover(state, gateway_tools, user_triggered, dry_run)
+        rebase_data = state.triage_result.data
+        cluster_key = rebase_cluster_lock_key(
+            rebase_data.package, rebase_data.fix_version, state.raw_downstream_component
+        )
+        async with (
+            redis_client(os.environ["REDIS_URL"]) as redis,
+            waiting_issue_lock(redis, cluster_key, prefix=CLUSTER_LOCK_PREFIX) as acquired,
+        ):
+            if acquired:
+                # The lock winner may have marked this issue as its sibling
+                # while we waited for the lock.
+                state.is_rebase_sibling = await _is_rebase_sibling(state, gateway_tools, user_triggered)
+                if state.is_rebase_sibling:
+                    return 0
+            else:
+                logger.warning(
+                    "Cluster lock %s not acquired for %s; running sibling discovery unlocked",
+                    cluster_key,
+                    state.jira_issue,
+                )
+            return await discover(state, gateway_tools, user_triggered, dry_run)
+
+    return wrapper
+
+
+@cluster_serialized
+async def run_sibling_discovery(state, gateway_tools, user_triggered: bool, dry_run: bool) -> int:
+    """Queue this issue's rebase siblings for triage (as the cluster primary)."""
+    return await queue_siblings_for_triage(
+        primary_issue=state.jira_issue,
+        rebase_data=state.triage_result.data,
+        available_tools=gateway_tools,
+        dry_run=dry_run,
+        user_triggered=user_triggered,
+        downstream_component=state.raw_downstream_component,
+    )
 
 
 _REPRODUCER_ELIGIBLE_RESOLUTIONS = frozenset(
@@ -1622,6 +1682,14 @@ async def run_workflow(
 
         async def consolidate_rebase_siblings(state):
             """Queue sibling issues for triage and decide whether to queue primary for rebase."""
+
+            async def finish_as_sibling() -> str:
+                logger.info(f"Issue {state.jira_issue} is a sibling, skipping consolidation")
+                state.rebase_waiting_for_siblings = False
+                rebase_data.consolidated_issues = []
+                rebase_data.consolidation_summary = None
+                return "comment_in_jira"
+
             if state.triage_only:
                 logger.info(
                     "Triage-only mode for %s — skipping rebase sibling consolidation",
@@ -1637,21 +1705,15 @@ async def run_workflow(
                 state, gateway_tools, user_triggered, dry_run=dry_run
             )
             if state.is_rebase_sibling:
-                logger.info(f"Issue {state.jira_issue} is a sibling, skipping consolidation")
-                state.rebase_waiting_for_siblings = False
-                rebase_data.consolidated_issues = []
-                rebase_data.consolidation_summary = None
-                return "comment_in_jira"
+                return await finish_as_sibling()
 
-            # Queue siblings for triage
-            sibling_count = await queue_siblings_for_triage(
-                primary_issue=state.jira_issue,
-                rebase_data=rebase_data,
-                available_tools=gateway_tools,
-                dry_run=dry_run,
-                user_triggered=user_triggered,
-                downstream_component=state.raw_downstream_component,
-            )
+            # A concurrently triaged cluster mate may be marking this issue as
+            # its sibling right now: the decision below is serialized per
+            # cluster and re-checks the link under the lock, so two primaries
+            # cannot mark each other and form two clusters.
+            sibling_count = await run_sibling_discovery(state, gateway_tools, user_triggered, dry_run)
+            if state.is_rebase_sibling:
+                return await finish_as_sibling()
 
             # If siblings were queued, don't queue primary yet (wait for siblings)
             if sibling_count > 0:

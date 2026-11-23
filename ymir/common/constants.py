@@ -1,3 +1,4 @@
+import os
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from string import Template
@@ -47,6 +48,17 @@ POST_PUSH_TESTING_TIMEOUT = timedelta(hours=3)
 POST_PUSH_TESTING_TIMEOUT_STR = "3 hours"
 
 
+def is_sustaining_deployment() -> bool:
+    """Return True when this process belongs to the sustaining bucket.
+
+    The bucket is a deployment-level property: the sustaining agent and fetcher
+    deployments run with ``SUSTAINING=true``, consume their own queue family
+    and mount their own Vertex credentials. Agents never decide the bucket from
+    a per-issue check.
+    """
+    return os.getenv("SUSTAINING", "false").lower() == "true"
+
+
 class RedisQueues(Enum):
     """Constants for Redis queue names used by Ymir agents"""
 
@@ -55,6 +67,12 @@ class RedisQueues(Enum):
     # agent BRPOPs from [TRIAGE_QUEUE_TODO, TRIAGE_QUEUE] so Redis serves the
     # priority queue first whenever it has anything.
     TRIAGE_QUEUE_TODO = "triage_queue_todo"
+    # Sustaining-bucket twin of the triage queues. A separate list family keeps
+    # the two deployment pools (and their Vertex billing) from consuming each
+    # other's work; the source queue itself is the bucket signal, so retries
+    # replay into the same family without carrying any extra state.
+    TRIAGE_QUEUE_SUSTAINING = "triage_queue_sustaining"
+    TRIAGE_QUEUE_SUSTAINING_TODO = "triage_queue_sustaining_todo"
     REBASE_QUEUE_C9S = "rebase_queue_c9s"
     REBASE_QUEUE_C10S = "rebase_queue_c10s"
     BACKPORT_QUEUE_C9S = "backport_queue_c9s"
@@ -66,6 +84,16 @@ class RedisQueues(Enum):
     REBASE_QUEUE_C10S_TODO = "rebase_queue_c10s_todo"
     BACKPORT_QUEUE_C9S_TODO = "backport_queue_c9s_todo"
     BACKPORT_QUEUE_C10S_TODO = "backport_queue_c10s_todo"
+    # Sustaining-bucket twins of the downstream queues (SUSTAINING=true
+    # deployments). The _todo priority twins are derived by priority_twin().
+    REBASE_QUEUE_C9S_SUSTAINING = "rebase_queue_c9s_sustaining"
+    REBASE_QUEUE_C10S_SUSTAINING = "rebase_queue_c10s_sustaining"
+    BACKPORT_QUEUE_C9S_SUSTAINING = "backport_queue_c9s_sustaining"
+    BACKPORT_QUEUE_C10S_SUSTAINING = "backport_queue_c10s_sustaining"
+    REBASE_QUEUE_C9S_SUSTAINING_TODO = "rebase_queue_c9s_sustaining_todo"
+    REBASE_QUEUE_C10S_SUSTAINING_TODO = "rebase_queue_c10s_sustaining_todo"
+    BACKPORT_QUEUE_C9S_SUSTAINING_TODO = "backport_queue_c9s_sustaining_todo"
+    BACKPORT_QUEUE_C10S_SUSTAINING_TODO = "backport_queue_c10s_sustaining_todo"
     CLARIFICATION_NEEDED_QUEUE = "clarification_needed_queue"
     ERROR_LIST = "error_list"
     OPEN_ENDED_ANALYSIS_LIST = "open_ended_analysis_list"
@@ -75,6 +103,11 @@ class RedisQueues(Enum):
     REBUILD_QUEUE_C10S = "rebuild_queue_c10s"
     REBUILD_QUEUE_C9S_TODO = "rebuild_queue_c9s_todo"
     REBUILD_QUEUE_C10S_TODO = "rebuild_queue_c10s_todo"
+    # Sustaining-bucket twins of the rebuild queues.
+    REBUILD_QUEUE_C9S_SUSTAINING = "rebuild_queue_c9s_sustaining"
+    REBUILD_QUEUE_C10S_SUSTAINING = "rebuild_queue_c10s_sustaining"
+    REBUILD_QUEUE_C9S_SUSTAINING_TODO = "rebuild_queue_c9s_sustaining_todo"
+    REBUILD_QUEUE_C10S_SUSTAINING_TODO = "rebuild_queue_c10s_sustaining_todo"
     COMPLETED_REBUILD_LIST = "completed_rebuild_list"
     REBASE_QUEUE = "rebase_queue"
     BACKPORT_QUEUE = "backport_queue"
@@ -113,6 +146,8 @@ class RedisQueues(Enum):
         return {
             cls.TRIAGE_QUEUE.value,
             cls.TRIAGE_QUEUE_TODO.value,
+            cls.TRIAGE_QUEUE_SUSTAINING.value,
+            cls.TRIAGE_QUEUE_SUSTAINING_TODO.value,
             cls.REBASE_QUEUE_C9S.value,
             cls.REBASE_QUEUE_C10S.value,
             cls.BACKPORT_QUEUE_C9S.value,
@@ -125,6 +160,18 @@ class RedisQueues(Enum):
             cls.BACKPORT_QUEUE_C10S_TODO.value,
             cls.REBUILD_QUEUE_C9S_TODO.value,
             cls.REBUILD_QUEUE_C10S_TODO.value,
+            cls.REBASE_QUEUE_C9S_SUSTAINING.value,
+            cls.REBASE_QUEUE_C10S_SUSTAINING.value,
+            cls.BACKPORT_QUEUE_C9S_SUSTAINING.value,
+            cls.BACKPORT_QUEUE_C10S_SUSTAINING.value,
+            cls.REBUILD_QUEUE_C9S_SUSTAINING.value,
+            cls.REBUILD_QUEUE_C10S_SUSTAINING.value,
+            cls.REBASE_QUEUE_C9S_SUSTAINING_TODO.value,
+            cls.REBASE_QUEUE_C10S_SUSTAINING_TODO.value,
+            cls.BACKPORT_QUEUE_C9S_SUSTAINING_TODO.value,
+            cls.BACKPORT_QUEUE_C10S_SUSTAINING_TODO.value,
+            cls.REBUILD_QUEUE_C9S_SUSTAINING_TODO.value,
+            cls.REBUILD_QUEUE_C10S_SUSTAINING_TODO.value,
             cls.CLARIFICATION_NEEDED_QUEUE.value,
             cls.REBASE_QUEUE.value,
             cls.BACKPORT_QUEUE.value,
@@ -151,34 +198,119 @@ class RedisQueues(Enum):
         return f"{queue}_todo"
 
     @classmethod
-    def get_rebase_queue_for_branch(cls, target_branch: str | None, user_triggered: bool = False) -> str:
+    def triage_queue(cls, user_triggered: bool = False, sustaining: bool | None = None) -> str:
+        """Return this deployment's triage input queue; the priority twin if triggered."""
+        if sustaining is None:
+            sustaining = is_sustaining_deployment()
+        base = cls.TRIAGE_QUEUE_SUSTAINING.value if sustaining else cls.TRIAGE_QUEUE.value
+        return cls.priority_twin(base) if user_triggered else base
+
+    @classmethod
+    def _select_bucket(
+        cls,
+        current_c9s: "RedisQueues",
+        current_c10s: "RedisQueues",
+        sustaining_c9s: "RedisQueues",
+        sustaining_c10s: "RedisQueues",
+        use_c9s: bool,
+        sustaining: bool | None,
+    ) -> str:
+        """Return the queue for the branch family and the deployment's bucket."""
+        if sustaining is None:
+            sustaining = is_sustaining_deployment()
+        if use_c9s:
+            return sustaining_c9s.value if sustaining else current_c9s.value
+        return sustaining_c10s.value if sustaining else current_c10s.value
+
+    @classmethod
+    def get_rebase_queue_for_branch(
+        cls,
+        target_branch: str | None,
+        user_triggered: bool = False,
+        sustaining: bool | None = None,
+    ) -> str:
         """Return rebase queue for the branch; the priority twin if user-triggered."""
-        base = (
-            cls.REBASE_QUEUE_C9S.value
-            if target_branch and cls._use_c9s_branch(target_branch)
-            else cls.REBASE_QUEUE_C10S.value
+        base = cls._select_bucket(
+            cls.REBASE_QUEUE_C9S,
+            cls.REBASE_QUEUE_C10S,
+            cls.REBASE_QUEUE_C9S_SUSTAINING,
+            cls.REBASE_QUEUE_C10S_SUSTAINING,
+            bool(target_branch and cls._use_c9s_branch(target_branch)),
+            sustaining,
         )
         return cls.priority_twin(base) if user_triggered else base
 
     @classmethod
-    def get_backport_queue_for_branch(cls, target_branch: str | None, user_triggered: bool = False) -> str:
+    def get_backport_queue_for_branch(
+        cls,
+        target_branch: str | None,
+        user_triggered: bool = False,
+        sustaining: bool | None = None,
+    ) -> str:
         """Return backport queue for the branch; the priority twin if user-triggered."""
-        base = (
-            cls.BACKPORT_QUEUE_C9S.value
-            if target_branch and cls._use_c9s_branch(target_branch)
-            else cls.BACKPORT_QUEUE_C10S.value
+        base = cls._select_bucket(
+            cls.BACKPORT_QUEUE_C9S,
+            cls.BACKPORT_QUEUE_C10S,
+            cls.BACKPORT_QUEUE_C9S_SUSTAINING,
+            cls.BACKPORT_QUEUE_C10S_SUSTAINING,
+            bool(target_branch and cls._use_c9s_branch(target_branch)),
+            sustaining,
         )
         return cls.priority_twin(base) if user_triggered else base
 
     @classmethod
-    def get_rebuild_queue_for_branch(cls, target_branch: str | None, user_triggered: bool = False) -> str:
+    def get_rebuild_queue_for_branch(
+        cls,
+        target_branch: str | None,
+        user_triggered: bool = False,
+        sustaining: bool | None = None,
+    ) -> str:
         """Return rebuild queue for the branch; the priority twin if user-triggered."""
-        base = (
-            cls.REBUILD_QUEUE_C9S.value
-            if target_branch and cls._use_c9s_branch(target_branch)
-            else cls.REBUILD_QUEUE_C10S.value
+        base = cls._select_bucket(
+            cls.REBUILD_QUEUE_C9S,
+            cls.REBUILD_QUEUE_C10S,
+            cls.REBUILD_QUEUE_C9S_SUSTAINING,
+            cls.REBUILD_QUEUE_C10S_SUSTAINING,
+            bool(target_branch and cls._use_c9s_branch(target_branch)),
+            sustaining,
         )
         return cls.priority_twin(base) if user_triggered else base
+
+    @classmethod
+    def get_backport_queue_for_container(cls, container_version: str, sustaining: bool | None = None) -> str:
+        """Return the backport input queue this agent deployment consumes."""
+        return cls._select_bucket(
+            cls.BACKPORT_QUEUE_C9S,
+            cls.BACKPORT_QUEUE_C10S,
+            cls.BACKPORT_QUEUE_C9S_SUSTAINING,
+            cls.BACKPORT_QUEUE_C10S_SUSTAINING,
+            container_version == "c9s",
+            sustaining,
+        )
+
+    @classmethod
+    def get_rebase_queue_for_container(cls, container_version: str, sustaining: bool | None = None) -> str:
+        """Return the rebase input queue this agent deployment consumes."""
+        return cls._select_bucket(
+            cls.REBASE_QUEUE_C9S,
+            cls.REBASE_QUEUE_C10S,
+            cls.REBASE_QUEUE_C9S_SUSTAINING,
+            cls.REBASE_QUEUE_C10S_SUSTAINING,
+            container_version == "c9s",
+            sustaining,
+        )
+
+    @classmethod
+    def get_rebuild_queue_for_container(cls, container_version: str, sustaining: bool | None = None) -> str:
+        """Return the rebuild input queue this agent deployment consumes."""
+        return cls._select_bucket(
+            cls.REBUILD_QUEUE_C9S,
+            cls.REBUILD_QUEUE_C10S,
+            cls.REBUILD_QUEUE_C9S_SUSTAINING,
+            cls.REBUILD_QUEUE_C10S_SUSTAINING,
+            container_version == "c9s",
+            sustaining,
+        )
 
     @classmethod
     def get_reproducer_queue(cls, user_triggered: bool = False) -> str:

@@ -499,6 +499,8 @@ class JiraIssueFetcher:
                                         case (
                                             RedisQueues.TRIAGE_QUEUE.value
                                             | RedisQueues.TRIAGE_QUEUE_TODO.value
+                                            | RedisQueues.TRIAGE_QUEUE_SUSTAINING.value
+                                            | RedisQueues.TRIAGE_QUEUE_SUSTAINING_TODO.value
                                         ):
                                             schema = TriageInputSchema.model_validate(task.metadata)
                                             issue_key = schema.issue.upper()
@@ -515,6 +517,18 @@ class JiraIssueFetcher:
                                             | RedisQueues.BACKPORT_QUEUE_C10S_TODO.value
                                             | RedisQueues.REBUILD_QUEUE_C9S_TODO.value
                                             | RedisQueues.REBUILD_QUEUE_C10S_TODO.value
+                                            | RedisQueues.REBASE_QUEUE_C9S_SUSTAINING.value
+                                            | RedisQueues.REBASE_QUEUE_C10S_SUSTAINING.value
+                                            | RedisQueues.BACKPORT_QUEUE_C9S_SUSTAINING.value
+                                            | RedisQueues.BACKPORT_QUEUE_C10S_SUSTAINING.value
+                                            | RedisQueues.REBUILD_QUEUE_C9S_SUSTAINING.value
+                                            | RedisQueues.REBUILD_QUEUE_C10S_SUSTAINING.value
+                                            | RedisQueues.REBASE_QUEUE_C9S_SUSTAINING_TODO.value
+                                            | RedisQueues.REBASE_QUEUE_C10S_SUSTAINING_TODO.value
+                                            | RedisQueues.BACKPORT_QUEUE_C9S_SUSTAINING_TODO.value
+                                            | RedisQueues.BACKPORT_QUEUE_C10S_SUSTAINING_TODO.value
+                                            | RedisQueues.REBUILD_QUEUE_C9S_SUSTAINING_TODO.value
+                                            | RedisQueues.REBUILD_QUEUE_C10S_SUSTAINING_TODO.value
                                             | RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
                                             | RedisQueues.BACKPORT_QUEUE.value
                                             | RedisQueues.REBASE_QUEUE.value
@@ -592,8 +606,8 @@ class JiraIssueFetcher:
 
     async def _get_queue_depth(self, redis_conn: redis.Redis) -> int:
         """Return the combined depth of the two queues this fetcher pushes to."""
-        triage_depth = await fix_await(redis_conn.llen(RedisQueues.TRIAGE_QUEUE.value))
-        todo_depth = await fix_await(redis_conn.llen(RedisQueues.TRIAGE_QUEUE_TODO.value))
+        triage_depth = await fix_await(redis_conn.llen(RedisQueues.triage_queue()))
+        todo_depth = await fix_await(redis_conn.llen(RedisQueues.triage_queue(user_triggered=True)))
         return triage_depth + todo_depth
 
     async def push_issues_to_queue(
@@ -875,11 +889,7 @@ class JiraIssueFetcher:
 
                     # ymir_todo-triggered tasks go to the priority queue so the
                     # triage agent pops them before normal-flow tasks.
-                    target_queue = (
-                        RedisQueues.TRIAGE_QUEUE_TODO.value
-                        if user_triggered
-                        else RedisQueues.TRIAGE_QUEUE.value
-                    )
+                    target_queue = RedisQueues.triage_queue(user_triggered=user_triggered)
                     await fix_await(redis_conn.lpush(target_queue, task.to_json()))
                     pushed_count += 1
 

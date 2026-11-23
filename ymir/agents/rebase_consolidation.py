@@ -737,9 +737,7 @@ async def queue_siblings_for_triage(
                     triage_only=JiraLabels.TRIAGE_ONLY.value in candidate_labels,
                 )
                 # Use priority queue for user-triggered tasks
-                queue = (
-                    RedisQueues.TRIAGE_QUEUE_TODO.value if user_triggered else RedisQueues.TRIAGE_QUEUE.value
-                )
+                queue = RedisQueues.triage_queue(user_triggered=user_triggered)
                 async with redis_client(os.environ["REDIS_URL"]) as redis:
                     await fix_await(redis.lpush(queue, task.model_dump_json()))
 
@@ -902,7 +900,7 @@ async def check_and_queue_primary_if_ready(
                 triage_only=JiraLabels.TRIAGE_ONLY.value in labels,
             )
             async with redis_client(os.environ["REDIS_URL"]) as redis:
-                await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
+                await fix_await(redis.lpush(RedisQueues.triage_queue(), task.model_dump_json()))
             logger.info(f"Re-queued {primary_issue} to triage (will re-triage and queue to rebase)")
 
         # Post comment

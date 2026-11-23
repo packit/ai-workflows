@@ -2192,11 +2192,7 @@ async def main() -> None:
                 # Read from `task.user_triggered` (not the closure-captured
                 # variable) so we're robust to anything that might rebind
                 # the local in a future refactor.
-                retry_queue = (
-                    RedisQueues.TRIAGE_QUEUE_TODO.value
-                    if task.user_triggered
-                    else RedisQueues.TRIAGE_QUEUE.value
-                )
+                retry_queue = RedisQueues.triage_queue(user_triggered=task.user_triggered)
                 if task.attempts < max_retries:
                     logger.warning(
                         f"Task failed (attempt {task.attempts}/{max_retries}), "
@@ -2603,14 +2599,14 @@ async def main() -> None:
 
                 if output.resolution != Resolution.ERROR:
                     await clear_resolved_errors(
-                        redis, input.issue, RedisQueues.TRIAGE_QUEUE.value, dry_run=dry_run
+                        redis, input.issue, RedisQueues.triage_queue(), dry_run=dry_run
                     )
 
         shutdown_event = asyncio.Event()
         install_shutdown_handler(asyncio.get_running_loop(), shutdown_event)
         await run_task_loop(
             redis,
-            [RedisQueues.TRIAGE_QUEUE_TODO.value, RedisQueues.TRIAGE_QUEUE.value],
+            [RedisQueues.triage_queue(user_triggered=True), RedisQueues.triage_queue()],
             process_task,
             max_concurrent=max_concurrent_tasks,
             shutdown_event=shutdown_event,

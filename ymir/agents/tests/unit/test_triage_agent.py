@@ -1824,7 +1824,7 @@ async def test_is_rebase_sibling_follows_the_newest_primary_link(monkeypatch):
         return False
 
     monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
-    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
+    monkeypatch.setattr(t_agent, "is_sibling_link_stale", fake_stale)
 
     state = TriageState(jira_issue="RHEL-200")
     assert await _is_rebase_sibling(state, [], user_triggered=True) is True
@@ -1849,7 +1849,7 @@ async def test_is_rebase_sibling_follows_primary_state(monkeypatch, primary_stal
         return primary_stale
 
     monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
-    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
+    monkeypatch.setattr(t_agent, "is_sibling_link_stale", fake_stale)
 
     state = TriageState(jira_issue="RHEL-200")
     assert await _is_rebase_sibling(state, [], user_triggered=False) is expected
@@ -1866,7 +1866,7 @@ async def test_is_rebase_sibling_keeps_deferring_without_a_link(monkeypatch):
         raise AssertionError("primary lookup must not be attempted without a link")
 
     monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
-    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
+    monkeypatch.setattr(t_agent, "is_sibling_link_stale", fake_stale)
 
     state = TriageState(jira_issue="RHEL-200")
     assert await _is_rebase_sibling(state, [], user_triggered=False) is True
@@ -2001,7 +2001,7 @@ async def test_is_rebase_sibling_unknown_primary_state(monkeypatch, user_trigger
         raise RuntimeError("Jira unavailable")
 
     monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
-    monkeypatch.setattr(t_agent, "sibling_link_is_stale", failing_stale)
+    monkeypatch.setattr(t_agent, "is_sibling_link_stale", failing_stale)
 
     state = TriageState(jira_issue="RHEL-200")
     if expects_raise:
@@ -2028,7 +2028,7 @@ async def test_is_rebase_sibling_fails_when_own_details_unreadable(monkeypatch, 
         raise AssertionError("primary lookup must not be attempted")
 
     monkeypatch.setattr(t_agent, "run_tool", failing_run_tool)
-    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
+    monkeypatch.setattr(t_agent, "is_sibling_link_stale", fake_stale)
 
     state = TriageState(jira_issue="RHEL-200")
     with pytest.raises(RuntimeError, match="RHEL-200"):

@@ -13,7 +13,7 @@ from ymir.agents.rebase_consolidation import (
     check_and_queue_primary_if_ready,
     find_triaged_rebase_siblings,
     has_new_latest_changelog_entry,
-    sibling_link_is_stale,
+    is_sibling_link_stale,
     uses_autochangelog,
 )
 from ymir.common.constants import JiraLabels, RedisQueues
@@ -707,7 +707,7 @@ async def test_sibling_link_is_stale_follows_primary_state(monkeypatch, status, 
         return {"fields": {"status": {"name": status}, "labels": labels}}
 
     monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
-    assert await sibling_link_is_stale("RHEL-100", []) is expected
+    assert await is_sibling_link_stale("RHEL-100", []) is expected
 
 
 @pytest.mark.asyncio
@@ -719,7 +719,7 @@ async def test_sibling_link_is_stale_propagates_lookup_errors(monkeypatch):
 
     monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
     with pytest.raises(Exception, match="MCP Gateway unreachable"):
-        await sibling_link_is_stale("RHEL-100", [])
+        await is_sibling_link_stale("RHEL-100", [])
 
 
 @pytest.mark.asyncio

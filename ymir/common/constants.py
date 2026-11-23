@@ -59,6 +59,18 @@ def is_sustaining_deployment() -> bool:
     return os.getenv("SUSTAINING", "false").lower() == "true"
 
 
+# Plain Jira label marking SE-owned (sustaining) issues. It is the
+# authoritative bucket signal at ingestion: deployment-scoped components follow
+# their own flag, while shared ones (fetchers, sweeps) use the issue label to
+# keep work in the right queue family.
+SUSTAINING_LABEL = "sustaining"
+
+
+def is_sustaining_issue(labels: list[str] | set[str] | None) -> bool:
+    """Return True when the issue carries the sustaining label."""
+    return bool(labels) and SUSTAINING_LABEL in labels
+
+
 class RedisQueues(Enum):
     """Constants for Redis queue names used by Ymir agents"""
 

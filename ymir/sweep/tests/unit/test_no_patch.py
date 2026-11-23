@@ -270,3 +270,22 @@ async def test_run_returns_zero_when_no_issues(monkeypatch):
         "errors": 0,
         "still_blocked": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_run_routes_by_bucket(monkeypatch):
+    issues = [
+        make_issue(key="RHEL-1", labels=[]),
+        make_issue(key="RHEL-2", labels=["sustaining"]),
+    ]
+    _set_get_blocked(monkeypatch, issues)
+    _patch_remove_label(monkeypatch)
+    _patch_add_label(monkeypatch)
+
+    queued = []
+    mock_redis = flexmock()
+    mock_redis.should_receive("lpush").replace_with(lambda queue, payload: queued.append(queue))
+
+    await NoPatchSweep().run(mock_redis)
+
+    assert queued == [RedisQueues.TRIAGE_QUEUE.value, RedisQueues.TRIAGE_QUEUE_SUSTAINING.value]

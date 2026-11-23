@@ -32,7 +32,13 @@ import redis.asyncio as redis
 import requests
 
 from ymir.common.base_utils import fix_await, get_jira_auth_headers, redis_client
-from ymir.common.constants import JIRA_SEARCH_PATH, JiraLabels, RedisQueues
+from ymir.common.constants import (
+    JIRA_SEARCH_PATH,
+    JiraLabels,
+    RedisQueues,
+    is_sustaining_deployment,
+    is_sustaining_issue,
+)
 from ymir.common.issue_lock import LOCK_KEY_PREFIX
 from ymir.common.logging_setup import configure_logging
 from ymir.common.merge_queue import SubmitResult, submit_merge_job
@@ -795,6 +801,7 @@ class JiraIssueFetcher:
             skipped_count = 0
             modular_count = 0
 
+            deployment_sustaining = is_sustaining_deployment()
             for issue in issues:
                 try:
                     if effective_max_issues is not None and pushed_count >= effective_max_issues:
@@ -803,6 +810,18 @@ class JiraIssueFetcher:
 
                     issue_key = issue["key"]
                     fields = issue.get("fields") or {}
+
+                    issue_labels = fields.get("labels", [])
+                    if deployment_sustaining != is_sustaining_issue(issue_labels):
+                        logger.info(
+                            "Skipping issue %s - bucket mismatch (deployment sustaining=%s, "
+                            "issue sustaining=%s)",
+                            issue_key,
+                            deployment_sustaining,
+                            is_sustaining_issue(issue_labels),
+                        )
+                        skipped_count += 1
+                        continue
 
                     downstream_component = fields.get("customfield_10669") or ""
                     if (

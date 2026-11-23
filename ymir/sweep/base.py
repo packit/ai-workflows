@@ -19,7 +19,7 @@ from typing import Literal
 import redis
 
 from ymir.common.base_utils import fix_await
-from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.constants import JiraLabels, RedisQueues, is_sustaining_issue
 from ymir.common.jira_api import add_issue_label, get_current_issues, remove_issue_label
 from ymir.common.models import FullIssue, Task
 from ymir.sweep.comment_parser import CommentData, parse_ymir_comment
@@ -111,6 +111,7 @@ class SweepStrategy(ABC):
         redis_conn: redis.Redis,
         comment: str | None = None,
         triage_only: bool = False,
+        sustaining: bool = False,
     ) -> None:
         """Push issue to triage queue, then remove the postponement label.
 
@@ -124,7 +125,8 @@ class SweepStrategy(ABC):
         atomically with the label removal when provided.
         """
         task = Task.from_issue(issue_key, triage_only=triage_only)
-        await fix_await(redis_conn.lpush(RedisQueues.triage_queue(), task.to_json()))
+        queue = RedisQueues.triage_queue(sustaining=sustaining)
+        await fix_await(redis_conn.lpush(queue, task.to_json()))
         await fix_await(add_issue_label(issue_key, JiraLabels.TRIAGE_IN_PROGRESS.value))
         await fix_await(remove_issue_label(issue_key, self.label.value, comment=comment))
         self.logger.info(
@@ -203,6 +205,7 @@ class SweepStrategy(ABC):
                         redis_conn,
                         comment=result.detail,
                         triage_only=JiraLabels.TRIAGE_ONLY.value in issue.labels,
+                        sustaining=is_sustaining_issue(issue.labels),
                     )
                     unblocked += 1
                 elif result.action == "transitioned":

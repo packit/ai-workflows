@@ -4,7 +4,7 @@ import pytest
 import redis
 from flexmock import flexmock
 
-from ymir.common.constants import JiraLabels
+from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import FullIssue, Task
 from ymir.sweep.base import SweepResult, SweepStrategy
 from ymir.sweep.comment_parser import CommentData
@@ -365,3 +365,37 @@ async def test_run_processes_multiple_issues(monkeypatch):
 
     assert summary["total"] == 3
     assert summary["unblocked"] == 3
+
+
+@pytest.mark.asyncio
+async def test_on_unblock_routes_by_bucket(monkeypatch):
+    _mock_remove_label(monkeypatch)
+    _mock_add_label(monkeypatch)
+
+    queues = []
+    mock_redis = flexmock()
+    mock_redis.should_receive("lpush").replace_with(lambda queue, payload: queues.append(queue))
+
+    strategy = _UnblockedStrategy()
+    await strategy.on_unblock("RHEL-12345", mock_redis, sustaining=False)
+    await strategy.on_unblock("RHEL-12345", mock_redis, sustaining=True)
+
+    assert queues == [RedisQueues.TRIAGE_QUEUE.value, RedisQueues.TRIAGE_QUEUE_SUSTAINING.value]
+
+
+@pytest.mark.asyncio
+async def test_run_routes_sustaining_issue_by_label(monkeypatch):
+    comment = make_ymir_comment(pending_issues=["RHEL-99"], blocker_reference="RHEL-99")
+    issue = make_issue(labels=["sustaining"], comments=[comment])
+    monkeypatch.setattr("ymir.sweep.base.get_current_issues", lambda jql, full=False: iter([issue]))
+    _mock_remove_label(monkeypatch)
+    _mock_add_label(monkeypatch)
+
+    queues = []
+    mock_redis = flexmock()
+    mock_redis.should_receive("lpush").replace_with(lambda queue, payload: queues.append(queue))
+
+    summary = await _UnblockedStrategy().run(mock_redis)
+
+    assert summary["unblocked"] == 1
+    assert queues == [RedisQueues.TRIAGE_QUEUE_SUSTAINING.value]

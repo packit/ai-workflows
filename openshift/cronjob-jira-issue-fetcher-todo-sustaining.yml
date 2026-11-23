@@ -1,0 +1,80 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: jira-issue-fetcher-todo-sustaining
+  labels:
+    app: jira-issue-fetcher-todo-sustaining
+    component: scheduler
+spec:
+  # Every 5 minutes — picks up sustaining todo requests promptly. Suspended
+  # until routing is enabled.
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid  # Prevent overlapping runs
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  suspend: true
+  jobTemplate:
+    metadata:
+      labels:
+        app: jira-issue-fetcher-todo-sustaining
+        component: job
+        billing-bucket: sustaining
+      spec:
+        backoffLimit: 2
+        activeDeadlineSeconds: 240  # 4 minutes max runtime (cron is */5, must not overlap)
+        template:
+          metadata:
+            labels:
+              app: jira-issue-fetcher-todo-sustaining
+              component: pod
+              billing-bucket: sustaining
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: jira-issue-fetcher-env
+              image: 'jira-issue-fetcher:prod'
+              imagePullPolicy: Always
+              env:
+              - name: SUSTAINING
+                value: "true"
+              envFrom:
+              - configMapRef:
+                  name: endpoints-env
+              - configMapRef:
+                  name: jira-env
+              - secretRef:
+                  name: jira-env
+              - configMapRef:
+                  name: jira-issue-fetcher-env
+              - configMapRef:
+                  name: jira-issue-fetcher-todo-env-sustaining
+              resources:
+                limits:
+                  cpu: "200m"
+                  memory: "128Mi"
+                requests:
+                  cpu: "20m"
+                  memory: "64Mi"
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+                capabilities:
+                  drop:
+                  - ALL
+              volumeMounts:
+              - mountPath: /etc/pki/service-ca
+                name: service-ca
+                readOnly: true
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault
+            dnsPolicy: ClusterFirst
+            schedulerName: default-scheduler
+            terminationGracePeriodSeconds: 30
+            volumes:
+            - name: service-ca
+              configMap:
+                name: service-ca-bundle

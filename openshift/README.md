@@ -117,6 +117,14 @@ Agents are deployed in the `jotnar-ymir--jotnar-ymir` project.
   ```
   You can obtain the file from our bitwarden.
 
+  For the sustaining bucket, create a second secret from that bucket's own
+  service-account key (and set the matching `GOOGLE_VERTEX_PROJECT` in
+  `configmap-chat-env-sustaining.yml`):
+
+  ```bash
+  oc create secret generic vertex-key-sustaining --from-file=jotnar-vertex-sustaining.json
+  ```
+
 - Verify the storage classes work on the cluster before deploying. The deployment
   uses **two** storage classes:
 
@@ -520,6 +528,8 @@ To push a Jira issue into the triage queue (e.g. to force CVE triage):
 
 ```bash
 make process ISSUE=RHEL-XXXX
+# Sustaining bucket (only consumed by sustaining triage deployments):
+make process ISSUE=RHEL-XXXX SUSTAINING=true
 # or:
 oc rsh deployment/valkey valkey-cli --tls \
   --cert /tls/tls.crt --key /tls/tls.key \
@@ -562,12 +572,14 @@ Each `show-*-queue` target lists the Jira issue keys currently waiting in a queu
 
 ```bash
 make show-triage-queue          # triage_queue_todo + triage_queue
+make show-triage-queue-sustaining    # sustaining triage queues
 make show-rebase-queue-c9s      # rebase_queue_c9s_todo + rebase_queue_c9s
 make show-rebase-queue-c10s     # rebase_queue_c10s_todo + rebase_queue_c10s
 make show-backport-queue-c9s    # backport_queue_c9s_todo + backport_queue_c9s
 make show-backport-queue-c10s   # backport_queue_c10s_todo + backport_queue_c10s
 make show-rebuild-queue-c9s     # rebuild_queue_c9s_todo + rebuild_queue_c9s
 make show-rebuild-queue-c10s    # rebuild_queue_c10s_todo + rebuild_queue_c10s
+make show-*-queue-sustaining    # the same for every *_sustaining downstream queue
 make show-reproducer-queue      # reproducer_queue_todo + reproducer_queue
 make show-clarification-queue   # clarification_needed_queue (no priority twin)
 make show-error-list            # per-issue / per-tool-error breakdown via scripts/error_list.py
@@ -585,6 +597,7 @@ make logs-rebase-c9s       # rebase-agent-c9s
 make logs-rebase-c10s      # rebase-agent-c10s
 make logs-rebuild-c9s      # rebuild-agent-c9s
 make logs-rebuild-c10s     # rebuild-agent-c10s
+make logs-triage-sustaining    # same for every *-sustaining deployment
 make logs-reproducer       # reproducer-agent
 make logs-mcp              # mcp-gateway
 make logs-valkey           # valkey

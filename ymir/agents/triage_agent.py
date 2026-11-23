@@ -27,9 +27,9 @@ from ymir.agents.rebase_consolidation import (
     CLUSTER_LOCK_PREFIX,
     check_and_queue_primary_if_ready,
     get_rebase_primary_issue,
+    is_sibling_link_stale,
     queue_siblings_for_triage,
     rebase_cluster_lock_key,
-    sibling_link_is_stale,
 )
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
 from ymir.agents.tasks import InvalidReproducerConfigError
@@ -288,7 +288,7 @@ async def _is_rebase_sibling(state, available_tools, user_triggered: bool, dry_r
         # Sibling without a readable link: keep deferring.
         return True
     try:
-        stale = await sibling_link_is_stale(primary_issue, available_tools)
+        stale = await is_sibling_link_stale(primary_issue, available_tools)
     except Exception as e:
         if user_triggered:
             raise RuntimeError(

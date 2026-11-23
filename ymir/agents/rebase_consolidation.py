@@ -99,7 +99,7 @@ _FINISHED_PRIMARY_LABELS = frozenset(
 )
 
 
-async def sibling_link_is_stale(primary_issue: str, available_tools: list[Tool]) -> bool:
+async def is_sibling_link_stale(primary_issue: str, available_tools: list[Tool]) -> bool:
     """Return whether a sibling link points at a primary that is already finished.
 
     The sibling marker is a permanent Jira comment, so without this check a later

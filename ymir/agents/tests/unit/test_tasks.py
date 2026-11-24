@@ -1,5 +1,6 @@
 import subprocess
 from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -39,8 +40,15 @@ from ymir.agents.tasks import (
     resolve_canonical_mr_title,
     resolve_current_canonical_mr_title,
     scratch_build_branch,
+    try_submit_consolidation_job,
 )
-from ymir.common.models import AutoProcessingMode, CachedMRMetadata, Task
+from ymir.common.merge_queue import SubmitResult
+from ymir.common.models import (
+    AutoProcessingMode,
+    CachedMRMetadata,
+    PackageConsolidationConfig,
+    Task,
+)
 from ymir.tools.privileged.utils import ACTIVE_WORKSPACE_MARKER
 
 
@@ -2369,3 +2377,70 @@ async def test_fetch_auto_processing_config_fails_open_on_malformed_config(yaml_
     config = await fetch_auto_processing_config("bash", [])
 
     assert config.mode is AutoProcessingMode.FULL
+
+
+# -- try_submit_consolidation_job ---------------------------------------------
+
+
+def _consolidation_config(merge_mrs: bool = True) -> PackageConsolidationConfig:
+    return PackageConsolidationConfig(merge_mrs=merge_mrs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [SubmitResult.SUBMITTED, SubmitResult.ALREADY_QUEUED])
+async def test_try_submit_does_not_notify_jira(result):
+    with (
+        patch("ymir.agents.tasks.fetch_consolidation_config", return_value=_consolidation_config()),
+        patch("ymir.agents.tasks.submit_merge_job", return_value=result) as submit,
+        patch("ymir.agents.tasks.run_tool") as run_tool,
+    ):
+        await try_submit_consolidation_job("bash", "c10s", [], AsyncMock())
+
+    submit.assert_awaited_once()
+    run_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_try_submit_skips_when_consolidation_disabled():
+    """When merge_mrs=False no job is submitted and no Jira comment is posted."""
+    with (
+        patch(
+            "ymir.agents.tasks.fetch_consolidation_config",
+            new_callable=AsyncMock,
+            return_value=_consolidation_config(merge_mrs=False),
+        ),
+        patch("ymir.agents.tasks.submit_merge_job", new_callable=AsyncMock) as mock_submit,
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
+    ):
+        await try_submit_consolidation_job(
+            package="bash",
+            dist_git_branch="c10s",
+            gateway_tools=[],
+            redis_conn=AsyncMock(),
+        )
+
+    mock_submit.assert_not_awaited()
+    mock_run_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_try_submit_skips_when_redis_is_none():
+    """Without a Redis connection (direct mode) no job is submitted and no comment is posted."""
+    with (
+        patch(
+            "ymir.agents.tasks.fetch_consolidation_config",
+            new_callable=AsyncMock,
+            return_value=_consolidation_config(),
+        ),
+        patch("ymir.agents.tasks.submit_merge_job", new_callable=AsyncMock) as mock_submit,
+        patch("ymir.agents.tasks.run_tool", new_callable=AsyncMock) as mock_run_tool,
+    ):
+        await try_submit_consolidation_job(
+            package="bash",
+            dist_git_branch="c10s",
+            gateway_tools=[],
+            redis_conn=None,
+        )
+
+    mock_submit.assert_not_awaited()
+    mock_run_tool.assert_not_awaited()

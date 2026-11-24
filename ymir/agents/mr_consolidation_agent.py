@@ -225,6 +225,19 @@ def _extract_cves_from_cve_footer_lines(text: str) -> list[str]:
     return sorted(set(cves))
 
 
+def _extract_jira_from_mr_descriptions(mrs: list[dict]) -> list[str]:
+    """Extract Jira issue keys from MR description Resolves:/Related: footers.
+
+    Used in auto mode to seed jira_issues_collected before the git clone is
+    available, so early-exit paths can still post Jira comments.
+    """
+    issues: list[str] = []
+    for mr in mrs:
+        desc = mr.get("description") or ""
+        issues.extend(_extract_jira_issues_from_resolves_footer_lines(desc))
+    return sorted(set(issues))
+
+
 def _extract_jira_issues_from_resolves_footer_lines(text: str) -> list[str]:
     """Extract RHEL keys only from ``Resolves:`` / ``Related:`` lines.
 
@@ -336,7 +349,7 @@ def _mr_type_from_labels(mr: dict) -> str:
 
 
 async def _resolve_source_issues(
-    state,
+    state: ConsolidationState,
     project_path: str,
     issue_keys: list[str],
     gateway_tools: list,
@@ -386,10 +399,14 @@ async def _resolve_source_issues(
             )
             state.consolidation_result = MRConsolidationOutputSchema(
                 success=False,
-                status=f"Could not find an open MR for {issue_key}",
+                status="mr_not_found",
+                status_detail=f"Could not find an open MR for {issue_key}",
                 error=f"No open MR matching {issue_key} in {project_path}",
             )
-            return Workflow.END
+            # When have no collected issues post updates under those from issue_keys
+            if not state.jira_issues_collected:
+                state.jira_issues_collected = issue_keys
+            return "update_jira_issues"
 
         matched_mrs.append(mr)
         logger.info(
@@ -412,7 +429,8 @@ async def _resolve_source_issues(
         logger.info("Fewer than 2 unique MRs resolved, nothing to consolidate")
         state.consolidation_result = MRConsolidationOutputSchema(
             success=True,
-            status="Fewer than 2 unique MRs resolved; nothing to do.",
+            status="nothing_to_consolidate",
+            status_detail="Fewer than 2 unique MRs resolved; nothing to do.",
         )
         return Workflow.END
 
@@ -475,7 +493,7 @@ async def run_workflow(
             jira_issue=None,
             release_strategy=release_strategy,
             consolidation_result=MRConsolidationOutputSchema(
-                success=False, status="Unsupported modular branch", error=error
+                success=False, status="failed", status_detail="Unsupported modular branch", error=error
             ),
         )
 
@@ -497,7 +515,11 @@ async def run_workflow(
 
         workflow = Workflow(ConsolidationState, name="MRConsolidationWorkflow")
 
-        async def list_open_mrs(state):
+        notification_issues = list(
+            source_issues or _extract_jira_from_mr_descriptions(backport_branches or [])
+        )
+
+        async def list_open_mrs(state: ConsolidationState):
             """List open backport and rebuild MRs for the package/branch."""
             if state.mr_branches:
                 logger.info(
@@ -549,14 +571,19 @@ async def run_workflow(
                 )
                 state.consolidation_result = MRConsolidationOutputSchema(
                     success=True,
-                    status="Fewer than 2 MRs to consolidate; nothing to do.",
+                    status="nothing_to_consolidate",
+                    status_detail="Fewer than 2 MRs to consolidate; nothing to do.",
                 )
                 return Workflow.END
 
             state.all_open_mrs = all_mrs
             return "fork_and_prepare_dist_git"
 
-        async def fork_and_prepare_dist_git(state):
+        async def fork_and_prepare_dist_git(state: ConsolidationState):
+            # BeeAI copies state for each step; keep notification recipients available
+            # to the outer exception handler even when a step never returns.
+            if not notification_issues:
+                notification_issues.extend(_extract_jira_from_mr_descriptions(state.all_open_mrs))
             working_id = f"consolidation-{package}-{dist_git_branch}-{int(time.time())}"
             (
                 state.local_clone,
@@ -678,7 +705,8 @@ async def run_workflow(
                     )
                     state.consolidation_result = MRConsolidationOutputSchema(
                         success=True,
-                        status="Fewer than 2 MRs based on current HEAD; nothing to do.",
+                        status="nothing_to_consolidate",
+                        status_detail="Fewer than 2 MRs based on current HEAD; nothing to do.",
                     )
                     return Workflow.END
 
@@ -697,13 +725,15 @@ async def run_workflow(
                     )
                     state.consolidation_result = MRConsolidationOutputSchema(
                         success=True,
-                        status="No backport MR on current HEAD; "
+                        status="nothing_to_consolidate",
+                        status_detail="No backport MR on current HEAD; "
                         "consolidation without a backport is not supported.",
                     )
                     return Workflow.END
 
                 selected = sorted_mrs[:2]
 
+                notification_issues[:] = _extract_jira_from_mr_descriptions(selected)
                 state.mr_urls = [mr["url"] for mr in selected]
                 state.mr_branches = [mr["source_branch"] for mr in selected]
                 state.mr_titles = [mr["title"] for mr in selected]
@@ -735,7 +765,8 @@ async def run_workflow(
                     )
                     state.consolidation_result = MRConsolidationOutputSchema(
                         success=False,
-                        status="Failed to diff branch",
+                        status="failed",
+                        status_detail="Failed to diff branch",
                         error=f"git diff {dist_git_branch}...{branch_name} "
                         f"failed (exit {exit_code}): {err_msg}",
                     )
@@ -758,10 +789,13 @@ async def run_workflow(
                 logger.error("Failed to collect commit footers: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(
                     success=False,
-                    status="Failed to collect commit footers",
+                    status="failed",
+                    status_detail="Failed to collect commit footers",
                     error=str(e),
                 )
                 return "handle_failure"
+            if state.jira_issues_collected:
+                notification_issues[:] = state.jira_issues_collected
             state.jira_issue = state.jira_issues_collected[0] if state.jira_issues_collected else None
             if state.jira_issues_collected:
                 current_jira_issue.set(",".join(state.jira_issues_collected))
@@ -779,7 +813,7 @@ async def run_workflow(
 
             return "per_commit_flow" if release_strategy == "per_commit" else "run_consolidation_agent"
 
-        async def run_consolidation_agent(state):
+        async def run_consolidation_agent(state: ConsolidationState):
             prompt = render_template(
                 "mr_consolidation/prompt.j2",
                 MRConsolidationInputSchema(
@@ -807,22 +841,26 @@ async def run_workflow(
                 logger.error("Consolidation agent error: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(
                     success=False,
-                    status="Agent error",
+                    status="failed",
+                    status_detail="Agent error",
                     error=str(e),
                 )
             except Exception as e:
                 logger.error("Unexpected consolidation error: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(
                     success=False,
-                    status="Unexpected error",
+                    status="failed",
+                    status_detail="Unexpected error",
                     error=str(e),
                 )
 
+            if state.consolidation_result.status == "nothing_to_consolidate":
+                return Workflow.END
             if not state.consolidation_result.success:
                 return "handle_failure"
             return "run_build_agent"
 
-        async def _prepare_konflux_build_input(state) -> BuildInputSchema:
+        async def _prepare_konflux_build_input(state: ConsolidationState) -> BuildInputSchema:
             """Build the BuildInputSchema for the Konflux backend.
 
             Konflux builds a pushed git ref rather than a local SRPM, so the
@@ -879,17 +917,19 @@ async def run_workflow(
                 specfile=state.spec_name,
             )
 
-        async def run_build_agent(state):
+        async def run_build_agent(state: ConsolidationState):
             def fail_build_verification(error: str) -> str:
                 if state.consolidation_result is None:
                     state.consolidation_result = MRConsolidationOutputSchema(
                         success=False,
-                        status="Build verification failed",
+                        status="failed",
+                        status_detail="Build verification failed",
                         error=error,
                     )
                 else:
                     state.consolidation_result.success = False
-                    state.consolidation_result.status = "Build verification failed"
+                    state.consolidation_result.status = "failed"
+                    state.consolidation_result.status_detail = "Build verification failed"
                     state.consolidation_result.error = error
                 return "handle_failure"
 
@@ -974,6 +1014,12 @@ async def run_workflow(
                 )
             except Exception as e:
                 logger.error("Failed to reset working branch for retry: %s", e)
+                state.consolidation_result = MRConsolidationOutputSchema(
+                    success=False,
+                    status="failed",
+                    status_detail="Failed to reset working branch",
+                    error=str(e),
+                )
                 return "handle_failure"
 
             has_rebuild_other = any(t == "rebuild" for t in state.mr_types.values())
@@ -1028,7 +1074,7 @@ async def run_workflow(
                 return False, output
             return True, output
 
-        async def per_commit_flow(state):
+        async def per_commit_flow(state: ConsolidationState):
             """Cherry-pick base branch, then incrementally adapt commits from the other branch.
 
             1. Choose the branch with larger patches as the "base" — cherry-pick
@@ -1282,10 +1328,14 @@ async def run_workflow(
                     ),
                 )
                 output = srpm_result.result
-                srpm_path = output.strip() if "FAILED" not in output else None
+                output_stripped = output.strip()
+                srpm_path = output_stripped if output_stripped and "FAILED" not in output else None
                 state.consolidation_result = MRConsolidationOutputSchema(
                     success=srpm_path is not None,
-                    status="per_commit consolidation complete",
+                    status="consolidation_complete" if srpm_path else "failed",
+                    status_detail="per_commit consolidation complete"
+                    if srpm_path
+                    else "per_commit flow failed",
                     srpm_path=srpm_path,
                 )
                 if not srpm_path:
@@ -1296,14 +1346,15 @@ async def run_workflow(
                 logger.error("per_commit flow error: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(
                     success=False,
-                    status="per_commit flow failed",
+                    status="failed",
+                    status_detail="per_commit flow failed",
                     error=str(e),
                 )
                 return "handle_failure"
 
             return "run_build_agent"
 
-        async def rebuild_append_flow(state):
+        async def rebuild_append_flow(state: ConsolidationState):
             """Append rebuild ticket(s) to the backport MR without cherry-picking.
 
             The backport branch is cherry-picked as base (it has patches + Release
@@ -1468,10 +1519,14 @@ async def run_workflow(
                     ),
                 )
                 output = srpm_result.result
-                srpm_path = output.strip() if "FAILED" not in output else None
+                output_stripped = output.strip()
+                srpm_path = output_stripped if output_stripped and "FAILED" not in output else None
                 state.consolidation_result = MRConsolidationOutputSchema(
                     success=srpm_path is not None,
-                    status="rebuild_append consolidation complete",
+                    status="consolidation_complete" if srpm_path else "failed",
+                    status_detail="rebuild_append consolidation complete"
+                    if srpm_path
+                    else "rebuild_append flow failed",
                     srpm_path=srpm_path,
                 )
                 if not srpm_path:
@@ -1482,14 +1537,15 @@ async def run_workflow(
                 logger.error("rebuild_append flow error: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(
                     success=False,
-                    status="rebuild_append flow failed",
+                    status="failed",
+                    status_detail="rebuild_append flow failed",
                     error=str(e),
                 )
                 return "handle_failure"
 
             return "run_build_agent"
 
-        async def update_release(state):
+        async def update_release(state: ConsolidationState):
             try:
                 await tasks.update_release(
                     local_clone=state.local_clone,
@@ -1502,13 +1558,14 @@ async def run_workflow(
                 logger.error("Error updating release: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(
                     success=False,
-                    status="Failed to update release",
+                    status="failed",
+                    status_detail="Failed to update release",
                     error=str(e),
                 )
                 return "handle_failure"
             return "stage_changes"
 
-        async def stage_changes(state):
+        async def stage_changes(state: ConsolidationState):
             try:
                 files_to_stage = _files_to_stage_for_patches(state.local_clone, state.spec_name)
                 logger.info("Staging files: %s", files_to_stage)
@@ -1520,7 +1577,8 @@ async def run_workflow(
                 logger.error("Error staging changes: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(
                     success=False,
-                    status="Failed to stage changes",
+                    status="failed",
+                    status_detail="Failed to stage changes",
                     error=str(e),
                 )
                 return "handle_failure"
@@ -1528,15 +1586,15 @@ async def run_workflow(
                 return "commit_push_and_open_mr"
             return "run_log_agent"
 
-        async def run_log_agent(state):
+        async def run_log_agent(state: ConsolidationState):
             summary_parts = [
                 f"Consolidated {len(state.mr_branches)} backport branches "
                 f"for {package} on {dist_git_branch}.",
             ]
             if state.mr_titles:
                 summary_parts.extend(f"  - {title}" for title in state.mr_titles)
-            if state.consolidation_result and state.consolidation_result.status:
-                summary_parts.append(f"Result: {state.consolidation_result.status}")
+            if state.consolidation_result and state.consolidation_result.status_detail:
+                summary_parts.append(f"Result: {state.consolidation_result.status_detail}")
             changes_summary = "\n".join(summary_parts)
 
             log_prompt = render_template(
@@ -1563,7 +1621,7 @@ async def run_workflow(
                 )
             return "stage_changes"
 
-        async def commit_push_and_open_mr(state):
+        async def commit_push_and_open_mr(state: ConsolidationState):
             """Squash all changes into a single commit (merged strategy), then push."""
             if state.log_result:
                 commit_message = f"{state.log_result.title}\n\n{state.log_result.description}"
@@ -1618,14 +1676,15 @@ async def run_workflow(
                 logger.error("Failed to finalize commit: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(
                     success=False,
-                    status="Failed to create consolidated commit",
+                    status="failed",
+                    status_detail="Failed to create consolidated commit",
                     error=str(e),
                 )
-                return Workflow.END
+                return "handle_failure"
 
             return "push_and_open_mr"
 
-        async def push_and_open_mr(state):
+        async def push_and_open_mr(state: ConsolidationState):
             """Push commits and open the consolidated MR on GitLab."""
             has_rebuild = any(t == "rebuild" for t in state.mr_types.values())
             combined_description = _build_consolidated_description(
@@ -1704,14 +1763,15 @@ async def run_workflow(
                 logger.error("Failed to create consolidated MR: %s", e)
                 state.consolidation_result = MRConsolidationOutputSchema(
                     success=False,
-                    status="Failed to create consolidated MR",
+                    status="failed",
+                    status_detail="Failed to create consolidated MR",
                     error=str(e),
                 )
-                return Workflow.END
+                return "handle_failure"
 
             return "mark_original_mrs"
 
-        async def mark_original_mrs(state):
+        async def mark_original_mrs(state: ConsolidationState):
             """Label original MRs as consolidated so they are excluded from future runs."""
             if dry_run:
                 logger.info(
@@ -1735,26 +1795,68 @@ async def run_workflow(
 
             return "update_jira_issues"
 
-        async def update_jira_issues(state):
-            if not state.jira_issues_collected or not state.merge_request_url:
+        async def update_jira_issues(state: ConsolidationState):
+            """Post status updates to Jira issues based on consolidation outcome."""
+            if not state.consolidation_result:
+                return "requeue_if_needed"
+
+            status = state.consolidation_result.status
+            if status == "nothing_to_consolidate":
+                return Workflow.END
+
+            # Skip comment posting only when there's genuinely nothing to report
+            # (i.e., no failure, no success, and no informational status)
+            if not state.merge_request_url and status == "consolidation_complete":
+                logger.warning(
+                    "Consolidation marked complete for %s/%s but no MR URL available - possible workflow bug",
+                    package,
+                    dist_git_branch,
+                )
                 return "requeue_if_needed"
 
             has_rebuild = any(t == "rebuild" for t in state.mr_types.values())
             for issue_key in state.jira_issues_collected:
-                if has_rebuild:
+                comment = None
+
+                if status == "failed":
+                    # Report failure details from consolidation_result
+                    error_detail = state.consolidation_result.error or "unknown"
+                    comment = f"MR consolidation failed for {package}/{dist_git_branch}: {error_detail}"
+                elif status == "consolidation_complete":
+                    # Successfully consolidated and created an MR
+                    if has_rebuild:
+                        comment = (
+                            f"Your MR has been consolidated (backport + rebuild) "
+                            f"into a single MR: {state.merge_request_url}"
+                        )
+                    else:
+                        comment = (
+                            f"Your backport MR has been consolidated with other fixes "
+                            f"into a single MR: {state.merge_request_url}"
+                        )
+                elif status == "mr_not_found":
+                    # Could not find MR for the specified issue
+                    detail = state.consolidation_result.status_detail or "Could not find MR for this issue."
                     comment = (
-                        f"Your MR has been consolidated (backport + rebuild) "
-                        f"into a single MR: {state.merge_request_url}"
+                        f"MR consolidation could not proceed for {package}/{dist_git_branch}.\n\n{detail}"
                     )
-                else:
-                    comment = (
-                        f"Your backport MR has been consolidated with other fixes "
-                        f"into a single MR: {state.merge_request_url}"
+
+                if not comment:
+                    logger.warning(
+                        (
+                            "No comment generated for issue %s with status '%s' "
+                            "- unhandled ConsolidationStatus value"
+                        ),
+                        issue_key,
+                        status,
                     )
+                    continue
+
                 if dry_run:
                     logger.info(
-                        "Dry run: would post consolidation comment on %s",
+                        "Dry run: would post consolidation comment on %s: %s",
                         issue_key,
+                        comment,
                     )
                     continue
                 try:
@@ -1773,9 +1875,12 @@ async def run_workflow(
                         e,
                     )
 
+            if status in ("failed", "mr_not_found"):
+                return Workflow.END
+
             return "requeue_if_needed"
 
-        async def requeue_if_needed(state):
+        async def requeue_if_needed(state: ConsolidationState):
             current_count = state.current_mrs_count
             remaining = current_count - 2
             if remaining < 1:
@@ -1797,14 +1902,19 @@ async def run_workflow(
                 )
             return Workflow.END
 
-        async def handle_failure(state):
+        async def handle_failure(state: ConsolidationState):
+            """Log failure and request update of all linked Jira items."""
             logger.error(
                 "MR consolidation failed for %s/%s: %s",
                 package,
                 dist_git_branch,
                 state.consolidation_result.error if state.consolidation_result else "unknown",
             )
-            return Workflow.END
+            # In auto mode, jira_issues_collected may not be populated yet
+            # (failure before footer collection). Fall back to MR descriptions.
+            if not state.jira_issues_collected:
+                state.jira_issues_collected = notification_issues
+            return "update_jira_issues"
 
         workflow.add_step("list_open_mrs", list_open_mrs)
         workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
@@ -1849,6 +1959,33 @@ async def run_workflow(
                 )
                 response = await workflow.run(initial_state)
             return response.state
+        except Exception:
+            logger.exception(
+                "Unhandled error in consolidation workflow for %s/%s",
+                package,
+                dist_git_branch,
+            )
+            if notification_issues and not dry_run:
+                msg = (
+                    f"MR consolidation failed for {package}/{dist_git_branch} "
+                    f"with an unexpected error. Please check the agent logs."
+                )
+                for issue_key in notification_issues:
+                    try:
+                        await run_tool(
+                            "add_jira_comment",
+                            issue_key=issue_key,
+                            comment=msg,
+                            private=True,
+                            available_tools=gateway_tools,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to post unhandled-failure comment on %s: %s",
+                            issue_key,
+                            e,
+                        )
+            raise
         finally:
             if builddir := local_tool_options.get("builddir"):
                 shutil.rmtree(builddir, ignore_errors=True)

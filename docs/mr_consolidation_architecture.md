@@ -218,6 +218,13 @@ still review and reference them. In dry-run mode, this is logged but not execute
 Posts a comment on every Jira issue involved in the consolidation, linking the new
 consolidated MR. Without this, a maintainer would have no pointer from the Jira issue
 to the consolidated replacement. In dry-run mode, this is logged but not executed.
+The workflow also reports failures to the known Jira issues, including the error
+from build verification, and reports a missing MR for an explicit issue request.
+Queue submission and eligibility checks that find no consolidatable pair do not
+post Jira comments or schedule a follow-up.
+The result uses `consolidation_complete` or `nothing_to_consolidate` for success
+and `failed` or `mr_not_found` for failure. Human-readable context belongs in
+`status_detail`, not in the status value.
 
 ### Step 10: `requeue_if_needed`
 

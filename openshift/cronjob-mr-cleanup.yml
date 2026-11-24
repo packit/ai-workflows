@@ -18,7 +18,7 @@ spec:
         component: job
     spec:
       backoffLimit: 2
-      activeDeadlineSeconds: 3600  # 60 minutes max runtime
+      activeDeadlineSeconds: 10800  # 3 hours max runtime
       template:
         metadata:
           labels:
@@ -39,11 +39,11 @@ spec:
                 name: jira-env
             resources:
               limits:
-                cpu: "200m"
-                memory: "128Mi"
+                cpu: "500m"
+                memory: "1Gi"
               requests:
-                cpu: "20m"
-                memory: "64Mi"
+                cpu: "100m"
+                memory: "256Mi"
             securityContext:
               allowPrivilegeEscalation: false
               runAsNonRoot: true

@@ -99,7 +99,7 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
          "GitPython>=3.1.0" \
          unidiff \
          "PyYAML>=5.1" \
-         "sentry-sdk>=2.13.0" \
+         "sentry-sdk>=2.56.0,<3" \
          typer \
     && cd /opt/beeai-venv/lib/python3.11/site-packages \
     && patch -p5 -i /tmp/openinference-reasoning.patch \

@@ -33,7 +33,7 @@ RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
        aiohttp>=3.12.15 \
        redis \
        backoff \
-       sentry-sdk \
+       "sentry-sdk>=2.56.0,<3" \
        specfile \
        pytest \
        pytest-asyncio \

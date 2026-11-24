@@ -97,7 +97,7 @@ RUN pip3 install --no-cache-dir \
       "GitPython>=3.1.0" \
       unidiff \
       "PyYAML>=5.1" \
-      "sentry-sdk>=2.13.0" \
+      "sentry-sdk>=2.56.0,<3" \
       typer \
     && cd /usr/local/lib/python3.12/site-packages \
     && patch -p5 -i /tmp/openinference-reasoning.patch \

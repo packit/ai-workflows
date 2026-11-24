@@ -25,7 +25,7 @@ RUN pip3 install -v --no-cache-dir \
       jinja2 \
       redis \
       specfile \
-      sentry-sdk>=2.13.0 \
+      "sentry-sdk>=2.56.0,<3" \
     && dnf -y remove gcc gcc-c++ python3-devel \
     && dnf clean all
 

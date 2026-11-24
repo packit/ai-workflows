@@ -4,10 +4,16 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
+import tempfile
 import traceback
+import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
+import aiohttp
 from beeai_framework.agents.requirement.requirements.conditional import (
     ConditionalRequirement,
 )
@@ -31,13 +37,15 @@ from ymir.agents.utils import (
     run_tool,
 )
 from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
-from ymir.common.constants import RedisQueues
+from ymir.common.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT, RedisQueues
 from ymir.common.cve import extract_cve_ids
+from ymir.common.http_utils import aiohttp_get_with_retries
 from ymir.common.logging_setup import configure_logging, get_trajectory_writeable
 from ymir.common.models import ErrorData, ErrorListEntry, Task
 from ymir.common.utils import init_sentry
 from ymir.tools.privileged.mr_testing import fold_comment_body
 from ymir.tools.unprivileged.greenwave import FetchTestingFarmResultsTool
+from ymir.tools.unprivileged.text import SearchTextTool, ViewTool
 
 logger = logging.getLogger(__file__)
 redis_logger = logging.getLogger("agent.redis")
@@ -70,9 +78,6 @@ _GATEWAY_TOOL_NAMES = [
     "get_merge_request_details",
     "get_jira_details",
     "format_mr_testing_comment",
-    # Gating mode (OSCI bot pipeline results, no anewa/NEWA run)
-    "get_pipeline_job_trace",
-    "extract_tf_request_from_job_trace",
     # Read-only history lookup for failure analysis (earlier analyses of this component)
     "search_gitlab_project_mrs",
     "get_merge_request_discussions",
@@ -162,7 +167,10 @@ def render_prompt(input: InputSchema) -> str:
     return render_template("mr_testing_analyst/prompt.j2", input)
 
 
-def create_mr_testing_analyst_agent(gateway_tools: list) -> ReasoningAgent:
+def create_mr_testing_analyst_agent(gateway_tools: list, gating: bool = False) -> ReasoningAgent:
+    # Gating mode reads the test logs Python already downloaded locally (see
+    # fetch_test_logs), so it gets file viewing tools instead of a URL fetcher.
+    log_tools = [ViewTool(), SearchTextTool()] if gating else [FetchTestingFarmResultsTool()]
     return ReasoningAgent(
         name="MrTestingAnalyst",
         description=(
@@ -174,7 +182,7 @@ def create_mr_testing_analyst_agent(gateway_tools: list) -> ReasoningAgent:
         tool_call_checker=get_tool_call_checker_config(),
         tools=[
             ThinkTool(),
-            FetchTestingFarmResultsTool(),
+            *log_tools,
         ]
         + [t for t in gateway_tools if t.name in _GATEWAY_TOOL_NAMES],
         memory=UnconstrainedMemory(),
@@ -197,6 +205,7 @@ class MrTestingAnalystWorkflowState(BaseModel):
     poc: bool = False
     no_jira_comments: bool = False
     gating: bool = False
+    test_logs_dir: str | None = None
 
     mr_description: str | None = Field(default=None)
     linked_issue_keys: list[str] = Field(default_factory=list)
@@ -322,6 +331,130 @@ async def _find_osci_discussion_to_resolve(
 
     candidates.sort(key=lambda d: d.get("created_at") or "")
     return candidates[-1].get("discussion_id")
+
+
+# Testing Farm artifacts only ever live on this host. Log links come from the
+# (untrusted) results.xml, so anything pointing elsewhere is never fetched.
+TEST_ARTIFACTS_HOST = "artifacts.osci.redhat.com"
+TEST_LOG_MAX_BYTES = 10 * 1024 * 1024
+TEST_LOG_MAX_PER_JOB = 50
+TEST_LOG_CONCURRENCY = 8
+
+
+def _is_test_artifacts_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.netloc == TEST_ARTIFACTS_HOST and parsed.scheme in ("http", "https")
+
+
+async def _download_bytes(session: aiohttp.ClientSession, url: str) -> bytes | None:
+    """GET url and return its body (capped at TEST_LOG_MAX_BYTES), or None on any failure."""
+    try:
+        async with aiohttp_get_with_retries(session, url) as response:
+            if response.status != 200:
+                logger.warning("Got HTTP %d for %s", response.status, url)
+                return None
+            return await response.content.read(TEST_LOG_MAX_BYTES)
+    except (aiohttp.ClientError, TimeoutError) as e:
+        logger.warning("Failed to download %s: %s", url, e)
+        return None
+
+
+async def _download_results_xml(session: aiohttp.ClientSession, artifacts_url: str) -> str | None:
+    """Testing Farm names the JUnit results file differently depending on the run, so try both."""
+    for name in ("results-junit.xml", "results.xml"):
+        body = await _download_bytes(session, f"{artifacts_url.rstrip('/')}/{name}")
+        if body is not None:
+            return body.decode("utf-8", errors="replace")
+    return None
+
+
+def _failed_test_log_urls(results_xml: str) -> list[tuple[str, str]]:
+    """(testcase name, log URL) for every log of each failed or errored testcase in a JUnit results file."""
+    try:
+        root = ET.fromstring(results_xml)  # noqa: S314 -- same parser as compare_xunit.parse_xunit
+    except ET.ParseError as e:
+        logger.warning("Failed to parse results.xml: %s", e)
+        return []
+
+    return [
+        (testcase.get("name", "unknown"), href)
+        for testcase in root.iter("testcase")
+        if testcase.find("failure") is not None or testcase.find("error") is not None
+        for log in testcase.findall(".//log")
+        if (href := log.get("href"))
+    ]
+
+
+async def _download_test_logs(
+    session: aiohttp.ClientSession, log_pairs: list[tuple[str, str]], logs_dir: Path
+) -> list[dict[str, str]]:
+    """Save each (testcase name, log URL) pair under logs_dir. Returns {test, path} for every log saved."""
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    semaphore = asyncio.Semaphore(TEST_LOG_CONCURRENCY)
+
+    async def save(index: int, test_name: str, url: str) -> dict[str, str] | None:
+        async with semaphore:
+            body = await _download_bytes(session, url)
+        if body is None:
+            return None
+        # The index keeps names unique even when two testcases link logs with the same basename.
+        basename = re.sub(r"[^A-Za-z0-9._-]", "_", Path(urlparse(url).path).name) or "log"
+        path = logs_dir / f"{index:03d}-{basename}"
+        path.write_bytes(body)
+        return {"test": test_name, "path": str(path)}
+
+    saved = await asyncio.gather(*(save(i, name, url) for i, (name, url) in enumerate(log_pairs)))
+    return [entry for entry in saved if entry is not None]
+
+
+async def _fetch_gating_job_test_files(
+    session: aiohttp.ClientSession,
+    gateway_tools: list,
+    mr_url: str,
+    job_name: str,
+    job_id: Any,
+    logs_root: Path,
+) -> dict[str, Any]:
+    """Find one gating test job's Testing Farm run from its CI trace, then download its results.xml and the
+    logs of every failed or errored testcase into logs_root/<job>/. Only the local paths are returned, so the
+    trace and log text never enter the agent's context."""
+    empty: dict[str, Any] = {"artifacts_url": None, "results_xml": None, "logs": [], "logs_skipped": 0}
+    if job_id is None:
+        return empty
+
+    trace = await run_tool(
+        "get_pipeline_job_trace",
+        available_tools=gateway_tools,
+        merge_request_url=mr_url,
+        job_id=str(job_id),
+    )
+    extracted = await run_tool(
+        "extract_tf_request_from_job_trace",
+        available_tools=gateway_tools,
+        trace=trace,
+    )
+    artifacts_url = extracted.get("artifacts_url")
+    if not artifacts_url or not _is_test_artifacts_url(artifacts_url):
+        return empty
+
+    job_dir = logs_root / re.sub(r"[^A-Za-z0-9._-]", "_", job_name)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    result: dict[str, Any] = {**empty, "artifacts_url": artifacts_url}
+
+    results_xml = await _download_results_xml(session, artifacts_url)
+    if results_xml is None:
+        logger.warning("No results.xml found for %s at %s", job_name, artifacts_url)
+        return result
+    results_path = job_dir / "results.xml"
+    results_path.write_text(results_xml, encoding="utf-8")
+    result["results_xml"] = str(results_path)
+
+    log_pairs = [pair for pair in _failed_test_log_urls(results_xml) if _is_test_artifacts_url(pair[1])]
+    result["logs"] = await _download_test_logs(session, log_pairs[:TEST_LOG_MAX_PER_JOB], job_dir / "logs")
+    result["logs_skipped"] = max(0, len(log_pairs) - TEST_LOG_MAX_PER_JOB)
+    if result["logs_skipped"]:
+        logger.warning("Skipped %d failed-test logs for %s (per-job cap)", result["logs_skipped"], job_name)
+    return result
 
 
 async def _mark_mr_analyzed(mr_url: str, gateway_tools: list, dry_run: bool) -> None:
@@ -474,7 +607,7 @@ async def run_mr_testing_analyst(
                 )
                 state.parsed_results = parsed
                 state.osci_pipeline_id = parsed.get("pipeline_id")
-                return "gather_jira_context"
+                return "fetch_test_logs"
 
             parsed = await run_tool(
                 "parse_mr_test_results",
@@ -495,6 +628,30 @@ async def run_mr_testing_analyst(
                     comments=state.mr_comments,
                 )
 
+            return "gather_jira_context"
+
+        async def fetch_test_logs(state: MrTestingAnalystWorkflowState):
+            """Gating mode only: download each gating test job's Testing Farm results and failed-test logs
+            into the run's local directory with aiohttp. Each job's PARSED_RESULTS entry gets the local paths
+            (plus its artifacts_url), so the agent reads local copies instead of fetching traces or log text
+            through tools. A failure for one job is logged and leaves that job without local files."""
+            if state.test_logs_dir is None:
+                raise RuntimeError("run_mr_testing_analyst sets test_logs_dir in gating mode")
+            logs_root = Path(state.test_logs_dir)
+            async with aiohttp.ClientSession(
+                timeout=AIOHTTP_TIMEOUT, headers={"User-Agent": YMIR_USER_AGENT}
+            ) as session:
+                for job_name, job in sorted(state.parsed_results.get("test_jobs", {}).items()):
+                    try:
+                        job.update(
+                            await _fetch_gating_job_test_files(
+                                session, gateway_tools, state.mr_url, job_name, job.get("id"), logs_root
+                            )
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to fetch test logs for %s in %s: %s", job_name, state.mr_url, e
+                        )
             return "gather_jira_context"
 
         async def gather_jira_context(state: MrTestingAnalystWorkflowState):
@@ -554,7 +711,7 @@ async def run_mr_testing_analyst(
             """Hand everything gathered so far to the ReasoningAgent, which parses
             the MR comments and builds the formatted comment content and posting
             decisions (but never posts anything itself -- see act_on_result)."""
-            agent = create_mr_testing_analyst_agent(gateway_tools)
+            agent = create_mr_testing_analyst_agent(gateway_tools, gating=state.gating)
 
             input_data = InputSchema(
                 mr_url=state.mr_url,
@@ -703,19 +860,27 @@ async def run_mr_testing_analyst(
         workflow.add_step("fetch_and_validate_mr", fetch_and_validate_mr)
         workflow.add_step("fetch_test_results", fetch_test_results)
         workflow.add_step("parse_mr_results", parse_mr_results)
+        workflow.add_step("fetch_test_logs", fetch_test_logs)
         workflow.add_step("gather_jira_context", gather_jira_context)
         workflow.add_step("run_analysis", run_analysis)
         workflow.add_step("act_on_result", act_on_result)
 
-        response = await workflow.run(
-            MrTestingAnalystWorkflowState(
-                mr_url=mr_url,
-                dry_run=dry_run,
-                poc=poc,
-                no_jira_comments=no_jira_comments,
-                gating=gating,
+        # Gating mode's local test-log copies only need to outlive the workflow run.
+        test_logs_dir = tempfile.mkdtemp(prefix="mr-testing-analyst-") if gating else None
+        try:
+            response = await workflow.run(
+                MrTestingAnalystWorkflowState(
+                    mr_url=mr_url,
+                    dry_run=dry_run,
+                    poc=poc,
+                    no_jira_comments=no_jira_comments,
+                    gating=gating,
+                    test_logs_dir=test_logs_dir,
+                )
             )
-        )
+        finally:
+            if test_logs_dir:
+                shutil.rmtree(test_logs_dir, ignore_errors=True)
 
         return response.state.result
 

@@ -3,6 +3,7 @@
 import contextlib
 import json
 import re
+from pathlib import Path
 
 import pytest
 from flexmock import flexmock
@@ -91,6 +92,9 @@ def test_render_prompt_gating_only_shows_gating_instructions():
     assert "resolve_osci_discussion" in prompt
     assert "NEWA" not in prompt
     assert "{%" not in prompt
+    # Python fetches gating logs locally now; the model must not fetch them itself
+    assert "fetch_testing_farm_results" not in prompt
+    assert "get_pipeline_job_trace" not in prompt
 
 
 def test_render_prompt_non_gating_hides_gating_instructions():
@@ -554,6 +558,10 @@ async def _run_with_result(
             return parse_overrides.get("parse_osci_results_comment", dict(_DEFAULT_PARSE_OSCI))
         if name == "get_merge_request_discussions":
             return discussions if discussions is not None else []
+        if name == "get_pipeline_job_trace":
+            return "trace text"
+        if name == "extract_tf_request_from_job_trace":
+            return {"request_id": None, "artifacts_url": None}
         if name == "get_jira_details":
             return {"fields": {"summary": "", "labels": [], "customfield_10638": None}}
         # Every posting tool: just acknowledge the call.
@@ -882,3 +890,166 @@ async def test_queue_mode_malformed_metadata_goes_to_error_list(monkeypatch):
     assert "Malformed task metadata" in entries[0].error.details
     assert entries[1].task is None
     assert "Malformed task payload" in entries[1].error.details
+
+
+_TF_ARTIFACTS = "https://artifacts.osci.redhat.com/testing-farm/abc"
+_MR_URL = "https://gitlab.com/x/y/-/merge_requests/1"
+_JUNIT_RESULTS = f"""<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="tier0">
+    <testcase name="/tests/pass" classname="x"/>
+    <testcase name="/tests/fail" classname="x">
+      <failure message="boom"/>
+      <logs><log name="testout.log" href="{_TF_ARTIFACTS}/fail/testout.log"/></logs>
+    </testcase>
+    <testcase name="/tests/error" classname="x">
+      <error message="oops"/>
+      <logs>
+        <log name="journal.txt" href="{_TF_ARTIFACTS}/error/journal.txt"/>
+        <log name="evil" href="https://evil.example.com/steal"/>
+      </logs>
+    </testcase>
+    <testcase name="/tests/skip" classname="x">
+      <skipped/>
+      <logs><log name="testout.log" href="{_TF_ARTIFACTS}/skip/testout.log"/></logs>
+    </testcase>
+  </testsuite>
+</testsuites>
+"""
+
+
+def test_failed_test_log_urls_collects_only_failed_and_errored_testcases():
+    assert m._failed_test_log_urls(_JUNIT_RESULTS) == [
+        ("/tests/fail", f"{_TF_ARTIFACTS}/fail/testout.log"),
+        ("/tests/error", f"{_TF_ARTIFACTS}/error/journal.txt"),
+        ("/tests/error", "https://evil.example.com/steal"),
+    ]
+
+
+def test_failed_test_log_urls_returns_nothing_for_unparseable_xml():
+    assert m._failed_test_log_urls("<testsuites>") == []
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://artifacts.osci.redhat.com/testing-farm/abc", True),
+        ("http://artifacts.osci.redhat.com/testing-farm/abc/x.log", True),
+        ("https://evil.example.com/testing-farm/abc", False),
+        ("ftp://artifacts.osci.redhat.com/x", False),
+    ],
+)
+def test_is_test_artifacts_url(url, expected):
+    assert m._is_test_artifacts_url(url) is expected
+
+
+@pytest.mark.asyncio
+async def test_fetch_gating_job_test_files_saves_results_and_failed_logs_locally(monkeypatch, tmp_path):
+    bodies = {
+        f"{_TF_ARTIFACTS}/results.xml": _JUNIT_RESULTS.encode(),
+        f"{_TF_ARTIFACTS}/fail/testout.log": b"FAIL LOG",
+        f"{_TF_ARTIFACTS}/error/journal.txt": b"JOURNAL",
+    }
+    requested = []
+
+    async def _fake_download(session, url):
+        requested.append(url)
+        return bodies.get(url)
+
+    trace_calls = []
+
+    async def _fake_run_tool(name, available_tools=None, **kwargs):
+        if name == "get_pipeline_job_trace":
+            trace_calls.append(kwargs)
+            return "Testing Farm Result: https://artifacts.osci.redhat.com/testing-farm/abc"
+        return {"request_id": "abc", "artifacts_url": _TF_ARTIFACTS}
+
+    monkeypatch.setattr(m, "_download_bytes", _fake_download)
+    monkeypatch.setattr(m, "run_tool", _fake_run_tool)
+
+    result = await m._fetch_gating_job_test_files(None, [], _MR_URL, "osci.tier0", 123, tmp_path)
+
+    assert trace_calls == [{"merge_request_url": _MR_URL, "job_id": "123"}]
+    # results-junit.xml is tried first and missing here, so results.xml is the one saved
+    assert requested[:2] == [f"{_TF_ARTIFACTS}/results-junit.xml", f"{_TF_ARTIFACTS}/results.xml"]
+    assert result["artifacts_url"] == _TF_ARTIFACTS
+    assert Path(result["results_xml"]).read_text(encoding="utf-8") == _JUNIT_RESULTS
+    assert [entry["test"] for entry in result["logs"]] == ["/tests/fail", "/tests/error"]
+    assert Path(result["logs"][0]["path"]).read_bytes() == b"FAIL LOG"
+    assert Path(result["logs"][1]["path"]).read_bytes() == b"JOURNAL"
+    # The off-host log link is filtered out before anything is requested for it
+    assert "https://evil.example.com/steal" not in requested
+    assert result["logs_skipped"] == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_gating_job_test_files_caps_logs_per_job(monkeypatch, tmp_path):
+    bodies = {
+        f"{_TF_ARTIFACTS}/results.xml": _JUNIT_RESULTS.encode(),
+        f"{_TF_ARTIFACTS}/fail/testout.log": b"FAIL LOG",
+        f"{_TF_ARTIFACTS}/error/journal.txt": b"JOURNAL",
+    }
+
+    async def _fake_download(session, url):
+        return bodies.get(url)
+
+    async def _fake_run_tool(name, available_tools=None, **kwargs):
+        if name == "get_pipeline_job_trace":
+            return "trace"
+        return {"artifacts_url": _TF_ARTIFACTS}
+
+    monkeypatch.setattr(m, "_download_bytes", _fake_download)
+    monkeypatch.setattr(m, "run_tool", _fake_run_tool)
+    monkeypatch.setattr(m, "TEST_LOG_MAX_PER_JOB", 1)
+
+    result = await m._fetch_gating_job_test_files(None, [], _MR_URL, "osci.tier0", 123, tmp_path)
+
+    assert [entry["test"] for entry in result["logs"]] == ["/tests/fail"]
+    assert result["logs_skipped"] == 2 - 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_gating_job_test_files_does_not_download_without_artifacts_url(monkeypatch, tmp_path):
+    async def _no_download(session, url):
+        raise AssertionError(f"unexpected download of {url}")
+
+    async def _fake_run_tool(name, available_tools=None, **kwargs):
+        if name == "extract_tf_request_from_job_trace":
+            return {"request_id": None, "artifacts_url": None}
+        return "trace"
+
+    monkeypatch.setattr(m, "_download_bytes", _no_download)
+    monkeypatch.setattr(m, "run_tool", _fake_run_tool)
+
+    result = await m._fetch_gating_job_test_files(None, [], _MR_URL, "osci.rebase", 7, tmp_path)
+
+    assert result == {"artifacts_url": None, "results_xml": None, "logs": [], "logs_skipped": 0}
+    assert not (tmp_path / "osci.rebase").exists()
+
+
+@pytest.mark.asyncio
+async def test_gating_run_fetches_test_logs_and_removes_local_copies(monkeypatch):
+    created = []
+    real_mkdtemp = m.tempfile.mkdtemp
+
+    def _recording_mkdtemp(**kwargs):
+        path = real_mkdtemp(**kwargs)
+        created.append(path)
+        return path
+
+    monkeypatch.setattr(m.tempfile, "mkdtemp", _recording_mkdtemp)
+    parse = {
+        **_DEFAULT_PARSE_OSCI,
+        "test_jobs": {"osci.tier0": {"id": 1, "status": "success", "stage": "test"}},
+    }
+
+    _, calls = await _run_with_result(
+        monkeypatch,
+        MrTestingAnalystResult(analyzed=True, summary="ok"),
+        parse_overrides={"parse_osci_results_comment": parse},
+        gating=True,
+    )
+
+    assert [kwargs["job_id"] for name, kwargs in calls if name == "get_pipeline_job_trace"] == ["1"]
+    assert len(created) == 1
+    assert not Path(created[0]).exists()

@@ -24,4 +24,4 @@ tomli-w>=1.2.0
 nitrate>=1.9.0
 
 # Sentry integration
-sentry-sdk>=2.13.0
+sentry-sdk>=2.56.0,<3

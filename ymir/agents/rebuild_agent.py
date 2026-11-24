@@ -36,7 +36,7 @@ from ymir.agents.utils import (
 from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.error_list import clear_resolved_errors
-from ymir.common.issue_lock import issue_lock
+from ymir.common.issue_lock import REBUILD_LOCK_KEY_PREFIX, issue_lock
 from ymir.common.logging_setup import configure_logging, current_jira_issue
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
@@ -563,7 +563,9 @@ async def main() -> None:
                 return
 
             requeue = None
-            async with issue_lock(redis, rebuild_data.jira_issue, prefix="lock:rebuild:") as lock_token:
+            async with issue_lock(
+                redis, rebuild_data.jira_issue, prefix=REBUILD_LOCK_KEY_PREFIX
+            ) as lock_token:
                 if lock_token is None:
                     logger.info(
                         "Issue %s is already locked by another worker; dropping duplicate",

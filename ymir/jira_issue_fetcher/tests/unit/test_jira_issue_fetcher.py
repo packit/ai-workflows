@@ -12,7 +12,7 @@ from flexmock import flexmock
 
 import ymir.jira_issue_fetcher.jira_issue_fetcher as jira_issue_fetcher_impl
 from ymir.common.constants import JIRA_SEARCH_PATH, JiraLabels, RedisQueues
-from ymir.common.issue_lock import LOCK_KEY_PREFIX
+from ymir.common.issue_lock import LOCK_KEY_PREFIX, WORKFLOW_LOCK_PREFIXES
 from ymir.common.models import (
     BackportData,
     ClarificationNeededData,
@@ -1935,8 +1935,8 @@ async def test_push_stale_reenqueue_dry_run_skips_flip_but_still_pushes(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_locked_todo_consumes_label_but_skips_enqueue(fetcher, mock_redis_context):
-    """ymir_todo on a locked issue: flip the label but do not push to Redis."""
+async def test_locked_todo_leaves_label_untouched_and_skips_enqueue(fetcher, mock_redis_context):
+    """ymir_todo on a locked issue is left for a later fetcher sweep."""
     mock_redis, _ = mock_redis_context
     mock_redis.should_receive("scan_iter").and_return(_lock_keys_async_iter("TODO-LOCKED")())
 
@@ -1945,14 +1945,8 @@ async def test_locked_todo_consumes_label_but_skips_enqueue(fetcher, mock_redis_
     flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
         create_async_mock_return_value(set())
     )
-    flexmock(fetcher).should_receive("_label_added_by_rh_employee").with_args(
-        "TODO-LOCKED", label=JiraLabels.TODO.value
-    ).and_return(True).once()
-    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
-        "TODO-LOCKED",
-        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-        remove=[JiraLabels.TODO.value],
-    ).once()
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").never()
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
 
     mock_redis.should_receive("lpush").never()
 
@@ -1962,8 +1956,8 @@ async def test_locked_todo_consumes_label_but_skips_enqueue(fetcher, mock_redis_
 
 
 @pytest.mark.asyncio
-async def test_locked_retry_needed_consumes_label_but_skips_enqueue(fetcher, mock_redis_context):
-    """ymir_retry_needed on a locked issue: flip the label but do not push to Redis."""
+async def test_locked_retry_needed_leaves_label_untouched_and_skips_enqueue(fetcher, mock_redis_context):
+    """ymir_retry_needed on a locked issue is left untouched."""
     mock_redis, _ = mock_redis_context
     mock_redis.should_receive("scan_iter").and_return(_lock_keys_async_iter("RETRY-LOCKED")())
 
@@ -1972,17 +1966,60 @@ async def test_locked_retry_needed_consumes_label_but_skips_enqueue(fetcher, moc
     flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
         create_async_mock_return_value(set())
     )
-    flexmock(fetcher).should_receive("_edit_jira_labels").with_args(
-        "RETRY-LOCKED",
-        add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-        remove=[JiraLabels.RETRY_NEEDED.value],
-    ).once()
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
 
     mock_redis.should_receive("lpush").never()
 
     result = await fetcher.push_issues_to_queue(issues)
 
     assert result == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", WORKFLOW_LOCK_PREFIXES)
+async def test_active_workflow_lock_prefixes_are_discovered(fetcher, prefix):
+    async def scan_iter(*, match, count):
+        if match == f"{prefix}*":
+            yield f"{prefix}mixed-1" if prefix != LOCK_KEY_PREFIX else f"{prefix}mixed-1".encode()
+
+    redis_conn = flexmock()
+    redis_conn.should_receive("scan_iter").replace_with(scan_iter)
+
+    assert await fetcher._get_active_workflow_issue_keys(redis_conn) == {"MIXED-1"}
+
+
+@pytest.mark.asyncio
+async def test_active_workflow_lock_scan_failure_fails_closed(fetcher, mock_redis_context):
+    mock_redis, _ = mock_redis_context
+    mock_redis.should_receive("scan_iter").and_raise(ConnectionError("Redis unavailable"))
+
+    issue = {"key": "SCAN-FAIL", "fields": {"labels": [JiraLabels.TODO.value]}}
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+    flexmock(fetcher).should_receive("_label_added_by_rh_employee").never()
+    flexmock(fetcher).should_receive("_edit_jira_labels").never()
+    mock_redis.should_receive("lpush").never()
+
+    assert await fetcher.push_issues_to_queue([issue]) is None
+
+
+@pytest.mark.asyncio
+async def test_run_retries_after_lock_scan_failure_and_processes_consolidation(fetcher):
+    issues = [{"key": "SCAN-FAIL", "fields": {"labels": []}}]
+
+    flexmock(fetcher).should_receive("search_issues").and_return(
+        create_async_mock_return_value(issues)
+    ).once()
+    flexmock(fetcher).should_receive("push_issues_to_queue").with_args(
+        issues, max_issues_override=None
+    ).and_return(create_async_mock_return_value(None)).once()
+    flexmock(fetcher).should_receive("_process_consolidation_labels").with_args(issues).and_return(
+        create_async_mock_return_value(0)
+    ).once()
+
+    with pytest.raises(RuntimeError, match="Workflow lock inspection failed"):
+        await fetcher.run()
 
 
 def test_label_added_by_rh_employee_walks_paginated_changelog(fetcher):

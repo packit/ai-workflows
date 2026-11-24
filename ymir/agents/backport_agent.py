@@ -88,7 +88,7 @@ from ymir.common.base_utils import (
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.cve import extract_cve_ids
 from ymir.common.error_list import clear_resolved_errors
-from ymir.common.issue_lock import issue_lock
+from ymir.common.issue_lock import BACKPORT_LOCK_KEY_PREFIX, issue_lock
 from ymir.common.logging_setup import configure_logging, current_jira_issue, get_trajectory_writeable
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
@@ -2227,7 +2227,9 @@ async def main() -> None:
             backport_data = BackportData.model_validate(triage_state["triage_result"]["data"])
             current_jira_issue.set(backport_data.jira_issue)
             requeue = None
-            async with issue_lock(redis, backport_data.jira_issue, prefix="lock:backport:") as lock_token:
+            async with issue_lock(
+                redis, backport_data.jira_issue, prefix=BACKPORT_LOCK_KEY_PREFIX
+            ) as lock_token:
                 if lock_token is None:
                     logger.info(
                         "Issue %s is already locked by another worker; dropping duplicate",

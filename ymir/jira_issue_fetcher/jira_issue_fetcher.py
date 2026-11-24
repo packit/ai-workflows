@@ -30,6 +30,7 @@ from urllib.parse import urljoin
 import backoff
 import redis.asyncio as redis
 import requests
+from pydantic import ValidationError
 
 from ymir.common.base_utils import fix_await, get_jira_auth_headers, redis_client
 from ymir.common.constants import JIRA_SEARCH_PATH, JiraLabels, RedisQueues
@@ -53,6 +54,19 @@ logger = logging.getLogger(__name__)
 # Name of the Jira group that membership in identifies a Red Hat Employee.
 # Matches the value used by ymir/tools/privileged/jira.py.
 _RH_EMPLOYEE_GROUP = "Red Hat Employee"
+
+
+def _issue_key_from_metadata(value: object) -> str | None:
+    """Normalize an unvalidated task-metadata issue key; ``None`` if unusable.
+
+    Task metadata comes straight from Redis and may hold arbitrary JSON
+    values, so a non-string must be treated as a per-item parse failure
+    instead of raising ``AttributeError`` and aborting the scan of the
+    remaining queue items (which would allow duplicate enqueues).
+    """
+    if isinstance(value, str) and value:
+        return value.upper()
+    return None
 
 
 class JiraIssueFetcher:
@@ -521,7 +535,9 @@ class JiraIssueFetcher:
                                             | RedisQueues.REPRODUCER_QUEUE.value
                                             | RedisQueues.REPRODUCER_QUEUE_TODO.value
                                         ):
-                                            issue_key = task.metadata.get("jira_issue", "").upper()
+                                            issue_key = _issue_key_from_metadata(
+                                                task.metadata.get("jira_issue")
+                                            )
                                         case _:
                                             continue
 
@@ -554,7 +570,7 @@ class JiraIssueFetcher:
                                     # Fallback to task parsing for these queues if direct parsing fails
                                     task = Task.model_validate_json(item)
                                     if task.metadata and "issue" in task.metadata:
-                                        issue_key = task.metadata["issue"].upper()
+                                        issue_key = _issue_key_from_metadata(task.metadata["issue"])
 
                             if issue_key:
                                 existing_keys.add(issue_key)
@@ -567,6 +583,43 @@ class JiraIssueFetcher:
                     if queue_count > 0:
                         logger.info(f"Found {queue_count} existing issues in {queue_name}")
 
+                except Exception as e:
+                    logger.warning(f"Error checking {queue_name}: {e}")
+                    continue
+
+            # Delayed ZSET queues hold Task payloads awaiting retry. Without
+            # scanning them, a task whose in-progress label goes stale while its
+            # retry is still delayed would be enqueued again by the fetcher and
+            # later run twice (once re-fetched, once promoted).
+            for queue_name in (
+                RedisQueues.TRIAGE_DELAYED_QUEUE.value,
+                RedisQueues.REPRODUCER_DELAYED_QUEUE.value,
+            ):
+                try:
+                    delayed_items = await fix_await(redis_conn.zrange(queue_name, 0, -1))
+                    queue_count = 0
+                    for item in delayed_items:
+                        try:
+                            task = Task.model_validate_json(item)
+                            issue_key = None
+                            if task.metadata:
+                                if queue_name == RedisQueues.TRIAGE_DELAYED_QUEUE.value:
+                                    try:
+                                        issue_key = TriageInputSchema.model_validate(
+                                            task.metadata
+                                        ).issue.upper()
+                                    except ValidationError:
+                                        issue_key = _issue_key_from_metadata(task.metadata.get("jira_issue"))
+                                else:
+                                    issue_key = _issue_key_from_metadata(task.metadata.get("jira_issue"))
+                            if issue_key:
+                                existing_keys.add(issue_key)
+                                queue_count += 1
+                        except (json.JSONDecodeError, ValueError) as e:
+                            logger.warning(f"Failed to parse item from {queue_name}: {e}")
+                            continue
+                    if queue_count > 0:
+                        logger.info(f"Found {queue_count} existing issues in {queue_name}")
                 except Exception as e:
                     logger.warning(f"Error checking {queue_name}: {e}")
                     continue

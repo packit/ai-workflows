@@ -19,7 +19,7 @@ from ymir.common.config import load_rhel_config
 from ymir.common.constants import JiraLabels
 from ymir.common.jira_api import get_issue
 from ymir.common.models import FullIssue
-from ymir.common.utils import check_build_in_buildroot
+from ymir.common.utils import check_build_in_buildroot, resolve_brew_build
 from ymir.common.version_utils import normalize_fix_version, parse_rhel_version
 from ymir.sweep.base import SweepResult, SweepStrategy
 from ymir.sweep.comment_parser import CommentData
@@ -145,10 +145,20 @@ class DependencySweep(SweepStrategy):
         fix_version = normalize_fix_version(raw_fix_version, rhel_config)
 
         try:
+            fixed_build = await resolve_brew_build(blocker.fixed_in_build)
+            if fixed_build is None:
+                return SweepResult(
+                    issue_key=issue.key,
+                    action="error",
+                    detail=(
+                        f"Buildroot check failed for {dep_component} "
+                        f"({blocker.fixed_in_build}): build was not found in Brew"
+                    ),
+                )
             in_buildroot = await check_build_in_buildroot(
                 target_branch,
                 dep_component,
-                blocker.fixed_in_build,
+                fixed_build.nevr,
                 fix_version=fix_version,
             )
         except Exception as exc:

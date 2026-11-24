@@ -960,6 +960,7 @@ async def _check_zstream_pending_triage(
         f' AND labels != "ymir_triaged_deferred_rebuild"'
         f' AND labels != "ymir_triaged_postponed"'
         f' AND labels != "ymir_triaged_not_affected"'
+        f' AND labels != "ymir_triaged_already_fixed"'
         f' AND labels != "ymir_triaged"'
         f' AND labels != "ymir_postponed_dependency"'
         f' AND labels != "ymir_postponed_no_patch"'
@@ -1840,6 +1841,9 @@ class SearchJiraIssuesToolInput(BaseModel):
         ),
     )
     max_results: int = Field(default=50, description="Maximum number of results to return")
+    fetch_all: bool = Field(
+        default=False, description="Follow Jira page tokens to return all matching issues"
+    )
 
 
 class SearchJiraIssuesTool(
@@ -1878,19 +1882,36 @@ class SearchJiraIssuesTool(
             "fields": fields,
         }
 
+        issues = []
+        seen_tokens = set()
         async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
             with tool_error_context("Failed to search Jira issues", jql=jql):
-                data = await jira_api_post(
-                    "search/jql",
-                    json=json_payload,
-                    headers=headers,
-                    api_version="3",
-                    base_url=os.getenv("JIRA_URL"),
-                    session=session,
-                    decode_response=True,
-                )
+                while True:
+                    data = await jira_api_post(
+                        "search/jql",
+                        json=json_payload,
+                        headers=headers,
+                        api_version="3",
+                        base_url=os.getenv("JIRA_URL"),
+                        session=session,
+                        decode_response=True,
+                    )
+                    page = data.get("issues")
+                    if not isinstance(page, list):
+                        raise ValueError("Jira search returned an invalid issues list")
+                    issues.extend(page)
+                    if not tool_input.fetch_all or data.get("isLast") is True:
+                        break
+                    token = data.get("nextPageToken")
+                    if not token:
+                        if data.get("isLast") is False:
+                            raise ValueError("Jira search omitted the next page token")
+                        break
+                    if token in seen_tokens or len(issues) >= 10000:
+                        raise ValueError("Jira search pagination did not make progress")
+                    seen_tokens.add(token)
+                    json_payload["nextPageToken"] = token
 
-        issues = data.get("issues", [])
         logger.info(f"Jira search returned {len(issues)} issues")
 
         out = [

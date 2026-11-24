@@ -64,6 +64,7 @@ _WORKFLOW_LABELS: dict[str, set[str]] = {
         "ymir_triaged_rebuild",
         "ymir_triaged_postponed",
         "ymir_triaged_not_affected",
+        "ymir_triaged_already_fixed",
         "ymir_triage_errored",
         "ymir_needs_attention",
         "ymir_cli_triage",

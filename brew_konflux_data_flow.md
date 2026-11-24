@@ -8,6 +8,70 @@ builds after a human enables them on an MR. Local Compose and production
 OpenShift deployments select Konflux for agent validation by default; Copr can
 be selected explicitly.
 
+## Build identity and epoch resolution
+
+Jira's **Fixed in Build** field supplies an NVR without an authoritative epoch.
+Triage may parse it into a provisional `NEVR` to validate its syntax, but the
+parsed epoch is not authoritative. Rebuild dependency checks resolve the build
+against Brew and replace that provisional NEVR before comparing versions.
+An absent or explicitly null epoch in Brew metadata is treated as zero.
+Fixed dependency resolution and rebuilt-package
+verification use Brew.
+
+Resolved builds retain their NEVR and Brew metadata for version comparisons,
+architecture discovery, and timestamp fallback without repeating successful
+lookups. Unresolved active builds retain their original NVR and require
+clarification. Installed binary RPMs are resolved through `getRPM()` and their
+source build's `getBuild()` metadata; their versions and epochs are never assumed
+to equal those of the source package. Binary lookups request all matching RPM
+records and require a single record matching the installed NEVRA's epoch. Missing,
+invalid, or ambiguous RPM metadata requires clarification. A fetched log without
+any valid installed RPM records also requires clarification. NVR strings are produced again when
+serializing results or calling external APIs that require them.
+
+For modular issues, both closed and active Jira searches match the exact raw
+**Downstream Component Name** (`module:stream/package`), alongside the package
+component and fix version. Builds from another modular stream cannot establish
+whether the issue is already fixed. A missing Brew build or rejected NVR requires
+clarification; transport and service failures remain retryable.
+
+Verification examines every discovered closed and active Jira build reference.
+Transient Brew lookup, log retrieval, and Jira query failures propagate to the
+existing task retry handler. Final metadata problems and ambiguous results request
+clarification with all issue keys, NVRs, available Brew NEVRs and build IDs, and the
+collected errors. Neither a transient failure nor an inconclusive comparison
+authorizes a new rebuild.
+
+### Release-stream verification
+
+A "Fixed in Build" reference may name a build that does not belong to the
+ticket's release stream (the field is only partly automated; humans can enter
+any build). References are verified in two layers:
+
+1. **Brew tag membership** (authoritative, on the resolved build): every tag
+   of the build under the stream's branch prefix (`rhel-9.8.0` for both the
+   `rhel-9.8` and `rhel-9.8.z` fix versions) proves the build is part of that
+   stream's pipeline. Tags are split into shipped-stage (the release tag and
+   `-pending`/`-z-pending` — committed to compose/errata) and in-progress
+   (`-candidate`/`-gate`/override-stage — fix being worked on).
+2. **Dist-tag pre-filter** (on the parsed NVR string, rebuild candidate
+   selection only): for a z-stream fix version the dist tag must carry the
+   minor (`.el9_8`); y-stream fix versions accept both `.el9` and `.el9_8`
+   builds of the same major. This runs before the highest-EVR selection so an
+   out-of-stream reference cannot win it, and classifies candidates that could
+   not be resolved in Brew (where no tag check is possible); it is not the
+   membership decision. The already-fixed verification of a named build relies
+   solely on the tag check.
+
+A build with no tag under the stream's prefix is not part of the stream and
+requires clarification (`build_not_tagged_in_stream`). A build with only
+in-progress tags means a fix is being worked on rather than shipped: the
+verification stops and informs the user that they may have to update the
+referencing issue or its errata once the fix ships
+(`fix_in_progress_in_stream`). The tag check fails open when it cannot be
+performed (unparseable fix version, missing build id, or a Brew failure).
+
+
 ## System Architecture
 
 ```mermaid

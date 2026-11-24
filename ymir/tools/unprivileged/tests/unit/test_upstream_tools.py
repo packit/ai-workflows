@@ -627,6 +627,8 @@ class TestFindBaseCommitTool:
         repo = tmp_path / "upstream"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "ymir@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Ymir"], cwd=repo, check=True)
         (repo / "file.c").write_text("int main() {}\n")
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo, check=True)
@@ -640,6 +642,8 @@ class TestFindBaseCommitTool:
         repo = tmp_path / dir_name
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "ymir@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Ymir"], cwd=repo, check=True)
         subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
         subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
         (repo / "file.c").write_text("int main() {}\n")
@@ -843,6 +847,8 @@ class TestApplyDownstreamPatchesTool:
         repo = tmp_path / "upstream"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "ymir@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Ymir"], cwd=repo, check=True)
         (repo / "main.c").write_text("int main() { return 0; }\n")
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo, check=True)
@@ -979,6 +985,8 @@ class TestCherryPickCommitTool:
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "ymir@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Ymir"], cwd=repo, check=True)
         (repo / "file.c").write_text("line 1\n")
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo, check=True)
@@ -1007,6 +1015,8 @@ class TestCherryPickCommitTool:
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "ymir@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Ymir"], cwd=repo, check=True)
         (repo / "a.txt").write_text("hello\n")
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo, check=True)
@@ -1045,6 +1055,8 @@ class TestCherryPickCommitTool:
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "ymir@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Ymir"], cwd=repo, check=True)
         (repo / "a.txt").write_text("x\n")
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-m", "Init"], cwd=repo, check=True)
@@ -1080,6 +1092,8 @@ class TestCherryPickContinueTool:
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "ymir@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Ymir"], cwd=repo, check=True)
         (repo / "file.c").write_text("original\n")
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo, check=True)
@@ -1128,6 +1142,8 @@ class TestCherryPickContinueTool:
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "ymir@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Ymir"], cwd=repo, check=True)
         (repo / "a.txt").write_text("x\n")
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-m", "Init"], cwd=repo, check=True)

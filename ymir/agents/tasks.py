@@ -955,9 +955,14 @@ async def comment_in_jira(
     is_error: bool = False,
     user_triggered: bool = False,
 ) -> None:
+    """Post a workflow result or trigger-gated informational error.
+
+    Queue handlers must use ``post_terminal_error_comment`` for failures after
+    deciding that no outer task retry will be scheduled. A failed workflow
+    state alone does not establish terminality.
+    """
     # Mid-workflow errors (e.g. consolidation failures in backport/rebase) are
-    # trigger-gated here; crash-based and resolution-based terminal errors
-    # bypass this via post_terminal_error_comment() after retries are exhausted.
+    # trigger-gated here; terminal errors bypass this after retries are exhausted.
     if is_error and not user_triggered:
         logger.info(f"Skipping Jira error comment for {jira_issue} (not user-triggered)")
         return
@@ -977,14 +982,38 @@ async def post_terminal_error_comment(
     comment_text: str,
     available_tools: list[Tool],
 ) -> None:
-    """Post an error comment for a terminal failure, regardless of trigger."""
-    await _post_jira_comment(
-        jira_issue=jira_issue,
-        agent_type=agent_type,
-        comment_text=comment_text,
-        available_tools=available_tools,
-        is_error=True,
-    )
+    """Post an error comment for a terminal failure, regardless of trigger.
+
+    Terminal notification happens after the task retry budget is exhausted, so
+    retry transient Jira/tool failures here without restarting the completed
+    agent workflow.
+    """
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            await _post_jira_comment(
+                jira_issue=jira_issue,
+                agent_type=agent_type,
+                comment_text=comment_text,
+                available_tools=available_tools,
+                is_error=True,
+            )
+            return
+        except Exception as error:
+            last_error = error
+            if attempt == 3:
+                break
+            delay = 2 ** (attempt - 1)
+            logger.warning(
+                "Terminal Jira comment failed for %s (attempt %s/3): %s; retrying in %ss",
+                jira_issue,
+                attempt,
+                error,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+    raise last_error  # type: ignore[misc]
 
 
 async def _post_jira_comment(

@@ -117,6 +117,7 @@ async def main() -> None:
         dist_git_namespace=None,
         workspace_id: UUID | None = None,
         is_modular_issue=False,
+        defer_failure_comment=False,
     ):
         workspace_id = workspace_id or uuid4()
         local_tool_options = {"working_directory": None}
@@ -427,6 +428,8 @@ async def main() -> None:
             async def comment_in_jira(state):
                 if dry_run:
                     return Workflow.END
+                if not state.rebuild_success and defer_failure_comment:
+                    return Workflow.END
                 if state.rebuild_success:
                     comment_text = (
                         state.merge_request_url
@@ -610,6 +613,9 @@ async def main() -> None:
             ) -> tuple[str, str] | None:
                 """Handle a failed task by re-queuing or finalizing.
 
+                ``comment_text`` is consumed only after the outer queue retry
+                budget is exhausted.
+
                 Returns ``(queue, payload)`` when the task should be
                 re-queued.  The caller must push the payload **after**
                 releasing the issue lock to avoid a race where another
@@ -690,6 +696,7 @@ async def main() -> None:
                         dist_git_namespace=dist_git_namespace,
                         workspace_id=task.execution_id,
                         is_modular_issue=_modular,
+                        defer_failure_comment=True,
                     )
                     logger.info(
                         f"Rebuild processing completed for {rebuild_data.jira_issue}, "
@@ -760,16 +767,16 @@ async def main() -> None:
                             )
                         except Exception as e:
                             logger.warning(f"Failed to set labels on {issue_key}: {e}")
-                    # No comment_text here: the in-workflow comment_in_jira step has
-                    # already posted the failure feedback for this graceful path.
-                    # Only the crash path (which never reaches that step) passes
-                    # comment_text, so we never double-comment.
+                    comment_text = (
+                        f"Agent failed to perform a rebuild: {state.rebuild_error or 'Unknown rebuild error'}"
+                    )
                     return await retry(
                         task,
                         ErrorData(
                             details=state.rebuild_error or "Unknown rebuild error",
                             jira_issue=rebuild_data.jira_issue,
                         ),
+                        comment_text=comment_text,
                     )
 
         shutdown_event = asyncio.Event()

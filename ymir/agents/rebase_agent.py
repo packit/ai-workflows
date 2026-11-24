@@ -301,6 +301,7 @@ async def run_workflow(
     module_stream=None,
     dry_run: bool = False,
     max_build_attempts: int = 10,
+    defer_failure_comment: bool = False,
 ):
     workspace_id = workspace_id or uuid4()
     local_tool_options: dict[str, Any] = {"working_directory": None}
@@ -757,6 +758,8 @@ async def run_workflow(
         async def comment_in_jira(state):
             if dry_run:
                 return Workflow.END
+            if not state.rebase_result.success and defer_failure_comment:
+                return Workflow.END
             if state.rebase_result.success:
                 comment_text = (
                     state.merge_request_url if state.merge_request_url else state.rebase_result.status
@@ -944,6 +947,9 @@ async def main() -> None:
             ) -> tuple[str, str] | None:
                 """Handle a failed task by re-queuing or finalizing.
 
+                ``comment_text`` is consumed only after the outer queue retry
+                budget is exhausted.
+
                 Returns ``(queue, payload)`` when the task should be
                 re-queued.  The caller must push the payload **after**
                 releasing the issue lock to avoid a race where another
@@ -1030,6 +1036,7 @@ async def main() -> None:
                         workspace_id=task.execution_id,
                         is_modular_issue=_modular,
                         module_stream=_module_stream,
+                        defer_failure_comment=True,
                         dry_run=dry_run,
                         max_build_attempts=max_build_attempts,
                     )
@@ -1108,16 +1115,17 @@ async def main() -> None:
                         dry_run=dry_run,
                         user_triggered=user_triggered,
                     )
-                    # No comment_text here: the in-workflow comment_in_jira step has
-                    # already posted the failure feedback for this graceful path.
-                    # Only the crash path (which never reaches that step) passes
-                    # comment_text, so we never double-comment.
+                    comment_text = (
+                        f"Agent failed to perform a rebase: "
+                        f"{getattr(state.rebase_result, 'error', None) or 'Unknown rebase error'}"
+                    )
                     return await retry(
                         task,
                         ErrorData(
                             details=getattr(state.rebase_result, "error", None) or "Unknown rebase error",
                             jira_issue=rebase_data.jira_issue,
                         ),
+                        comment_text=comment_text,
                     )
 
         shutdown_event = asyncio.Event()

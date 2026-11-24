@@ -1417,6 +1417,32 @@ async def test_post_terminal_error_comment_adds_trace_link_without_user_trigger(
 
 
 @pytest.mark.asyncio
+async def test_post_terminal_error_comment_retries_transient_failure(monkeypatch):
+    attempts = 0
+
+    async def _mock_run_tool(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise RuntimeError("temporary Jira failure")
+
+    async def _no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(agent_tasks, "run_tool", _mock_run_tool)
+    monkeypatch.setattr(agent_tasks.asyncio, "sleep", _no_sleep)
+
+    await agent_tasks.post_terminal_error_comment(
+        jira_issue="RHEL-1",
+        agent_type="Backport",
+        comment_text="The backport failed.",
+        available_tools=[],
+    )
+
+    assert attempts == 3
+
+
+@pytest.mark.asyncio
 async def test_comment_in_jira_does_not_add_trace_link_to_non_error_comments(monkeypatch):
     monkeypatch.setenv("TRACE_VIEWER_URL", "https://trace.example/")
     calls = []

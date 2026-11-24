@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import random
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -13,6 +14,12 @@ import requests
 from ymir.common import constants
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_url(text: str) -> str:
+    """Remove oauth2:{token}@ credentials from URLs in error messages."""
+    return re.sub(r"oauth2:[^@\s]+@", "oauth2:***@", text)
+
 
 _aiohttp_session: ContextVar[aiohttp.ClientSession | None] = ContextVar("aiohttp_session", default=None)
 _requests_session: ContextVar[requests.Session | None] = ContextVar("requests_session", default=None)
@@ -85,11 +92,18 @@ async def aiohttp_get_with_retries(
     retry_backoff_base: int | None = None,
     **kwargs,
 ) -> AsyncIterator[aiohttp.ClientResponse]:
-    """Yield a GET response after retrying configured transient statuses.
+    """Yield a GET response after retrying transient failures.
 
-    ``max_retries`` counts total attempts and must be positive. On the last
-    retryable response, either yield it when requested or raise
-    ``ClientResponseError``. Connection errors propagate without retries.
+    Retries both the configured transient HTTP statuses and connection-level
+    failures (``aiohttp.ClientConnectionError``, ``TimeoutError``) with
+    exponential backoff. ``max_retries`` counts total attempts and must be
+    positive. On the last retryable response, either yield it when requested
+    or raise ``ClientResponseError``.
+
+    Only acquiring the response is guarded: exceptions raised by the caller
+    while reading the yielded response (e.g. a read timeout in
+    ``response.text()``) propagate without retries, since the caller has
+    already consumed part of the response and cannot transparently restart.
     The response remains open while the caller uses this context manager.
 
     Args:
@@ -110,6 +124,8 @@ async def aiohttp_get_with_retries(
         ValueError: ``max_retries`` is less than one.
         aiohttp.ClientResponseError: All attempts return retryable statuses
             and the final response was not requested.
+        aiohttp.ClientConnectionError | TimeoutError: Every attempt failed
+            to establish the connection.
     """
     statuses = (
         constants.AIOHTTP_RETRYABLE_STATUS_CODES if retryable_status_codes is None else retryable_status_codes
@@ -121,26 +137,47 @@ async def aiohttp_get_with_retries(
         retry_backoff_base if retry_backoff_base is not None else constants.AIOHTTP_RETRY_BACKOFF_BASE
     )
     for attempt in range(retries):
-        async with session.get(url, **kwargs) as response:
-            if response.status not in statuses:
-                yield response
-                return
-            if attempt >= retries - 1:
-                if yield_final_retryable_response:
+        # `acquiring` distinguishes where a retryable exception came from:
+        # connection establishment (safe to retry, nothing was consumed) vs.
+        # the caller's use of the yielded response (must propagate — a
+        # half-consumed response cannot be transparently restarted).
+        acquiring = True
+        try:
+            async with session.get(url, **kwargs) as response:
+                acquiring = False
+                if response.status not in statuses:
                     yield response
                     return
-                raise aiohttp.ClientResponseError(
-                    response.request_info,
-                    response.history,
-                    status=response.status,
-                    message=f"after {retries} retries",
-                )
-            retry_status = response.status
+                if attempt >= retries - 1:
+                    if yield_final_retryable_response:
+                        yield response
+                        return
+                    raise aiohttp.ClientResponseError(
+                        response.request_info,
+                        response.history,
+                        status=response.status,
+                        message=f"after {retries} retries",
+                    )
+                retry_status = response.status
+        except (aiohttp.ClientConnectionError, TimeoutError) as exc:
+            if not acquiring or attempt >= retries - 1:
+                raise
+            delay = backoff_base * (2**attempt) + random.uniform(0, 1)  # noqa: S311
+            logger.warning(
+                "Connection error %s on %s, retrying in %.1fs (attempt %d/%d)",
+                type(exc).__name__,
+                sanitize_url(url),
+                delay,
+                attempt + 1,
+                retries,
+            )
+            await asyncio.sleep(delay)
+            continue
         delay = backoff_base * (2**attempt) + random.uniform(0, 1)  # noqa: S311
         logger.warning(
             "Transient HTTP %d on %s, retrying in %.1fs (attempt %d/%d)",
             retry_status,
-            url,
+            sanitize_url(url),
             delay,
             attempt + 1,
             retries,

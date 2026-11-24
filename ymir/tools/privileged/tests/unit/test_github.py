@@ -64,6 +64,17 @@ def _mock_aiohttp_get_error(error_msg="error"):
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(fake_get)
 
 
+def _mock_aiohttp_get_error_from_entry(error):
+    """Mock aiohttp.ClientSession.get to raise *error* while acquiring the response."""
+
+    @asynccontextmanager
+    async def fake_get(url, **kwargs):
+        raise error
+        yield
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(fake_get)
+
+
 def _mock_aiohttp_api_error(status, message, json_error=None):
     """Mock a GitHub API response with a JSON error body."""
 
@@ -83,6 +94,23 @@ def _mock_aiohttp_api_error(status, message, json_error=None):
             json=json,
             raise_for_status=raise_for_status,
             status=status,
+        )
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(fake_get)
+
+
+def _mock_aiohttp_get_text_error(error):
+    """Mock aiohttp.ClientSession.get to return a response whose body fails to decode."""
+
+    async def failing_text():
+        raise error
+
+    @asynccontextmanager
+    async def fake_get(url, **kwargs):
+        yield flexmock(
+            text=failing_text,
+            raise_for_status=lambda: None,
+            status=200,
         )
 
     flexmock(aiohttp.ClientSession).should_receive("get").replace_with(fake_get)
@@ -214,6 +242,42 @@ class TestGetGithubPatchTool:
             ).middleware(GlobalTrajectoryMiddleware(pretty=True))
 
     @pytest.mark.asyncio
+    async def test_timeout_error_message_includes_exception_type(self, tool):
+        """Timeouts must reach agents with a descriptive message, not an empty one."""
+        _mock_aiohttp_get_error_from_entry(TimeoutError())
+
+        with pytest.raises(ToolError, match="Error: TimeoutError"):
+            await tool.run(
+                input=GetGithubPatchToolInput(patch_url="https://github.com/owner/repo/commit/deadbeef.patch")
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    @pytest.mark.asyncio
+    async def test_exception_text_is_redacted_in_error_message(self, tool):
+        """Credentials embedded in exception text must not reach agents or Jira."""
+        fake_gitlab_token = "glpat-1234567890abcdef1234"  # pragma: allowlist secret
+        _mock_aiohttp_get_error_from_entry(
+            aiohttp.ClientError(f"request to https://api.github.com/failed with {fake_gitlab_token}")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tool.run(
+                input=GetGithubPatchToolInput(patch_url="https://github.com/owner/repo/commit/deadbeef.patch")
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert fake_gitlab_token not in str(exc_info.value)
+        assert "[REDACTED]" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_undecodable_patch_body_is_reported_as_tool_error(self, tool):
+        """A body that fails to decode must not escape as a bare ToolError."""
+        _mock_aiohttp_get_text_error(UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"))
+
+        with pytest.raises(ToolError, match="UnicodeDecodeError"):
+            await tool.run(
+                input=GetGithubPatchToolInput(patch_url="https://github.com/owner/repo/commit/deadbeef.patch")
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    @pytest.mark.asyncio
     async def test_exhausted_503_includes_github_message(self, tool, monkeypatch):
         monkeypatch.setattr(constants, "AIOHTTP_RETRY_BACKOFF_BASE", 0)
         monkeypatch.setattr(http_utils.random, "uniform", lambda *_args: 0)
@@ -223,6 +287,39 @@ class TestGetGithubPatchTool:
             await tool.run(
                 input=GetGithubPatchToolInput(patch_url="https://github.com/owner/repo/commit/deadbeef.patch")
             ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    @pytest.mark.asyncio
+    async def test_fetch_uses_dedicated_github_timeout(self, tool, monkeypatch):
+        """GitHub fetches use the generous per-tool cap, not the shared 30s one."""
+        captured = {}
+
+        @asynccontextmanager
+        async def fake_get(url, **kwargs):
+            yield flexmock(
+                text=lambda: _async_return("patch"),
+                raise_for_status=lambda: None,
+                status=200,
+            )
+
+        class FakeSession:
+            def __init__(self, timeout=None, **kwargs):
+                captured["timeout"] = timeout
+                self.get = fake_get
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+
+        result = await tool.run(
+            input=GetGithubPatchToolInput(patch_url="https://github.com/owner/repo/commit/deadbeef.patch")
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert result.result == "patch"
+        assert captured["timeout"] is constants.GITHUB_AIOHTTP_TIMEOUT
 
 
 class TestGetGithubPatchFullTool:
@@ -332,6 +429,19 @@ class TestGetGithubPullRequestTool:
             await tool.run(
                 input=GetGithubPullRequestToolInput(pr_url="https://github.com/owner/repo/pull/999")
             ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_keeps_private_pr_guidance(self, tool):
+        """The 'might be private' guidance must reach agents together with the error type."""
+        _mock_aiohttp_get_error_from_entry(TimeoutError())
+
+        with pytest.raises(ToolError) as exc_info:
+            await tool.run(
+                input=GetGithubPullRequestToolInput(pr_url="https://github.com/owner/repo/pull/999")
+            ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert "might be private" in str(exc_info.value)
+        assert "Error: TimeoutError" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_malformed_json_is_reported_as_tool_error(self, tool):

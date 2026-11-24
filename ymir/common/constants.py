@@ -21,6 +21,14 @@ GITLAB_REDHAT_API_PREFIX = "/api/v4/projects/redhat%2F"
 
 YMIR_USER_AGENT = "redhat-ymir-agent"
 AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
+# Generous cap used only by the privileged GitHub tools: observed egress
+# latency to api.github.com reaches ~30s in the cluster and must not fail
+# otherwise-valid patch fetches. Connection establishment fails fast
+# (connect=10) and transient connection failures are retried by
+# aiohttp_get_with_retries. Not shared: most tools run under their own
+# overall deadline (e.g. upstream_search: 300s) that a 120s-per-request cap
+# with retries would blow through.
+GITHUB_AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=120, connect=10)
 AIOHTTP_RETRYABLE_STATUS_CODES = frozenset({503})
 AIOHTTP_MAX_RETRIES = 3
 AIOHTTP_RETRY_BACKOFF_BASE = 2

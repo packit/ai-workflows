@@ -23,10 +23,11 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
-from ymir.common.constants import AIOHTTP_TIMEOUT
+from ymir.common.constants import GITHUB_AIOHTTP_TIMEOUT
 from ymir.common.github_api import github_headers as _shared_github_headers
 from ymir.common.http_utils import aiohttp_get_with_retries
 from ymir.tools.base import CloneableTool as Tool
+from ymir.tools.gateway_utils import redact_credentials
 
 MAX_GITHUB_PATCH_PREVIEW_LENGTH = 2_000
 
@@ -106,7 +107,7 @@ class GetGithubPullRequestTool(
 
         try:
             async with (
-                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                aiohttp.ClientSession(timeout=GITHUB_AIOHTTP_TIMEOUT) as session,
                 aiohttp_get_with_retries(session, api_url, headers=headers) as response,
             ):
                 response.raise_for_status()
@@ -122,7 +123,8 @@ class GetGithubPullRequestTool(
         except (aiohttp.ClientError, TimeoutError, KeyError, JSONDecodeError) as e:
             raise ToolError(
                 f"Failed to fetch GitHub PR {pr_number} from {owner}/{repo}. "
-                f"The PR might be private, deleted, or the API is unavailable. Error: {e}"
+                f"The PR might be private, deleted, or the API is unavailable. "
+                f"Error: {type(e).__name__}: {redact_credentials(str(e))[:500]}"
             ) from e
 
 
@@ -181,7 +183,7 @@ class GetGithubCompareTool(Tool[GetGithubCompareToolInput, ToolRunOptions, GetGi
 
         try:
             async with (
-                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                aiohttp.ClientSession(timeout=GITHUB_AIOHTTP_TIMEOUT) as session,
                 aiohttp_get_with_retries(
                     session,
                     api_url,
@@ -206,7 +208,7 @@ class GetGithubCompareTool(Tool[GetGithubCompareToolInput, ToolRunOptions, GetGi
                 detail += " Verify that the repository and both references exist and are comparable."
             raise ToolError(
                 f"Failed to fetch GitHub compare {tool_input.base_ref}...{tool_input.target_ref} "
-                f"for {project_path}.{detail} Error: {e}"
+                f"for {project_path}.{detail} Error: {type(e).__name__}: {redact_credentials(str(e))[:500]}"
             ) from e
 
 
@@ -259,7 +261,7 @@ class GetGithubPatchTool(Tool[GetGithubPatchToolInput, ToolRunOptions, StringToo
         github_error = None
         try:
             async with (
-                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                aiohttp.ClientSession(timeout=GITHUB_AIOHTTP_TIMEOUT) as session,
                 aiohttp_get_with_retries(
                     session,
                     request_url,
@@ -278,10 +280,11 @@ class GetGithubPatchTool(Tool[GetGithubPatchToolInput, ToolRunOptions, StringToo
                         f"of {len(content)} total]"
                     )
                 return StringToolOutput(result=content)
-        except (aiohttp.ClientError, TimeoutError) as e:
+        except (aiohttp.ClientError, TimeoutError, UnicodeDecodeError) as e:
             detail = f" GitHub reported: {github_error}." if github_error else ""
             raise ToolError(
-                f"Failed to fetch GitHub patch from {tool_input.patch_url}.{detail} Error: {e}"
+                f"Failed to fetch GitHub patch from {tool_input.patch_url}.{detail} "
+                f"Error: {type(e).__name__}: {redact_credentials(str(e))[:500]}"
             ) from e
 
 

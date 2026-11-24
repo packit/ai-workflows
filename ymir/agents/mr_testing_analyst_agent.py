@@ -489,6 +489,7 @@ async def run_mr_testing_analyst(
     poc: bool = False,
     no_jira_comments: bool = False,
     gating: bool = False,
+    span_processor=None,
 ) -> MrTestingAnalystResult:
     async with mcp_tools(os.getenv("MCP_GATEWAY_URL")) as gateway_tools:
         workflow = Workflow(MrTestingAnalystWorkflowState, name="MrTestingAnalystWorkflow")
@@ -541,6 +542,10 @@ async def run_mr_testing_analyst(
                 return Workflow.END
 
             logger.info("Linked issues for %s: %s", state.mr_url, state.linked_issue_keys)
+            # Trace under the Jira keys this MR resolves, not the MR URL. The trace server indexes
+            # spans by this key and splits it on commas, so several keys fit in one value.
+            if span_processor is not None:
+                span_processor.set_jira_issue(",".join(state.linked_issue_keys))
             return "fetch_test_results"
 
         async def fetch_test_results(state: MrTestingAnalystWorkflowState):
@@ -920,13 +925,14 @@ async def main() -> None:
             no_jira_comments,
             gating,
         )
-        with span_processor.start_transaction(mr_url, workflow="MrTestingAnalystWorkflow"):
+        with span_processor.start_transaction(None, workflow="MrTestingAnalystWorkflow"):
             result = await run_mr_testing_analyst(
                 mr_url,
                 dry_run=dry_run,
                 poc=poc,
                 no_jira_comments=no_jira_comments,
                 gating=gating,
+                span_processor=span_processor,
             )
             _print_result(result)
         return
@@ -975,13 +981,14 @@ async def main() -> None:
                 task.attempts + 1,
             )
             try:
-                with span_processor.start_transaction(task_data.mr_url, workflow="MrTestingAnalystWorkflow"):
+                with span_processor.start_transaction(None, workflow="MrTestingAnalystWorkflow"):
                     result = await run_mr_testing_analyst(
                         task_data.mr_url,
                         dry_run=dry_run,
                         poc=poc,
                         no_jira_comments=no_jira_comments,
                         gating=task_data.gating,
+                        span_processor=span_processor,
                     )
             except Exception as e:
                 task.attempts += 1

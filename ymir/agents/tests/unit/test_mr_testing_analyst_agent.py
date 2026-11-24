@@ -4,6 +4,7 @@ import contextlib
 import json
 import re
 from pathlib import Path
+from unittest.mock import ANY
 
 import pytest
 from flexmock import flexmock
@@ -848,7 +849,13 @@ async def test_queue_mode_runs_task_with_metadata(monkeypatch):
     assert calls == [
         (
             "https://gitlab.com/x/y/-/merge_requests/1",
-            {"dry_run": False, "poc": False, "no_jira_comments": False, "gating": True},
+            {
+                "dry_run": False,
+                "poc": False,
+                "no_jira_comments": False,
+                "gating": True,
+                "span_processor": ANY,
+            },
         )
     ]
     assert redis.pushed == []
@@ -1053,3 +1060,20 @@ async def test_gating_run_fetches_test_logs_and_removes_local_copies(monkeypatch
     assert [kwargs["job_id"] for name, kwargs in calls if name == "get_pipeline_job_trace"] == ["1"]
     assert len(created) == 1
     assert not Path(created[0]).exists()
+
+
+@pytest.mark.asyncio
+async def test_run_tags_traces_with_linked_jira_issues_not_mr_url(monkeypatch):
+    tagged = []
+
+    class _FakeSpanProcessor:
+        def set_jira_issue(self, jira_issue):
+            tagged.append(jira_issue)
+
+    await _run_with_result(
+        monkeypatch,
+        MrTestingAnalystResult(analyzed=False, summary="nothing to analyze"),
+        span_processor=_FakeSpanProcessor(),
+    )
+
+    assert tagged == ["RHEL-111"]

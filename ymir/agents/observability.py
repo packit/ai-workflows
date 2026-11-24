@@ -44,9 +44,8 @@ class AgentSpanProcessor(SpanProcessor):
         jira_issue: str | None,
         workflow: str | None,
     ):
-        with sentry_sdk.start_transaction(
-            op=f"agent.{workflow}", name=f"{workflow} for {jira_issue}"
-        ) as transaction:
+        name = f"{workflow} for {jira_issue}" if jira_issue else f"{workflow}"
+        with sentry_sdk.start_transaction(op=f"agent.{workflow}", name=name) as transaction:
             transaction.set_data("workflow", workflow)
             transaction.set_data("jira_issue", jira_issue)
 

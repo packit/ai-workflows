@@ -18,7 +18,7 @@ The AI Workflows system automates RHEL package maintenance by triaging incoming 
 
 ### AI Technology
 - **Powered by**: models via Vertex AI
-- **Framework**: BeeAI agent orchestration framework
+- **Frameworks**: Pydantic AI for triage and its applicability check, BeeAI for the other agents
 - **Observability**: Phoenix tracing for AI model monitoring
 
 ### ⚠️ Limitations & Risks
@@ -31,7 +31,7 @@ For reporting issues, please refer to the "Contact & Feedback" section below.
 
 ## Workflows
 This repository contains the code for two different RHEL package maintenance workflows,
-that use the same basic components (BeeAI framework, Redis, etc.),
+that share infrastructure such as Redis and the MCP gateway,
 but are implemented with different architectures.
 
 The first workflow is [**Packaging Workflow**](README-agents.md) -

@@ -97,6 +97,7 @@ async def run_tool(
     available_tools: list[Tool] | None = None,
     *,
     expected_output: type[ToolResultT],
+    trace_trajectory: bool = True,
     **kwargs: Any,
 ) -> ToolResultT: ...
 
@@ -107,6 +108,7 @@ async def run_tool(
     available_tools: list[Tool] | None = None,
     *,
     expected_output: None = None,
+    trace_trajectory: bool = True,
     **kwargs: Any,
 ) -> str | dict | list: ...
 
@@ -116,6 +118,7 @@ async def run_tool(
     available_tools: list[Tool] | None = None,
     *,
     expected_output: type[ToolResultT] | None = None,
+    trace_trajectory: bool = True,
     **kwargs: Any,
 ) -> ToolResultT | str | dict | list:
     """Run a tool once, optionally decoding and validating its result as a model.
@@ -128,6 +131,7 @@ async def run_tool(
         tool: Tool instance or name to find in ``available_tools``.
         available_tools: Tools to search when ``tool`` is a name.
         expected_output: Optional Pydantic model used to validate the result.
+        trace_trajectory: Attach BeeAI trajectory logging for this invocation.
         **kwargs: Input fields passed to the selected tool.
 
     Returns:
@@ -143,9 +147,12 @@ async def run_tool(
         if selected_tool is None:
             raise ToolError(f"Required tool '{tool}' is unavailable")
         tool = selected_tool
-    output = await tool.run(input=kwargs).middleware(
-        GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())
-    )
+    invocation = tool.run(input=kwargs)
+    if trace_trajectory:
+        invocation = invocation.middleware(
+            GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())
+        )
+    output = await invocation
     match output:
         case StringToolOutput():
             result = output.get_text_content()

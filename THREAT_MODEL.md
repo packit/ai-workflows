@@ -4,14 +4,22 @@
 
 Ymir (internally also referred to by its former name "Jötnar" in some
 identifiers — service accounts, Kerberos principals, the `quay.io/jotnar`
-registry namespace) is a set of LLM-driven agents, built on the BeeAI
-framework, that automate RHEL/CentOS Stream package maintenance, running as
-a fleet of OpenShift Deployments and CronJobs in the `jotnar-ymir` namespace
+registry namespace) is a set of LLM-driven agents that use BeeAI and Pydantic AI
+to automate RHEL/CentOS Stream package maintenance. Ymir runs as a fleet of
+OpenShift Deployments and CronJobs in the `jotnar-ymir` namespace
 on Red Hat's internal GPC cluster (bot identity `redhat-ymir-agent`). For
 the full architecture — agent roles, queues, and data flows — see
 [README.md](README.md), [README-agents.md](README-agents.md),
 [the `*_data_flow.md` docs](jira_data_flow.md); this section intentionally does not restate that architecture, to
 avoid the two going out of sync.
+
+Triage and its applicability check run through Pydantic AI and the provider SDKs.
+Model credentials remain scoped to model access. GitLab, Jira and build tool
+credentials remain in the existing MCP gateway. The Pydantic AI adapters expose
+the existing tool allowlists and preserve the issue metadata of each MCP call.
+The Jira gateway applies its dry-run configuration to model-driven Jira writes.
+Pydantic AI spans use the existing collector and carry
+the same class of prompt and tool data as the previous triage tracing.
 
 Security-relevant assumptions this system makes about its environment:
 

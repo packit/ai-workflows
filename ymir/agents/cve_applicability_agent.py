@@ -4,33 +4,56 @@ from textwrap import dedent
 from beeai_framework.memory import UnconstrainedMemory
 from beeai_framework.middleware.trajectory import GlobalTrajectoryMiddleware
 from beeai_framework.tools import Tool
+from pydantic_ai import Agent, PromptedOutput
+from pydantic_ai.capabilities import Instrumentation
 
+from ymir.agents.pydantic_agent import adapt_tool
 from ymir.agents.reasoning_agent import ReasoningAgent
-from ymir.agents.utils import get_chat_model, get_tool_call_checker_config, is_reasoning_enabled
+from ymir.agents.utils import (
+    get_agent_execution_config,
+    get_chat_model,
+    get_tool_call_checker_config,
+    is_reasoning_enabled,
+)
 from ymir.common.logging_setup import get_trajectory_writeable
-from ymir.common.models import POSTPONED_RESOLUTIONS, Resolution
+from ymir.common.models import POSTPONED_RESOLUTIONS, AssessedApplicabilityResult, Resolution
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.text import SearchTextTool, ViewTool
+
+
+def _applicability_tools(gateway_tools: list[Tool], local_tool_options: dict) -> list[Tool]:
+    allowed = {"get_jira_details", "get_maintainer_rules", "get_shared_rules"}
+    return [
+        ViewTool(options=local_tool_options),
+        SearchTextTool(options=local_tool_options),
+        RunShellCommandTool(options=local_tool_options),
+        *(tool for tool in gateway_tools if tool.name in allowed),
+    ]
+
+
+def create_triage_applicability_agent(
+    gateway_tools: list[Tool], local_tool_options: dict
+) -> Agent[None, AssessedApplicabilityResult]:
+    return Agent(
+        name="ApplicabilityAgent",
+        output_type=PromptedOutput(AssessedApplicabilityResult),
+        instructions="You are a Red Hat security analyst.",
+        retries=get_agent_execution_config()["max_retries_per_step"],
+        capabilities=[Instrumentation()],
+        tools=[adapt_tool(tool) for tool in _applicability_tools(gateway_tools, local_tool_options)],
+    )
 
 
 def create_applicability_agent(
     gateway_tools: list[Tool],
     local_tool_options: dict,
 ) -> ReasoningAgent:
-    extra_gateway_tools = [
-        t for t in gateway_tools if t.name in ["get_jira_details", "get_maintainer_rules", "get_shared_rules"]
-    ]
     return ReasoningAgent(
         name="ApplicabilityAgent",
         llm=get_chat_model(),
         unconstrained=is_reasoning_enabled(),
         tool_call_checker=get_tool_call_checker_config(),
-        tools=[
-            ViewTool(options=local_tool_options),
-            SearchTextTool(options=local_tool_options),
-            RunShellCommandTool(options=local_tool_options),
-            *extra_gateway_tools,
-        ],
+        tools=_applicability_tools(gateway_tools, local_tool_options),
         memory=UnconstrainedMemory(),
         middlewares=[GlobalTrajectoryMiddleware(pretty=True, target=get_trajectory_writeable())],
         role="Red Hat security analyst",

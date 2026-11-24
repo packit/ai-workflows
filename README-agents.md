@@ -1,6 +1,7 @@
 # Package Maintenance Workflows as AI agents
 
-A set of AI agents implemented in the BeeAI Framework, interconnected via Redis, observed by Phoenix.
+A set of AI agents interconnected via Redis and observed by Phoenix. Triage and
+its CVE applicability check use Pydantic AI. The other agents use BeeAI.
 Every agent can run individually or pick up tasks from a Redis queue.
 
 See [README.md](README.md) for general notes about setting up the development environment.
@@ -23,6 +24,29 @@ builds `Containerfile.api` and checks `/healthz` as the image's non-root user,
 so missing Python dependencies fail before the image is published.
 
 ## Architecture
+
+### Triage runtime
+
+Triage runs its eligibility, analysis, applicability, policy and Jira steps in
+Python. Pydantic AI runs the two model conversations and returns validated
+results. The workflow includes the main Jira issue in the prompt when prefetch
+succeeds. The triage agent can use `get_jira_details` to read the main issue or
+look up other trackers during analysis.
+The existing MCP session, tool schemas, local mock repository options,
+Jira labels, queue payloads and downstream build integrations are shared with
+the rest of Ymir. The rebuild workflow continues to use its BeeAI applicability
+agent with the same prompt and tools.
+
+`CHAT_MODEL_TRIAGE` overrides `CHAT_MODEL` in the triage worker and standalone
+mode. The Vertex Claude and Gemini routes use the existing Google project,
+location and application credentials. Triage also accepts the `anthropic:`,
+`gemini:` and `openai:` routes. `BEEAI_MAX_ITERATIONS` supplies the Pydantic AI
+model request limit and `BEEAI_MAX_RETRIES_PER_STEP` supplies its tool and output
+retry limits. The custom BeeAI context compaction and tool loop checker apply
+to BeeAI agents. Triage uses Pydantic AI's request limit and retry handling.
+
+Phoenix receives Pydantic AI OpenTelemetry spans through the existing collector.
+The triage E2E report reads usage from the Pydantic AI result.
 
 Three agents process tasks through Redis queues:
 - **Triage Agent**: Analyzes JIRA issues and determines resolution path. It uses title, description, fields, and comments to find out root cause of the issue. It can ask for clarification, create tasks for other agents or may take no action if not needed.

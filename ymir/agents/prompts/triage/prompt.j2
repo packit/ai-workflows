@@ -23,7 +23,8 @@ Goal: Analyze the given issue to determine the correct course of action.
 
 **Initial Analysis Steps**
 
-1. Open the {{ issue }} Jira issue and thoroughly analyze it:
+1. Thoroughly analyze the Jira issue {{ issue }}. Use the issue data at the end of
+   this prompt when available. If it is missing, fetch the issue using get_jira_details.
    * Extract key details from the title, description, fields, and comments
    {% if is_older_zstream %}
    * Identify the Fix Version using the map_version tool and check if it is an older z-stream.

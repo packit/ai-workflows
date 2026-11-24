@@ -4,12 +4,13 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from tabulate import tabulate
 
-from ymir.agents.metrics_middleware import MetricsMiddleware
 from ymir.agents.observability import setup_observability
 from ymir.agents.triage_agent import TriageState, create_triage_agent, run_workflow
 from ymir.common.config import rhel_config_override
@@ -52,12 +53,26 @@ class TriageAgentTestCase:
         if self.zstream_override:
             apply_zstream_override(self.zstream_override)
 
-        metrics_middleware = MetricsMiddleware()
+        self.metrics = {"agent_name": "TriageAgent"}
 
         def testing_factory(gateway_tools, local_tool_options=None):
             triage_agent = create_triage_agent(gateway_tools, local_tool_options)
-            triage_agent.middlewares.append(metrics_middleware)
-            return triage_agent
+
+            async def run(prompt, **kwargs):
+                start = monotonic()
+                try:
+                    result = await triage_agent.run(prompt, **kwargs)
+                    usage = result.usage
+                    self.metrics.update(
+                        tool_calls=usage.tool_calls,
+                        prompt_tokens=usage.input_tokens,
+                        completion_tokens=usage.output_tokens,
+                    )
+                    return result
+                finally:
+                    self.metrics["duration"] = monotonic() - start
+
+            return SimpleNamespace(run=run)
 
         try:
             with (
@@ -67,8 +82,6 @@ class TriageAgentTestCase:
                 self.finished_state = await run_workflow(self.input, False, testing_factory)
         except BaseException as e:
             self.error = e
-        finally:
-            self.metrics = metrics_middleware.get_metrics()
 
     def __hash__(self) -> int:
         return hash(self.input)

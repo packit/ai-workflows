@@ -8,6 +8,11 @@ aiohttp>=3.12.15
 arize-phoenix-otel>=0.13.0
 beautifulsoup4>=4.13.4
 beeai-framework[duckduckgo]==0.1.85
+# Keep the OpenAI SDK compatible with the legacy LiteLLM dependency.
+pydantic-ai-slim[anthropic,google,openai]==2.30.0
+# Keep the provider SDK APIs compatible with this Pydantic AI release.
+anthropic<1
+google-genai<3
 copr>=1.129
 fastmcp>=2.11.3
 logdetective-mcp>=0.6.1

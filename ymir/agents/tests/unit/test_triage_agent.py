@@ -5,8 +5,16 @@ from pathlib import Path
 
 import pytest
 from flexmock import flexmock
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from pydantic import BaseModel
+from pydantic_ai.messages import ModelResponse, RetryPromptPart, TextPart, ToolCallPart
+from pydantic_ai.models.function import FunctionModel
 
 from ymir.agents import (
+    pydantic_agent,
     rebase_consolidation,
 )
 from ymir.agents import (
@@ -16,6 +24,7 @@ from ymir.agents import (
     triage_agent as t_agent,
 )
 from ymir.agents.constants import JIRA_COMMENT_TEMPLATE
+from ymir.agents.observability import AgentSpanProcessor
 from ymir.agents.triage_agent import (
     TriageState,
     _build_reproducer_input,
@@ -123,33 +132,77 @@ def test_user_triggered_run_posts_normal_results(resolution):
     assert _should_update_jira(resolution=resolution, user_triggered=True) is True
 
 
-def test_triage_agent_exposes_authenticated_github_patch_tool(monkeypatch):
-    captured = {}
-
-    def reasoning_agent_factory(**kwargs):
-        captured.update(kwargs)
-        return flexmock()
-
-    monkeypatch.setattr(t_agent, "ReasoningAgent", reasoning_agent_factory)
-    monkeypatch.setattr(t_agent, "get_chat_model", lambda: None)
-    monkeypatch.setattr(t_agent, "is_reasoning_enabled", lambda: False)
-    monkeypatch.setattr(t_agent, "get_tool_call_checker_config", lambda: None)
+@pytest.mark.asyncio
+async def test_pydantic_triage_preserves_tools_and_validates_output():
+    class IssueInput(BaseModel):
+        issue_key: str
 
     gateway_tools = [
-        flexmock(name="get_patch_from_url"),
-        flexmock(name="get_github_patch"),
-        flexmock(name="get_github_pull_request"),
-        flexmock(name="get_github_compare"),
+        flexmock(name=name, description=name, input_schema=IssueInput)
+        for name in (
+            "get_jira_details",
+            "set_jira_fields",
+            "get_patch_from_url",
+            "get_github_patch",
+            "get_github_pull_request",
+            "get_github_compare",
+            "comment_in_jira",
+        )
     ]
-    t_agent.create_triage_agent(gateway_tools)
+    jira_calls = []
 
-    tool_names = {tool.name for tool in captured["tools"]}
-    assert {
-        "get_patch_from_url",
-        "get_github_patch",
-        "get_github_pull_request",
-        "get_github_compare",
-    } <= tool_names
+    async def run_jira_tool(tool, *, trace_trajectory, **arguments):
+        assert trace_trajectory is False
+        jira_calls.append((tool.name, arguments["issue_key"]))
+        if tool.name == "set_jira_fields":
+            return "Gateway response"
+        return {"fields": {"summary": _CVE_SUMMARY}}
+
+    flexmock(pydantic_agent).should_receive("run_tool").times(3).replace_with(run_jira_tool)
+    requests = 0
+
+    async def model(messages, info):
+        nonlocal requests
+        requests += 1
+        names = {tool.name for tool in info.function_tools}
+        assert {
+            "get_patch_from_url",
+            "get_github_patch",
+            "get_github_pull_request",
+            "get_github_compare",
+        } <= names
+        assert "comment_in_jira" not in names
+        assert "get_jira_details" in names
+        if requests == 1:
+            return ModelResponse(parts=[ToolCallPart("get_jira_details", {"issue_key": "RHEL-300091"})])
+        if requests == 2:
+            return ModelResponse(parts=[ToolCallPart("get_jira_details", {"issue_key": "RHEL-2"})])
+        if requests == 3:
+            return ModelResponse(parts=[ToolCallPart("set_jira_fields", {"issue_key": "RHEL-2"})])
+        if requests == 4:
+            assert messages[-1].parts[0].content == "Gateway response"
+            return ModelResponse(parts=[TextPart(json.dumps(_backport_answer(jira_issue="RHEL-1")))])
+        assert requests == 5
+        assert any(isinstance(part, RetryPromptPart) for part in messages[-1].parts)
+        return ModelResponse(parts=[TextPart(json.dumps(_backport_answer()))])
+
+    agent = t_agent.create_triage_agent(gateway_tools)
+    result = await agent.run(
+        "Triage RHEL-300091",
+        model=FunctionModel(model),
+        deps=t_agent.TriageRunContext("RHEL-300091", "rhel-10.4", _CVE_SUMMARY),
+    )
+
+    assert jira_calls == [
+        ("get_jira_details", "RHEL-300091"),
+        ("get_jira_details", "RHEL-2"),
+        ("set_jira_fields", "RHEL-2"),
+    ]
+    assert result.output.resolution == Resolution.BACKPORT
+    assert isinstance(result.output.data, BackportData)
+    assert result.output.data.jira_issue == "RHEL-300091"
+    assert result.output.data.fix_version == "rhel-10.4"
+    assert result.output.data.cve_id == "CVE-2026-115905"
 
 
 @pytest.mark.parametrize(
@@ -394,6 +447,11 @@ def _mock_env_vars_redis(monkeypatch):
 def _mock_env_vars(monkeypatch):
     monkeypatch.setenv("MCP_GATEWAY_URL", "http://localhost")
     monkeypatch.setenv("GIT_REPO_BASEPATH", "/tmp")
+
+    async def run_agent(agent, prompt, **kwargs):
+        return await agent.run(prompt, **kwargs)
+
+    flexmock(t_agent).should_receive("run_pydantic_agent").replace_with(run_agent)
 
 
 async def _async_noop(*_args, **_kwargs):
@@ -1252,20 +1310,14 @@ async def test_branch_creation_notice_uses_final_resolution(
         return _return
 
     triage_agent = flexmock()
-    triage_agent.should_receive("run").replace_with(
-        _async_return(flexmock(last_message=flexmock(text=output.model_dump_json())))
-    )
+    triage_agent.should_receive("run").replace_with(_async_return(flexmock(output=output)))
     applicability_agent = flexmock()
-    applicability_agent.should_receive("run").replace_with(
-        _async_return(flexmock(last_message=flexmock(text=applicability.model_dump_json())))
-    )
+    applicability_agent.should_receive("run").replace_with(_async_return(flexmock(output=applicability)))
     flexmock(t_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
     monkeypatch.setattr(agent_tasks, "mcp_tools", _mock_mcp_tools)
     flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
     flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_rules)
     monkeypatch.setattr(t_agent, "get_mock_local_tool_env", lambda *_: None)
-    monkeypatch.setattr(t_agent, "get_agent_execution_config", dict)
-    monkeypatch.setattr(t_agent, "render_template", lambda *_: "output format")
     monkeypatch.setattr(t_agent, "render_prompt", _async_return("triage prompt"))
     monkeypatch.setattr(t_agent, "load_rhel_config", _async_return({}))
     monkeypatch.setattr(t_agent, "determine_target_branch", _async_return(("rhel-10.3", None)))
@@ -1273,7 +1325,7 @@ async def test_branch_creation_notice_uses_final_resolution(
     monkeypatch.setattr(
         agent_tasks, "clone_and_prep_sources", _async_return((tmp_path, tmp_path, prep_ok, None))
     )
-    monkeypatch.setattr(t_agent, "create_applicability_agent", lambda *_: applicability_agent)
+    monkeypatch.setattr(t_agent, "create_triage_applicability_agent", lambda *_: applicability_agent)
     monkeypatch.setattr(t_agent, "check_build_in_buildroot", _async_return(in_buildroot))
     siblings = [ConsolidatedIssue(issue_key="RHEL-200")] if scenario == "consolidated" else []
     monkeypatch.setattr(t_agent, "find_rebuild_siblings", _async_return((siblings, None)))
@@ -1420,7 +1472,7 @@ async def test_pr_pending_without_blocker_reference_raises(_mock_env_vars):
     )
 
     async def _mock_agent_run(*_args, **_kwargs):
-        return flexmock(last_message=flexmock(text=llm_json))
+        return flexmock(output=TriageOutputSchema.model_validate_json(llm_json))
 
     def _mock_factory(*_args, **_kwargs):
         return agent
@@ -1429,7 +1481,9 @@ async def test_pr_pending_without_blocker_reference_raises(_mock_env_vars):
     async def _mock_mcp_tools(*_args, **_kwargs):
         yield []
 
-    async def _mock_run_tool(*_args, **_kwargs):
+    async def _mock_run_tool(name, **_kwargs):
+        if name == "get_jira_details":
+            return {"fields": {}}
         return eligibility_result.model_dump()
 
     async def _mock_prompt(*_args, **_kwargs):
@@ -1440,29 +1494,10 @@ async def test_pr_pending_without_blocker_reference_raises(_mock_env_vars):
     flexmock(t_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
     flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
     flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
-    flexmock(t_agent).should_receive("render_template").and_return("output format")
-    flexmock(t_agent).should_receive("get_agent_execution_config").and_return({})
     flexmock(t_agent).should_receive("render_prompt").replace_with(_mock_prompt)
 
-    with pytest.raises(Exception) as excinfo:
-        await run_workflow(
-            "RHEL-99999",
-            dry_run=True,
-            triage_agent_factory=_mock_factory,
-        )
-
-    # The beeai Workflow wraps a node's exception in a FrameworkError, chaining
-    # the original via __cause__. The outer handler in _process_triage_locked
-    # catches it (except Exception) and routes to retry(); here we assert the
-    # guard's ValueError is what propagated.
-    chain = []
-    err = excinfo.value
-    while err is not None:
-        chain.append(err)
-        err = err.__cause__
-    assert any(isinstance(e, ValueError) and "postponed_pr_pending" in str(e) for e in chain), (
-        f"expected a chained ValueError about postponed_pr_pending, got: {chain!r}"
-    )
+    with pytest.raises(ValueError, match="postponed_pr_pending"):
+        await run_workflow("RHEL-99999", dry_run=True, triage_agent_factory=_mock_factory)
 
 
 def _adf_paragraph(*text_nodes: dict) -> dict:
@@ -1722,35 +1757,66 @@ def test_validate_triage_output_pr_pending_requires_blocker_references():
 
 
 @pytest.mark.asyncio
-async def test_run_workflow_validates_final_answer_with_issue_context(_mock_env_vars):
-    """run_workflow passes a validator bound to the triaged issue to the agent, so an
-    answer missing jira_issue (trace aceb8197) is completed instead of crashing."""
+@pytest.mark.parametrize("prefetch", ["success", "malformed", "error"])
+async def test_run_workflow_includes_jira_context_when_available(_mock_env_vars, prefetch):
     eligibility_result = CVEEligibilityResult(
         is_cve=True,
         eligibility=TriageEligibility.IMMEDIATELY,
         reason="Eligible for immediate triage",
     )
-    jira_fields = {"summary": _CVE_SUMMARY, "fixVersions": [{"name": "rhel-10.4"}]}
+    jira_details = {
+        "key": "RHEL-300091",
+        "fields": {
+            "summary": _CVE_SUMMARY,
+            "fixVersions": [{"name": "rhel-10.4"}],
+            "description": "Fix needed in the existing package",
+            "comment": {"comments": [{"body": "Maintainer supplied patch details"}]},
+        },
+        "remote_links": [{"object": {"url": "https://example.com/change"}}],
+    }
 
-    async def _mock_agent_run(*_args, **kwargs):
-        # Stand in for the runner: the validator's return value becomes the answer.
-        text = kwargs["validate_output"](json.dumps(_backport_answer()))
-        return flexmock(last_message=flexmock(text=text))
+    async def _mock_agent_run(prompt, **kwargs):
+        deps = kwargs["deps"]
+        assert deps.jira_issue == "RHEL-300091"
+        if prefetch == "success":
+            assert json.loads(prompt.split("Jira issue data (JSON):\n", 1)[1]) == jira_details
+            assert deps.fix_version == "rhel-10.4"
+            assert deps.jira_summary == _CVE_SUMMARY
+        else:
+            assert "Jira issue data (JSON):" not in prompt
+            assert "If it is missing, fetch the issue using get_jira_details." in prompt
+            assert deps.fix_version is None
+            assert deps.jira_summary is None
+        return flexmock(
+            output=TriageOutputSchema(
+                resolution=Resolution.BACKPORT,
+                data=BackportData(
+                    **_backport_answer(
+                        jira_issue=deps.jira_issue, fix_version="rhel-10.4", cve_id="CVE-2026-115905"
+                    )["data"]
+                ),
+            )
+        )
 
     agent = flexmock()
-    agent.should_receive("run").replace_with(_mock_agent_run)
+    agent.should_receive("run").replace_with(_mock_agent_run).once()
 
     @asynccontextmanager
     async def _mock_mcp_tools(*_args, **_kwargs):
         yield []
 
-    async def _mock_run_tool(name, **_kwargs):
+    issue_reads = []
+
+    async def _mock_run_tool(name, **kwargs):
         if name == "get_jira_details":
-            return {"fields": jira_fields}
+            issue_reads.append(kwargs["issue_key"])
+            if prefetch == "error":
+                raise TimeoutError("Jira request timed out")
+            return jira_details if prefetch == "success" else {"error": "Jira returned no issue"}
         return eligibility_result.model_dump()
 
-    async def _mock_prompt(*_args, **_kwargs):
-        return "prompt"
+    async def _mock_prompt(input_data, **_kwargs):
+        return t_agent.render_template("triage/prompt.j2", input_data)
 
     async def _mock_rhel_config(*_args, **_kwargs):
         return {}
@@ -1758,8 +1824,6 @@ async def test_run_workflow_validates_final_answer_with_issue_context(_mock_env_
     flexmock(t_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
     flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
     flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
-    flexmock(t_agent).should_receive("render_template").and_return("output format")
-    flexmock(t_agent).should_receive("get_agent_execution_config").and_return({})
     flexmock(t_agent).should_receive("render_prompt").replace_with(_mock_prompt)
     flexmock(t_agent).should_receive("load_rhel_config").replace_with(_mock_rhel_config)
 
@@ -1773,20 +1837,60 @@ async def test_run_workflow_validates_final_answer_with_issue_context(_mock_env_
     flexmock(t_agent).should_receive("determine_target_branch").replace_with(_stop_at_target_branch)
     flexmock(t_agent).should_receive("normalize_fix_version").replace_with(lambda version, _config: version)
 
-    with pytest.raises(Exception) as excinfo:
-        await run_workflow("RHEL-300091", dry_run=True, triage_agent_factory=lambda *_a, **_k: agent)
-
-    chain = []
-    err = excinfo.value
-    while err is not None:
-        chain.append(err)
-        err = err.__cause__
-    assert any(isinstance(e, RuntimeError) and str(e) == "stop" for e in chain), chain
+    with pytest.raises(RuntimeError, match=r"^stop$"):
+        await run_workflow("RHEL-300091", dry_run=True, triage_agent_factory=lambda *_: agent)
+    assert issue_reads == ["RHEL-300091"]
     assert len(triage_data) == 1
     assert isinstance(triage_data[0], BackportData)
     assert triage_data[0].jira_issue == "RHEL-300091"
     assert triage_data[0].fix_version == "rhel-10.4"
     assert triage_data[0].cve_id == "CVE-2026-115905"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gateway_close_fails", [False, True])
+async def test_run_workflow_exports_completion_span(request, gateway_close_fails):
+    provider = TracerProvider()
+    request.addfinalizer(provider.shutdown)
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(AgentSpanProcessor())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer(t_agent.__name__)
+    flexmock(trace).should_receive("get_tracer").with_args(t_agent.__name__).and_return(tracer)
+
+    @asynccontextmanager
+    async def mock_mcp_tools(*args, **kwargs):
+        yield []
+        assert not any(span.name == "TriageWorkflow" for span in exporter.get_finished_spans())
+        if gateway_close_fails:
+            raise RuntimeError("Gateway session could not close")
+
+    async def check_eligibility(*args, **kwargs):
+        with tracer.start_as_current_span("check_cve_triage_eligibility"):
+            return CVEEligibilityResult(
+                is_cve=True, eligibility=TriageEligibility.NEVER, reason="Duplicate tracker"
+            ).model_dump()
+
+    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(mock_mcp_tools)
+    flexmock(t_agent).should_receive("run_tool").replace_with(check_eligibility)
+
+    if gateway_close_fails:
+        with pytest.raises(RuntimeError, match="Gateway session could not close"):
+            await run_workflow("RHEL-1", dry_run=True, triage_agent_factory=None)
+    else:
+        state = await run_workflow("RHEL-1", dry_run=True, triage_agent_factory=None)
+        assert state.triage_result.resolution == Resolution.OPEN_ENDED_ANALYSIS
+
+    eligibility, workflow = exporter.get_finished_spans()
+    assert workflow.name == "TriageWorkflow"
+    assert workflow.parent is None
+    assert workflow.attributes["jira.issue"] == "RHEL-1"
+    assert eligibility.parent == workflow.context
+    assert eligibility.end_time <= workflow.end_time
+    assert workflow.status.status_code == (
+        trace.StatusCode.ERROR if gateway_close_fails else trace.StatusCode.UNSET
+    )
 
 
 @pytest.mark.parametrize(

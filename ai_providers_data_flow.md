@@ -4,11 +4,18 @@ This document describes how the AI Workflows system interacts with AI model prov
 
 ## AI Provider Architecture
 
+Triage and its CVE applicability check use Pydantic AI with provider SDKs in
+the agent process. The Vertex Claude route uses `AsyncAnthropicVertex` and the
+existing `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION`, and Google
+Application Default Credentials. Vertex Gemini uses the Pydantic AI Google Cloud
+provider. MCP still handles the existing Jira and packaging tool calls. The
+diagrams below describe the BeeAI-based workflows.
+
 ```mermaid
 graph TD
     subgraph "Agent Framework"
         BEEAI["BeeAI Framework<br/>(Agent Orchestration)"]
-        AGENTS["AI Agents<br/>(Rebase, Backport, MR, Triage)"]
+        AGENTS["AI Agents<br/>(Rebase, Backport, MR)"]
     end
 
     subgraph "AI Model Access Layer"
@@ -101,7 +108,6 @@ is still needed before changing the pinned BeeAI version.
 
 ```mermaid
 flowchart LR
-    TRIAGE["Triage Agent"]
     BACKPORT["Backport Agent"]
     REBASE["Rebase Agent"]
     MR_AGENT["MR Agent"]
@@ -109,7 +115,6 @@ flowchart LR
 
     CHAT["Chat Service<br/>(Claude Opus 4.6)"]
 
-    TRIAGE -->|"Analyze Jira issue<br/>Determine workflow"| CHAT
     BACKPORT -->|"Review patches<br/>Apply to spec"| CHAT
     REBASE -->|"Update version<br/>Resolve conflicts"| CHAT
     MR_AGENT -->|"Review MR comments<br/>Address feedback"| CHAT

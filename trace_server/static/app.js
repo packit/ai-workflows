@@ -20,11 +20,14 @@ function getVal(value) {
 // (Python's str(enum)). Strip that prefix so old and new spans render the same way.
 const ENUM_STR_PREFIX = 'OpenInferenceSpanKindValues.';
 
-function getSpanKind(attrs) {
+function getSpanKind(attrs, spanName = '') {
   const kind = getVal((attrs || {})['openinference.span.kind']);
-  return typeof kind === 'string' && kind.startsWith(ENUM_STR_PREFIX)
-    ? kind.slice(ENUM_STR_PREFIX.length)
-    : kind;
+  if (typeof kind === 'string' && kind.startsWith(ENUM_STR_PREFIX)) return kind.slice(ENUM_STR_PREFIX.length);
+  if (kind) return kind;
+  const operation = getVal((attrs || {})['gen_ai.operation.name']);
+  if (operation === 'invoke_agent') return 'AGENT';
+  if (operation === 'chat' || spanName.endsWith('ChatModel')) return 'LLM';
+  return null;
 }
 
 function escHtml(s) {
@@ -142,26 +145,46 @@ function fmtTokens(n) {
   return String(n);
 }
 
+function llmTokenCounts(attrs) {
+  return {
+    promptTokens: Number(getVal(attrs['llm.token_count.prompt']) ?? getVal(attrs['gen_ai.usage.input_tokens']) ?? 0),
+    completionTokens: Number(getVal(attrs['llm.token_count.completion'])
+      ?? getVal(attrs['gen_ai.usage.output_tokens']) ?? 0),
+    cacheRead: Number(getVal(attrs['metadata.usage.cached_prompt_tokens'])
+      ?? getVal(attrs['gen_ai.usage.cache_read.input_tokens']) ?? 0),
+    cacheWrite: Number(getVal(attrs['metadata.usage.cached_creation_tokens'])
+      ?? getVal(attrs['gen_ai.usage.cache_creation.input_tokens']) ?? 0),
+  };
+}
+
+function fmtPromptTokens({promptTokens, cacheRead, cacheWrite}, suffix = '') {
+  const parts = [];
+  if (cacheRead) parts.push(fmtTokens(cacheRead) + ' cached');
+  if (cacheWrite) parts.push(fmtTokens(cacheWrite) + ' new');
+  return fmtTokens(promptTokens) + suffix + (parts.length ? ' (' + parts.join(', ') + ')' : '');
+}
+
 function aggregateLlmStats(spans) {
-  let calls = 0, promptTokens = 0, completionTokens = 0, cacheRead = 0, cacheWrite = 0;
-  const models = new Set();
-  for (const s of spans) {
-    const attrs = s.attributes || {};
-    const kind = getSpanKind(attrs);
-    if (kind !== 'LLM' && !s.name.endsWith('ChatModel')) continue;
-    calls++;
-    const pt = getVal(attrs['llm.token_count.prompt']);
-    const ct = getVal(attrs['llm.token_count.completion']);
-    const cr = getVal(attrs['metadata.usage.cached_prompt_tokens']);
-    const cw = getVal(attrs['metadata.usage.cached_creation_tokens']);
-    const model = getVal(attrs['llm.model_name']);
-    if (pt) promptTokens += Number(pt);
-    if (ct) completionTokens += Number(ct);
-    if (cr) cacheRead += Number(cr);
-    if (cw) cacheWrite += Number(cw);
-    if (model) models.add(model);
+  const stats = {calls: 0, promptTokens: 0, completionTokens: 0, cacheRead: 0, cacheWrite: 0, models: new Set()};
+
+  function collect(span) {
+    const attrs = span.attributes || {};
+    if (getSpanKind(attrs, span.name) === 'LLM') {
+      const usage = llmTokenCounts(attrs);
+      stats.calls++;
+      stats.promptTokens += usage.promptTokens;
+      stats.completionTokens += usage.completionTokens;
+      stats.cacheRead += usage.cacheRead;
+      stats.cacheWrite += usage.cacheWrite;
+      const model = getVal(attrs['llm.model_name']) ?? getVal(attrs['gen_ai.response.model'])
+        ?? getVal(attrs['gen_ai.request.model']);
+      if (model) stats.models.add(model);
+    }
+    if (span.children) span.children.forEach(collect);
   }
-  return {calls, promptTokens, completionTokens, cacheRead, cacheWrite, models};
+
+  spans.forEach(collect);
+  return stats;
 }
 
 function isTraceComplete(spans) {
@@ -750,14 +773,8 @@ async function renderTraceDetail(container, issue, traceId, prevHash, targetSpan
       const llmStats = aggregateLlmStats(state.spans);
       if (llmStats.calls > 0) {
         meta.appendChild(el('span', {}, 'LLM calls: ' + llmStats.calls));
-        let tokenSummary = 'tokens: ' + fmtTokens(llmStats.promptTokens) + ' in';
-        if (llmStats.cacheRead || llmStats.cacheWrite) {
-          const parts = [];
-          if (llmStats.cacheRead) parts.push(fmtTokens(llmStats.cacheRead) + ' cached');
-          if (llmStats.cacheWrite) parts.push(fmtTokens(llmStats.cacheWrite) + ' new');
-          tokenSummary += ' (' + parts.join(', ') + ')';
-        }
-        tokenSummary += ' / ' + fmtTokens(llmStats.completionTokens) + ' out';
+        const tokenSummary = 'tokens: ' + fmtPromptTokens(llmStats, ' in')
+          + ' / ' + fmtTokens(llmStats.completionTokens) + ' out';
         meta.appendChild(el('span', {}, tokenSummary));
         if (llmStats.models.size > 0) meta.appendChild(el('span', {}, 'model: ' + [...llmStats.models].join(', ')));
       }
@@ -857,14 +874,8 @@ async function pollNewSpans(issue, traceId) {
       const llmStats = aggregateLlmStats(state.spans);
       if (llmStats.calls > 0) {
         meta.appendChild(el('span', {}, 'LLM calls: ' + llmStats.calls));
-        let tokenSummary = 'tokens: ' + fmtTokens(llmStats.promptTokens) + ' in';
-        if (llmStats.cacheRead || llmStats.cacheWrite) {
-          const parts = [];
-          if (llmStats.cacheRead) parts.push(fmtTokens(llmStats.cacheRead) + ' cached');
-          if (llmStats.cacheWrite) parts.push(fmtTokens(llmStats.cacheWrite) + ' new');
-          tokenSummary += ' (' + parts.join(', ') + ')';
-        }
-        tokenSummary += ' / ' + fmtTokens(llmStats.completionTokens) + ' out';
+        const tokenSummary = 'tokens: ' + fmtPromptTokens(llmStats, ' in')
+          + ' / ' + fmtTokens(llmStats.completionTokens) + ' out';
         meta.appendChild(el('span', {}, tokenSummary));
         if (llmStats.models.size > 0) meta.appendChild(el('span', {}, 'model: ' + [...llmStats.models].join(', ')));
       }
@@ -890,7 +901,16 @@ function buildSpanTree(spans) {
   const byId = new Map();
   const roots = [];
   for (const span of spans) {
-    byId.set(span.span_id, {...span, children: []});
+    const node = {...span, children: []};
+    const attrs = span.attributes || {};
+    if (getVal(attrs['gen_ai.operation.name']) === 'invoke_agent') {
+      node.name = getVal(attrs['gen_ai.agent.name']) || span.name;
+      // Pydantic AI leaves the status unset after a successful invocation.
+      if (span.status_code === 0 && span.end_time && getVal(attrs['final_result']) != null) {
+        node.status_code = 1;
+      }
+    }
+    byId.set(span.span_id, node);
   }
   // Synthesize placeholders for missing parents
   const missingParents = new Map();
@@ -972,57 +992,46 @@ function buildSpanTree(spans) {
   return roots;
 }
 
-function treeLlmStats(node) {
-  let promptTokens = 0, completionTokens = 0, cacheRead = 0, cacheWrite = 0;
-  const attrs = node.attributes || {};
-  const kind = getSpanKind(attrs);
-  if (kind === 'LLM' || node.name.endsWith('ChatModel')) {
-    const pt = getVal(attrs['llm.token_count.prompt']);
-    const ct = getVal(attrs['llm.token_count.completion']);
-    const cr = getVal(attrs['metadata.usage.cached_prompt_tokens']);
-    const cw = getVal(attrs['metadata.usage.cached_creation_tokens']);
-    if (pt) promptTokens += Number(pt);
-    if (ct) completionTokens += Number(ct);
-    if (cr) cacheRead += Number(cr);
-    if (cw) cacheWrite += Number(cw);
-  }
-  if (node.children) {
-    for (const child of node.children) {
-      const s = treeLlmStats(child);
-      promptTokens += s.promptTokens;
-      completionTokens += s.completionTokens;
-      cacheRead += s.cacheRead;
-      cacheWrite += s.cacheWrite;
-    }
-  }
-  return {promptTokens, completionTokens, cacheRead, cacheWrite};
-}
-
 function isEmptyLlm(node) {
   const attrs = node.attributes || {};
-  const kind = getSpanKind(attrs);
-  if (kind !== 'LLM' && !node.name.endsWith('ChatModel')) return false;
+  if (getSpanKind(attrs, node.name) !== 'LLM') return false;
+  if (getVal(attrs['gen_ai.operation.name']) === 'chat') return false;
   if (getVal(attrs['llm.output_messages.0.message.contents.0.message_content.type'])) return false;
   if (getVal(attrs['llm.output_messages.0.message.tool_calls.0.tool_call.function.name'])) return false;
   return true;
 }
 
 function renderSpanTree(container, nodes, depth, parent) {
-  const parentKind = parent ? getSpanKind(parent.attributes) : null;
+  const parentAttrs = parent?.attributes || {};
+  const parentKind = getSpanKind(parentAttrs, parent?.name);
+  const finalResult = parentKind === 'AGENT' && parent.end_time ? getVal(parentAttrs['final_result']) : null;
+  const finalChat = finalResult != null && parent.status_code !== 2
+    ? nodes.findLast(node => getVal(node.attributes?.['gen_ai.operation.name']) === 'chat') : null;
   for (const node of nodes) {
     if (parentKind === 'TOOL' && node.name === 'error') continue;
     if (isEmptyLlm(node)) continue;
-    container.appendChild(renderSpanRow(node, depth, parent));
-    if (node.children && node.children.length > 0) {
-      renderSpanTree(container, node.children, depth + 1, node);
-    }
+    container.appendChild(renderSpanRow(node, depth, node === finalChat));
+    renderSpanTree(container, node.children, depth + 1, node);
+  }
+  if (finalResult != null) {
+    container.appendChild(renderFinalAnswer(finalResult, depth, parent.status_code));
   }
 }
 
-function renderSpanRow(span, depth, parent) {
+function renderFinalAnswer(result, depth, statusCode) {
+  const status = statusClass(statusCode);
+  return el('div', {className: 'span-row ' + (statusCode === 2 ? 'has-error' : 'kind-tool'),
+    style: 'padding-left: ' + (10 + depth * 20) + 'px'},
+    el('div', {className: 'span-row-header'},
+      el('span', {className: 'span-name'}, 'final_answer'),
+      el('span', {className: 'span-kind'}, 'RESULT'),
+      status ? el('span', {className: 'span-status ' + status}, statusLabel(statusCode)) : null),
+    el('div', {className: 'span-detail'}, renderFinalAnswerContent(result)));
+}
+
+function renderSpanRow(span, depth, isFinalChat) {
   const attrs = span.attributes || {};
-  let kind = getSpanKind(attrs) || '';
-  if (!kind && span.name.endsWith('ChatModel')) kind = 'LLM';
+  const kind = getSpanKind(attrs, span.name);
   let effectiveStatus = span.status_code;
   if (kind === 'TOOL' && span.name === 'run_shell_command') {
     try {
@@ -1092,43 +1101,19 @@ function renderSpanRow(span, depth, parent) {
   if (kind) header.appendChild(el('span', {className: 'span-kind'}, kind));
   if (sc) header.appendChild(el('span', {className: 'span-status ' + sc}, statusLabel(effectiveStatus)));
 
-  const isLlm = kind === 'LLM' || (!kind && span.name.endsWith('ChatModel'));
   const isAgent = kind === 'AGENT' || kind === 'CHAIN' || span._placeholder;
-  if (isLlm) {
-    const pt = Number(getVal(attrs['llm.token_count.prompt']) || 0);
-    const ct = Number(getVal(attrs['llm.token_count.completion']) || 0);
-    const cr = Number(getVal(attrs['metadata.usage.cached_prompt_tokens']) || 0);
-    const cw = Number(getVal(attrs['metadata.usage.cached_creation_tokens']) || 0);
-    if (pt || ct) {
-      let tokenText = fmtTokens(pt);
-      if (cr || cw) {
-        const parts = [];
-        if (cr) parts.push(fmtTokens(cr) + ' cached');
-        if (cw) parts.push(fmtTokens(cw) + ' new');
-        tokenText += ' (' + parts.join(', ') + ')';
-      }
-      tokenText += ' → ' + fmtTokens(ct);
-      header.appendChild(el('span', {className: 'span-tokens'}, tokenText));
-    }
-  } else if (isAgent && span.children && span.children.length > 0) {
-    const stats = treeLlmStats(span);
-    if (stats.promptTokens || stats.completionTokens) {
-      let tokenText = fmtTokens(stats.promptTokens);
-      if (stats.cacheRead || stats.cacheWrite) {
-        const parts = [];
-        if (stats.cacheRead) parts.push(fmtTokens(stats.cacheRead) + ' cached');
-        if (stats.cacheWrite) parts.push(fmtTokens(stats.cacheWrite) + ' new');
-        tokenText += ' (' + parts.join(', ') + ')';
-      }
-      tokenText += ' → ' + fmtTokens(stats.completionTokens);
-      header.appendChild(el('span', {className: 'span-tokens'}, tokenText));
-    }
+  let usage = null;
+  if (kind === 'LLM') usage = llmTokenCounts(attrs);
+  else if (isAgent && span.children?.length) usage = aggregateLlmStats(span.children);
+  if (usage && (usage.promptTokens || usage.completionTokens)) {
+    const tokenText = fmtPromptTokens(usage) + ' → ' + fmtTokens(usage.completionTokens);
+    header.appendChild(el('span', {className: 'span-tokens'}, tokenText));
   }
 
   header.appendChild(el('span', {className: 'span-duration'}, fmtDuration(span.start_time, span.end_time)));
   row.appendChild(header);
 
-  const detail = extractDetail(attrs, span.name, effectiveStatus);
+  const detail = extractDetail(attrs, span.name, effectiveStatus, isFinalChat);
   if (detail) {
     const detailDiv = el('div', {className: 'span-detail'});
     detailDiv.appendChild(detail);
@@ -1220,39 +1205,60 @@ function renderGenericErrorDetail(attrs, statusCode) {
   return output ? renderErrorDetail(output, attrs) : null;
 }
 
-function extractDetail(attrs, spanName, statusCode) {
-  const kind = getSpanKind(attrs);
+function llmOutputParts(attrs) {
+  const output = getVal(attrs['gen_ai.output.messages']);
+  if (typeof output === 'string') {
+    try {
+      const messages = JSON.parse(output);
+      if (Array.isArray(messages)) {
+        return messages.flatMap(message => Array.isArray(message?.parts) ? message.parts : []);
+      }
+    } catch (e) {}
+  }
 
-  if (kind === 'LLM' || (!kind && spanName.endsWith('ChatModel'))) {
+  const parts = [];
+  for (let i = 0; ; i++) {
+    const prefix = 'llm.output_messages.0.message.contents.' + i + '.message_content.';
+    const type = getVal(attrs[prefix + 'type']);
+    if (type == null) break;
+    parts.push({type, content: getVal(attrs[prefix + 'text'])});
+  }
+  for (let i = 0; ; i++) {
+    const prefix = 'llm.output_messages.0.message.tool_calls.' + i + '.tool_call.function.';
+    const name = getVal(attrs[prefix + 'name']);
+    if (name == null) break;
+    parts.push({type: 'tool_call', name, arguments: getVal(attrs[prefix + 'arguments'])});
+  }
+  return parts;
+}
+
+function renderFinalAnswerContent(value) {
+  let content = String(value);
+  try { content = JSON.stringify(JSON.parse(content), null, 2); } catch (e) {}
+  return lazyDetails('content (' + content.length + ' chars)',
+    () => el('pre', {className: 'detail-tool-io', textContent: content}), true);
+}
+
+function extractDetail(attrs, spanName, statusCode, isFinalChat) {
+  const kind = getSpanKind(attrs, spanName);
+  if (kind === 'LLM') {
     const frag = document.createDocumentFragment();
-
-    let i = 0;
-    while (true) {
-      const ctype = getVal(attrs['llm.output_messages.0.message.contents.' + i + '.message_content.type']);
-      if (ctype == null) break;
-      if (ctype === 'reasoning') {
-        const text = getVal(attrs['llm.output_messages.0.message.contents.' + i + '.message_content.text']);
-        if (text) {
+    const toolCalls = [];
+    for (const part of llmOutputParts(attrs)) {
+      if (!part) continue;
+      const text = part.content;
+      if (part.type === 'tool_call' && part.name) {
+        const args = part.arguments ?? '';
+        toolCalls.push({name: part.name, args: typeof args === 'string' ? args : JSON.stringify(args)});
+      } else if (typeof text === 'string' && text) {
+        if (part.type === 'thinking' || part.type === 'reasoning') {
           frag.appendChild(lazyDetails('reasoning (' + text.length + ' chars)',
             () => el('div', {className: 'detail-reasoning', textContent: text}), true));
-        }
-      } else if (ctype === 'text') {
-        const text = getVal(attrs['llm.output_messages.0.message.contents.' + i + '.message_content.text']);
-        if (text) {
-          frag.appendChild(el('div', {className: 'detail-text', textContent: text}));
+        } else if (part.type === 'text') {
+          const renderText = () => el('div', {className: 'detail-text', textContent: text});
+          frag.appendChild(isFinalChat ? lazyDetails('raw response', renderText) : renderText());
         }
       }
-      i++;
-    }
-
-    const toolCalls = [];
-    i = 0;
-    while (true) {
-      const name = getVal(attrs['llm.output_messages.0.message.tool_calls.' + i + '.tool_call.function.name']);
-      if (name == null) break;
-      const args = getVal(attrs['llm.output_messages.0.message.tool_calls.' + i + '.tool_call.function.arguments']) || '';
-      toolCalls.push({name, args});
-      i++;
     }
     if (toolCalls.length > 0) {
       const label = toolCalls.map(tc => tc.name).join(', ');
@@ -1289,21 +1295,13 @@ function extractDetail(attrs, spanName, statusCode) {
   if (kind === 'TOOL' && spanName === 'final_answer') {
     const inputVal = getVal(attrs['input.value']);
     if (inputVal == null) return renderGenericErrorDetail(attrs, statusCode);
-    let content;
+    let response = inputVal;
     try {
       const parsed = JSON.parse(inputVal);
       const args = parsed.input || parsed;
-      if (typeof args.response === 'string') {
-        try { content = JSON.stringify(JSON.parse(args.response), null, 2); }
-        catch (e) { content = args.response; }
-      } else {
-        content = JSON.stringify(args, null, 2);
-      }
-    } catch (e) {
-      content = String(inputVal);
-    }
-    const contentDetail = lazyDetails('content (' + content.length + ' chars)',
-      () => el('pre', {className: 'detail-tool-io', textContent: content}), true);
+      response = typeof args.response === 'string' ? args.response : JSON.stringify(args);
+    } catch (e) {}
+    const contentDetail = renderFinalAnswerContent(response);
     if (statusCode !== 2) return contentDetail;
     const frag = document.createDocumentFragment();
     frag.appendChild(contentDetail);

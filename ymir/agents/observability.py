@@ -66,14 +66,14 @@ class AgentSpanProcessor(SpanProcessor):
             workflow = current_workflow.get()
             if workflow:
                 span.set_attribute("workflow.name", workflow)
-            agent = None
-            if span.name.endswith(("Agent", "Analyst")):
+            agent = (span.attributes or {}).get("gen_ai.agent.name")
+            if not agent and span.name.endswith(("Agent", "Analyst")):
                 agent = span.name
-            if not agent and parent_context:
-                parent = trace_api.get_current_span(parent_context)
-                if parent and parent.context.span_id:
+            if not agent:
+                parent_span_id = trace_api.get_current_span(parent_context).get_span_context().span_id
+                if parent_span_id:
                     with self._lock:
-                        agent = self._agent_by_span.get(parent.context.span_id)
+                        agent = self._agent_by_span.get(parent_span_id)
             if agent:
                 span.set_attribute("agent.name", agent)
                 with self._lock:

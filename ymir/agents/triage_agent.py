@@ -722,6 +722,7 @@ class TriageState(BaseModel):
     applicability_unpacked_sources: Path | None = Field(default=None)
     applicability_used_fallback: bool = Field(default=False)
     applicability_check_skipped: bool = Field(default=False)
+    applicability_skip_reason: str = Field(default="source preparation failed")
     rebase_waiting_for_siblings: bool = Field(
         default=False,
         description=(
@@ -1520,6 +1521,7 @@ async def run_workflow(
 
             try:
                 patch_files = []
+                failed_urls = []
                 for idx, url in enumerate(patch_urls):
                     try:
                         content = await run_tool(
@@ -1530,8 +1532,14 @@ async def run_workflow(
                         patch_name = f"{state.jira_issue}-{idx}.patch"
                         (local_clone / patch_name).write_text(content)
                         patch_files.append(str(local_clone / patch_name))
-                    except Exception:
-                        logger.warning(f"Could not fetch patch from {url}")
+                    except Exception as e:
+                        logger.warning(f"Could not fetch patch from {url}: {e}")
+                        failed_urls.append(url)
+                if failed_urls:
+                    # Judging applicability without a supplied fix could wrongly
+                    # conclude the CVE does not apply.
+                    state.applicability_skip_reason = "upstream fix patch could not be fetched"
+                    raise RuntimeError(f"Could not fetch complete patches: {', '.join(failed_urls)}")
 
                 applicability_tool_options: dict = {"working_directory": local_clone}
                 if mock_env:
@@ -1751,7 +1759,8 @@ async def run_workflow(
             )
             if state.applicability_check_skipped:
                 comment_text += (
-                    "\n\n_Note: CVE applicability check could not be performed (source preparation failed)._"
+                    "\n\n_Note: CVE applicability check could not be performed "
+                    f"({state.applicability_skip_reason})._"
                 )
             if state.hold_for_manual_branch_creation:
                 comment_text += "\n\n---\n" + tasks.manual_branch_creation_comment(

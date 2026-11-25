@@ -238,6 +238,8 @@ class TestGatewaySharedOptions:
             "get_github_compare",
             "get_github_patch",
             "get_github_patch_full",
+            "get_patch_from_url",
+            "get_patch_from_url_full",
         } <= registered_tool_names
         first_options = registered_tools[0].options
         assert first_options is not None

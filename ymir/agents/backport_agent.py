@@ -57,6 +57,7 @@ from ymir.agents.utils import (
     resolve_chat_model_override,
     run_subprocess,
     run_tool,
+    tool_error_detail,
     wrap_details,
 )
 from ymir.agents.ystream_inherit import (
@@ -983,11 +984,17 @@ async def run_workflow(
             )
             for idx, upstream_patch in enumerate(state.upstream_patches):
                 patch_name = f"{state.jira_issue}-{idx}.patch"
-                content = await run_tool(
-                    patch_fetch_tool_name(upstream_patch),
-                    available_tools=gateway_tools,
-                    patch_url=upstream_patch,
-                )
+                try:
+                    content = await run_tool(
+                        patch_fetch_tool_name(upstream_patch),
+                        available_tools=gateway_tools,
+                        patch_url=upstream_patch,
+                    )
+                except FrameworkError as e:
+                    raise RuntimeError(
+                        f"Could not fetch a complete patch from {upstream_patch}: "
+                        f"{tool_error_detail(e.message)}"
+                    ) from e
                 (state.local_clone / patch_name).write_text(content)
             return "run_backport_agent"
 

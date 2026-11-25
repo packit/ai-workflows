@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+from beeai_framework.tools import ToolError
 from flexmock import flexmock
 
 from ymir.agents import (
@@ -2033,3 +2034,95 @@ async def test_is_rebase_sibling_fails_when_own_details_unreadable(monkeypatch, 
     state = TriageState(jira_issue="RHEL-200")
     with pytest.raises(RuntimeError, match="RHEL-200"):
         await _is_rebase_sibling(state, [], user_triggered=user_triggered)
+
+
+@pytest.mark.asyncio
+async def test_unfetchable_fix_patch_skips_applicability_check(_mock_env_vars, monkeypatch, tmp_path):
+    """Applicability must not be judged without a supplied fix patch."""
+    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
+    patch_url = "https://gitlab.gnome.org/GNOME/json-glib/-/commit/abc123.patch"
+    output = TriageOutputSchema(
+        resolution=Resolution.BACKPORT,
+        data=BackportData(
+            package="json-glib",
+            jira_issue="RHEL-99999",
+            cve_id="CVE-2025-1234",
+            fix_version="rhel-10.3.z",
+            patch_urls=[patch_url],
+            justification="Apply upstream fix",
+        ),
+    )
+    eligibility = CVEEligibilityResult(
+        is_cve=True, eligibility=TriageEligibility.IMMEDIATELY, reason="Eligible"
+    )
+    fetched_urls = []
+
+    @asynccontextmanager
+    async def _mock_mcp_tools(*_args, **_kwargs):
+        yield []
+
+    async def _mock_run_tool(name, **kwargs):
+        if name == "check_cve_triage_eligibility":
+            return eligibility.model_dump()
+        if name == "verify_issue_author":
+            return True
+        if name == "get_internal_rhel_branches":
+            return []
+        if name == "get_jira_details":
+            return {"fields": {}}
+        if name == "get_patch_from_url_full":
+            fetched_urls.append(kwargs["patch_url"])
+            raise ToolError("Content fetched from the URL does not look like a patch")
+        raise AssertionError(f"Unexpected tool: {name}")
+
+    def _async_return(value):
+        async def _return(*_args, **_kwargs):
+            return value
+
+        return _return
+
+    @asynccontextmanager
+    async def _fake_redis(*_args, **_kwargs):
+        yield None
+
+    @asynccontextmanager
+    async def _fake_cluster_lock(*_args, **_kwargs):
+        yield True
+
+    triage_agent = flexmock()
+    triage_agent.should_receive("run").replace_with(
+        _async_return(flexmock(last_message=flexmock(text=output.model_dump_json())))
+    )
+    applicability_agent = flexmock()
+    applicability_agent.should_receive("run").never()
+    flexmock(t_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
+    monkeypatch.setattr(agent_tasks, "mcp_tools", _mock_mcp_tools)
+    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
+    flexmock(agent_tasks).should_receive("run_tool").replace_with(_async_return(""))
+    monkeypatch.setattr(t_agent, "get_mock_local_tool_env", lambda *_: None)
+    monkeypatch.setattr(t_agent, "get_agent_execution_config", dict)
+    monkeypatch.setattr(t_agent, "render_template", lambda *_: "output format")
+    monkeypatch.setattr(t_agent, "render_prompt", _async_return("triage prompt"))
+    monkeypatch.setattr(t_agent, "load_rhel_config", _async_return({}))
+    monkeypatch.setattr(t_agent, "determine_target_branch", _async_return(("rhel-10.3", None)))
+    monkeypatch.setattr(t_agent, "is_older_zstream", _async_return(False))
+    monkeypatch.setattr(
+        agent_tasks, "clone_and_prep_sources", _async_return((tmp_path, tmp_path, True, None))
+    )
+    monkeypatch.setattr(t_agent, "create_applicability_agent", lambda *_: applicability_agent)
+    monkeypatch.setattr(agent_tasks, "get_jira_issue_metadata", _async_return(([], "New")))
+    monkeypatch.setattr(t_agent, "queue_siblings_for_triage", _async_return(0))
+    monkeypatch.setenv("REDIS_URL", "redis://localhost")
+    monkeypatch.setattr(t_agent, "redis_client", _fake_redis)
+    monkeypatch.setattr(t_agent, "waiting_issue_lock", _fake_cluster_lock)
+
+    state = await run_workflow(
+        "RHEL-99999",
+        dry_run=True,
+        triage_agent_factory=lambda *_: triage_agent,
+    )
+
+    assert fetched_urls == [patch_url]
+    assert state.applicability_check_skipped is True
+    assert state.applicability_skip_reason == "upstream fix patch could not be fetched"
+    assert state.triage_result.resolution == Resolution.BACKPORT

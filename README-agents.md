@@ -494,13 +494,6 @@ Use commas to delimit multiple patch/commit URLs in `UPSTREAM_PATCHES`.
 
 ### Test Temporal triage
 
-Run the scripted parity tests against the local server.
-
-```bash
-TEMPORAL_TEST_ADDRESS=127.0.0.1:7233 uv run --extra test --extra temporal \
-  pytest ymir/agents/tests/integration/test_temporal_triage_analysis.py
-```
-
 The live-model E2E suite submits through Temporal triage ingress in dry-run mode
 using rootless Podman. The controller starts its own Temporal development
 server. Each case gets its own pod, Temporal task queue, worker, loopback MCP

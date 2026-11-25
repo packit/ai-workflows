@@ -30,7 +30,7 @@ from ymir.agents.triage_agent import PreparedApplicability, TriageRunContext, Tr
 from ymir.common.config import rhel_config_override
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import AssessedApplicabilityResult, CVEEligibilityResult, TriageOutputSchema
-from ymir.common.temporal_triage import triage_issue_workflow_id as triage_issue_workflow_id
+from ymir.common.temporal_triage import triage_issue_workflow_id
 from ymir.common.utils import mcp_tools
 from ymir.tools.privileged.jira import SetJiraFieldsToolInput
 from ymir.tools.unprivileged.commands import RunShellCommandTool
@@ -50,8 +50,6 @@ class TriageAnalysisRequest:
     triage_only_requested: bool = False
     follow_up_requested: bool = False
     config_override: dict[str, Any] | None = None
-    collect_jira_fields: bool = False
-    retry_operational_errors: bool = False
     defer_rebuild_check: bool = False
 
 
@@ -75,37 +73,23 @@ async def _gateway(jira_issue: str, override: dict[str, Any] | None):
 
 @activity.defn
 async def read_eligibility(
-    jira_issue: str, override: dict | None, retry_operational_errors: bool = False
+    jira_issue: str, override: dict | None, _retry_operational_errors: bool
 ) -> CVEEligibilityResult:
+    # Keep the third argument for already scheduled activities.
     async with _gateway(jira_issue, override) as tools:
         result = await triage.read_cve_eligibility(jira_issue, tools)
-    if retry_operational_errors and result.error and not triage.cve_eligibility_needs_input(result.error):
+    if result.error and not triage.cve_eligibility_needs_input(result.error):
         raise ApplicationError(result.error, type="TriageEligibilityUnavailable")
     return result
-
-
-async def _prepare_analysis(
-    state: TriageState, override: dict | None, collect_jira_fields: bool
-) -> tuple[TriageState, str, TriageRunContext]:
-    async with _gateway(state.jira_issue, override) as tools:
-        prompt, context = await triage.prepare_triage_analysis(
-            state, tools, publish_jira_fields=collect_jira_fields
-        )
-    return state, prompt, replace(context, rhel_config_override=override)
-
-
-@activity.defn
-async def prepare_analysis(
-    state: TriageState, override: dict | None
-) -> tuple[TriageState, str, TriageRunContext]:
-    return await _prepare_analysis(state, override, False)
 
 
 @activity.defn
 async def prepare_publication_analysis(
     state: TriageState, override: dict | None
 ) -> tuple[TriageState, str, TriageRunContext]:
-    return await _prepare_analysis(state, override, True)
+    async with _gateway(state.jira_issue, override) as tools:
+        prompt, context = await triage.prepare_triage_analysis(state, tools)
+    return state, prompt, replace(context, rhel_config_override=override)
 
 
 @activity.defn
@@ -174,37 +158,31 @@ async def _execute(fn, *args):
 class TriageAnalysisWorkflow:
     @workflow.run
     async def run(self, request: TriageAnalysisRequest) -> TriageAnalysisResult:
-        info = workflow.info()
-        owner_id = info.parent.workflow_id if info.parent else info.workflow_id
-        if owner_id != triage_issue_workflow_id(request.jira_issue):
+        parent = workflow.info().parent
+        if parent is None or parent.workflow_id != triage_issue_workflow_id(request.jira_issue):
             raise ApplicationError("Start analysis under the Jira issue Workflow ID", non_retryable=True)
 
         state = TriageState(jira_issue=request.jira_issue)
         triage_usage = None
         jira_fields = ()
         override = request.config_override
-        eligibility_args = [state.jira_issue, override]
-        if request.retry_operational_errors:
-            eligibility_args.append(True)
-        state.cve_eligibility_result = await _execute(read_eligibility, *eligibility_args)
+        state.cve_eligibility_result = await _execute(read_eligibility, state.jira_issue, override, True)
         step = triage.apply_cve_eligibility(state, request.force_cve_triage)
 
         if step == "run_triage_analysis":
-            prepare = prepare_publication_analysis if request.collect_jira_fields else prepare_analysis
-            state, prompt, context = await _execute(prepare, state, override)
+            state, prompt, context = await _execute(prepare_publication_analysis, state, override)
             options = {
                 "model_settings": cast(ModelSettings, request.model_settings),
                 "usage_limits": UsageLimits(request_limit=request.request_limit),
             }
             answer = await triage_model_agent.run(prompt, deps=context, **options)
             triage_usage = answer.usage
-            if request.collect_jira_fields:
-                jira_fields = tuple(
-                    SetJiraFieldsToolInput.model_validate(part.content)
-                    for message in answer.new_messages()
-                    for part in message.parts
-                    if isinstance(part, ToolReturnPart) and part.tool_name == "set_jira_fields"
-                )
+            jira_fields = tuple(
+                SetJiraFieldsToolInput.model_validate(part.content)
+                for message in answer.new_messages()
+                for part in message.parts
+                if isinstance(part, ToolReturnPart) and part.tool_name == "set_jira_fields"
+            )
             triage.apply_triage_output(state, answer.output)
             if getattr(answer.output.data, "fix_version", None):
                 state = await _execute(normalize_version, state, override)
@@ -244,7 +222,7 @@ class TriageAnalysisWorkflow:
                 triage.apply_rebuild_buildroot(state, await _execute(read_buildroot, state, override))
 
         follow_up = request.follow_up_requested and not (request.triage_only_requested or state.triage_only)
-        if request.collect_jira_fields and request.triage_only_requested:
+        if request.triage_only_requested:
             state.triage_only = True
         return TriageAnalysisResult(state, follow_up, triage_usage, jira_fields)
 
@@ -290,10 +268,11 @@ async def create_analysis_worker(
     task_queue: str,
     model: Model,
     *,
-    publication: bool = False,
     gateway_connection_attempts: int = 1,
     ingress: bool = False,
 ) -> Worker:
+    from ymir.agents.temporal_triage_publication import PUBLICATION_ACTIVITIES
+
     global triage_model_agent, applicability_agent
     async with mcp_tools(
         os.environ["MCP_GATEWAY_URL"], max_retries=gateway_connection_attempts
@@ -308,16 +287,15 @@ async def create_analysis_worker(
             for tool in gateway_tools
             if tool.name in APPLICABILITY_GATEWAY_TOOLS
         ]
-        if publication:
-            triage_tools.append(
-                Tool.from_schema(
-                    _propose_jira_fields,
-                    name="set_jira_fields",
-                    description="Propose values for empty Jira fields to apply after triage.",
-                    json_schema=SetJiraFieldsToolInput.model_json_schema(),
-                    sequential=True,
-                )
+        triage_tools.append(
+            Tool.from_schema(
+                _propose_jira_fields,
+                name="set_jira_fields",
+                description="Propose values for empty Jira fields to apply after triage.",
+                json_schema=SetJiraFieldsToolInput.model_json_schema(),
+                sequential=True,
             )
+        )
 
     def durability() -> TemporalDurability:
         return TemporalDurability(
@@ -330,7 +308,6 @@ async def create_analysis_worker(
     triage_model_agent = triage.create_triage_agent(
         [],
         model=model,
-        publish_jira_fields=publication,
         capabilities=[durability()],
         tools=[
             _durable_tool(RunShellCommandTool(), gateway=False),
@@ -354,19 +331,15 @@ async def create_analysis_worker(
     workflows = [TriageAnalysisWorkflow]
     activities = [
         read_eligibility,
-        prepare_analysis,
+        prepare_publication_analysis,
         normalize_version,
         read_rebase_author,
         resolve_target,
         prepare_applicability,
         cleanup_applicability,
         read_buildroot,
+        *PUBLICATION_ACTIVITIES,
     ]
-    if publication:
-        from ymir.agents.temporal_triage_publication import PUBLICATION_ACTIVITIES
-
-        activities.append(prepare_publication_analysis)
-        activities.extend(PUBLICATION_ACTIVITIES)
 
     if ingress:
         from ymir.agents.temporal_package_coordination import (

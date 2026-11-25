@@ -19,13 +19,13 @@ from ymir.agents.temporal_triage_analysis import (
     TriageAnalysisResult,
     TriageAnalysisWorkflow,
     _gateway,
-    triage_issue_workflow_id,
 )
 from ymir.agents.temporal_triage_provisioning import TriagePodActivities
 from ymir.agents.temporal_worker_pods import WorkerPod, run_in_worker_pod
 from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import POSTPONED_RESOLUTIONS, IssueStatus, Resolution, Task
+from ymir.common.temporal_triage import triage_issue_workflow_id
 from ymir.common.utils import run_tool
 from ymir.common.version_utils import detect_modular_issue
 from ymir.tools.privileged.jira import SetJiraFieldsToolInput
@@ -459,7 +459,6 @@ async def _run_request(
         TriageAnalysisWorkflow.run,
         replace(
             analysis,
-            collect_jira_fields=True,
             defer_rebuild_check=request.coordinate
             and not inputs.dry_run
             and not analysis.triage_only_requested

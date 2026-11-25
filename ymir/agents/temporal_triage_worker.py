@@ -34,9 +34,7 @@ async def start_triage_worker(workspace: Path, client: Client, task_queue: str):
     resolve_chat_model_override("triage")
     async with (
         configured_model() as model,
-        await create_analysis_worker(
-            client, task_queue, model, publication=True, gateway_connection_attempts=30
-        ),
+        await create_analysis_worker(client, task_queue, model, gateway_connection_attempts=30),
     ):
         yield
 

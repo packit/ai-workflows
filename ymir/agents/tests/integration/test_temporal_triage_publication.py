@@ -197,7 +197,7 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
                 while not server.started:
                     await asyncio.sleep(0.01)
             async with await create_analysis_worker(
-                client, queue, FunctionModel(model_response), publication=True, ingress=True
+                client, queue, FunctionModel(model_response), ingress=True
             ):
                 assert await submit(first, wait=False) == "accepted"
                 await asyncio.wait_for(model_started.wait(), timeout=15)

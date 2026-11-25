@@ -50,7 +50,6 @@ async def prepare_triage_intent(intent: TriageIntent) -> TriagePublicationReques
             request_limit=get_agent_execution_config()["max_iterations"],
             force_cve_triage=intent.force_cve_triage,
             config_override=intent.config_override,
-            retry_operational_errors=True,
             user_triggered=intent.user_triggered,
             triage_only_requested=intent.triage_only,
             follow_up_requested=not intent.triage_only and os.getenv("AUTO_CHAIN", "true").lower() == "true",

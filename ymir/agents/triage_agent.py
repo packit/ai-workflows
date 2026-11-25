@@ -614,8 +614,6 @@ async def render_prompt(
     cve_eligibility_result: CVEEligibilityResult | None = None,
     jira_summary: str | None = None,
     downstream_component: str | None = None,
-    *,
-    publish_jira_fields: bool = True,
 ) -> str:
     older_zstream = bool(fix_version and await is_older_zstream(fix_version))
 
@@ -649,14 +647,7 @@ async def render_prompt(
                 updates["needs_internal_fix"] = True
                 updates["internal_target_branch"] = internal_branch
 
-    input_with_flag = TriagePromptContext.model_validate(
-        input.model_dump() | updates | {"publish_jira_fields": publish_jira_fields}
-    )
-    return render_template("triage/prompt.j2", input_with_flag)
-
-
-class TriagePromptContext(InputSchema):
-    publish_jira_fields: bool = True
+    return render_template("triage/prompt.j2", InputSchema.model_validate(input.model_dump() | updates))
 
 
 class TriageState(BaseModel):
@@ -886,7 +877,6 @@ def create_triage_agent(
     model=None,
     tools=None,
     capabilities=(),
-    publish_jira_fields=True,
 ) -> Agent[TriageRunContext, OutputSchema]:
     if tools is None:
         tools = [
@@ -927,15 +917,9 @@ def create_triage_agent(
             "For gitweb-hosted projects (URLs containing 'gitweb'), always use "
             "the 'a=patch' action (not 'a=commitdiff_plain') when constructing "
             "patch URLs. Example: ?p=project.git;a=patch;h=<commit_hash>",
-            *(
-                [
-                    "After completing your triage analysis, if your decision is backport "
-                    "or rebase, always set appropriate JIRA fields per the instructions "
-                    "using set_jira_fields tool."
-                ]
-                if publish_jira_fields
-                else []
-            ),
+            "After completing your triage analysis, if your decision is backport "
+            "or rebase, always set appropriate JIRA fields per the instructions "
+            "using set_jira_fields tool.",
             "Never use shallow clones (--depth) when cloning upstream repositories. "
             "Shallow clones hide merge-request branches and make follow-up commits "
             "invisible to git log searches.",
@@ -1181,9 +1165,7 @@ def apply_cve_eligibility(state: TriageState, force_cve_triage: bool) -> str:
     return "comment_in_jira"
 
 
-async def prepare_triage_analysis(
-    state: TriageState, gateway_tools, *, publish_jira_fields: bool = True
-) -> tuple[str, TriageRunContext]:
+async def prepare_triage_analysis(state: TriageState, gateway_tools) -> tuple[str, TriageRunContext]:
     try:
         jira_details = await run_tool(
             "get_jira_details",
@@ -1217,7 +1199,6 @@ async def prepare_triage_analysis(
         cve_eligibility_result=state.cve_eligibility_result,
         jira_summary=state.jira_summary,
         downstream_component=state.downstream_component,
-        **({"publish_jira_fields": False} if not publish_jira_fields else {}),
     )
     if jira_details:
         prompt += f"\n\nJira issue data (JSON):\n{json.dumps(jira_details, ensure_ascii=False)}"

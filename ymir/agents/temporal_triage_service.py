@@ -23,7 +23,7 @@ async def main() -> None:
         resolve_chat_model_override("triage")
         async with configured_model() as model:
             worker = await create_analysis_worker(
-                client, queue, model, publication=True, ingress=True, gateway_connection_attempts=30
+                client, queue, model, ingress=True, gateway_connection_attempts=30
             )
             await worker.run()
         return

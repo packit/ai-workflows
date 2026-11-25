@@ -1,8 +1,10 @@
 import asyncio
 import os
 import shutil
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+import aiohttp
 import gitlab
 import pytest
 import requests
@@ -13,6 +15,7 @@ from ogr.abstract import PRStatus
 from ogr.services.gitlab import GitlabService
 from ogr.services.gitlab.project import GitlabProject
 
+from ymir.common.constants import GITLAB_MR_PAGE_SIZE
 from ymir.common.models import OpenMergeRequestResult
 from ymir.tools.privileged import reviewer_resolver as _resolver
 from ymir.tools.privileged.gitlab import (
@@ -29,6 +32,7 @@ from ymir.tools.privileged.gitlab import (
     GetMergeRequestDiscussionsTool,
     GetPipelineJobTraceTool,
     GetRemoteBranchHeadTool,
+    ListProjectMergeRequestsTool,
     OpenMergeRequestTool,
     PushToRemoteRepositoryTool,
     RemoveMergeRequestLabelsTool,
@@ -39,6 +43,7 @@ from ymir.tools.privileged.gitlab import (
     SetMergeRequestReviewersTool,
     UpdateMergeRequestCommentTool,
     _get_git_auth_args,
+    _parse_merge_request_url,
     _remove_existing_clone_path,
     _wait_for_fork_ready,
 )
@@ -67,6 +72,36 @@ def _fork_project_mock(
         service=service,
         get_git_urls=lambda: {"git": clone_url},
     )
+
+
+@pytest.mark.parametrize(
+    ("merge_request_url", "expected"),
+    [
+        (
+            "https://gitlab.com/redhat/rhel/tests/shared/-/merge_requests/42",
+            ("redhat/rhel/tests/shared", 42),
+        ),
+        (
+            "https://gitlab.com/redhat/group/subgroup/nested/project/-/merge_requests/123/diffs",
+            ("redhat/group/subgroup/nested/project", 123),
+        ),
+    ],
+)
+def test_parse_merge_request_url_accepts_nested_project_paths(merge_request_url, expected):
+    assert _parse_merge_request_url(merge_request_url) == expected
+
+
+@pytest.mark.parametrize(
+    "merge_request_url",
+    [
+        "https://github.com/redhat/group/project/-/merge_requests/1",
+        "https://gitlab.com/redhat/-/merge_requests/1",
+        "https://gitlab.com/redhat/group/project/-/merge_requests/not-an-iid",
+    ],
+)
+def test_parse_merge_request_url_rejects_invalid_urls(merge_request_url):
+    with pytest.raises(ToolError, match="Could not parse merge request URL"):
+        _parse_merge_request_url(merge_request_url)
 
 
 @pytest.mark.parametrize(
@@ -534,6 +569,40 @@ def test_get_git_auth_args_handles_fork_namespace(monkeypatch, url, fork_namespa
         assert args[1].startswith("http.extraheader=Authorization: Basic ")
     else:
         assert args == []
+
+
+@pytest.mark.asyncio
+async def test_list_project_merge_requests_requests_requested_page():
+    captured_requests = []
+
+    @asynccontextmanager
+    async def fake_get(url, **kwargs):
+        captured_requests.append((url, kwargs["params"]))
+
+        async def json_response():
+            return [
+                {
+                    "iid": 25,
+                    "web_url": "https://gitlab.com/redhat/rhel/tests/shared/-/merge_requests/25",
+                    "title": "shared: [RHEL-25] ymir reproducer test",
+                    "state": "opened",
+                }
+            ]
+
+        yield flexmock(json=json_response, raise_for_status=lambda: None, status=200)
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(fake_get)
+
+    output = await ListProjectMergeRequestsTool().run(
+        input={"project": "redhat/rhel/tests/shared", "page": 2}
+    )
+
+    assert len(captured_requests) == 1
+    request_url, params = captured_requests[0]
+    assert request_url == "https://gitlab.com/api/v4/projects/redhat%2Frhel%2Ftests%2Fshared/merge_requests"
+    assert params["page"] == "2"
+    assert params["per_page"] == str(GITLAB_MR_PAGE_SIZE)
+    assert output.result[0]["iid"] == 25
 
 
 @pytest.mark.asyncio

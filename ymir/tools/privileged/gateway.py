@@ -8,7 +8,6 @@ from beeai_framework.adapters.mcp.serve.server import (
     MCPSettings,
 )
 
-from ymir.common.mock_repos import apply_zstream_override_from_env
 from ymir.tools.gateway_utils import get_log_detective_mcp, setup_logging
 from ymir.tools.privileged.copr import (
     BuildPackageTool,
@@ -122,7 +121,8 @@ def _select_build_tools(tool_options: dict) -> list:
     Both backends register ``build_package`` and ``download_artifacts`` so
     non-modular builds stay backend-agnostic. Selected by BUILD_BACKEND
     (default: copr). Konflux cannot enable a module stream, so that backend
-    also registers Copr as ``build_package_copr`` for modular packages.
+    also registers Copr as ``build_package_copr`` for modular packages; the
+    agents also use it for RHEL majors listed in COPR_RHEL_MAJORS.
     """
     backend = os.getenv("BUILD_BACKEND", "copr").strip().lower()
     if backend == "konflux":
@@ -163,7 +163,6 @@ async def _async_main():
     config = MCPServerConfig(**config_kwargs)
 
     setup_logging()
-    apply_zstream_override_from_env()
     tool_options: dict = {"working_directory": None}
     mcp = MCPServer(config=config)
 

@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 GITLAB_API_URL = "https://gitlab.com/api/v4"
 GITLAB_GROUPS = ["redhat/rhel/rpms", "redhat/centos-stream/rpms"]
-DEFAULT_BOT_AUTHORS = "jotnar-bot,redhat-ymir-agent"
+DEFAULT_BOT_AUTHORS = "jotnar-bot,rhel-se-jotnar-admin,redhat-ymir-agent"
 PER_PAGE = 100
 
 JIRA_CLOSED_STATUS = "Closed"

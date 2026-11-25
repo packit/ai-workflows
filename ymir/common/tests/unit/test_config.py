@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -6,6 +8,7 @@ from mcp.server.lowlevel.server import request_ctx
 from mcp.types import RequestParams
 
 from ymir.common.config import load_rhel_config, rhel_config_override
+from ymir.common.version_utils import is_older_zstream
 
 # Fixed snapshot based on templates/rhel-config.json, rather than a changing runtime config.
 RHEL_CONFIG = {
@@ -27,6 +30,32 @@ RHEL_10_2_CONFIG = {
 }
 
 
+def test_load_rhel_config_without_mcp(monkeypatch, tmp_path):
+    config_path = tmp_path / "rhel-config.json"
+    config_path.write_text(json.dumps(RHEL_CONFIG))
+    monkeypatch.setenv("RHEL_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("ALLOW_RHEL_CONFIG_OVERRIDE", "true")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import asyncio, json, os, sys; "
+            "sys.modules['mcp'] = None; "
+            "from ymir.common.config import load_rhel_config; "
+            "from pathlib import Path; "
+            "expected = json.loads(Path(os.environ['RHEL_CONFIG_PATH']).read_text()); "
+            "assert asyncio.run(load_rhel_config()) == expected",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.mark.asyncio
 async def test_load_rhel_config_applies_agent_and_gateway_overrides(monkeypatch, tmp_path):
     config_path = tmp_path / "rhel-config.json"
@@ -35,16 +64,21 @@ async def test_load_rhel_config_applies_agent_and_gateway_overrides(monkeypatch,
 
     with rhel_config_override(RHEL_10_2_OVERRIDE):
         assert await load_rhel_config() == RHEL_10_2_CONFIG
+        assert not await is_older_zstream("rhel-10.1.z")
+        assert await is_older_zstream("rhel-10.0.z")
 
     # The gateway permission is deliberately independent of Jira mocking.
     monkeypatch.setenv("ALLOW_RHEL_CONFIG_OVERRIDE", "true")
     token = request_ctx.set(SimpleNamespace(meta=RequestParams.Meta(rhel_config_override=RHEL_10_2_OVERRIDE)))
     try:
         assert await load_rhel_config() == RHEL_10_2_CONFIG
+        assert not await is_older_zstream("rhel-10.1.z")
+        assert await is_older_zstream("rhel-10.0.z")
     finally:
         request_ctx.reset(token)
 
     assert await load_rhel_config() == RHEL_CONFIG
+    assert await is_older_zstream("rhel-10.1.z")
 
 
 @pytest.mark.asyncio

@@ -34,6 +34,7 @@ from ymir.common.models import (
     BuildOutputSchema,
     BuildResult,
 )
+from ymir.common.version_utils import parse_branch_name
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.filesystem import GetCWDTool
 from ymir.tools.unprivileged.text import SearchTextTool, ViewTool
@@ -51,25 +52,38 @@ def is_konflux_backend() -> bool:
     return build_backend() == "konflux"
 
 
-def use_konflux_backend(*, modular: bool = False) -> bool:
+def copr_rhel_majors() -> set[str]:
+    """RHEL major versions that always build with Copr (COPR_RHEL_MAJORS, default "8")."""
+    raw = os.getenv("COPR_RHEL_MAJORS", "8")
+    return {major.strip() for major in raw.split(",") if major.strip()}
+
+
+def _copr_only_branch(dist_git_branch: str | None) -> bool:
+    if not dist_git_branch or not (parsed := parse_branch_name(dist_git_branch)):
+        return False
+    return parsed[0] in copr_rhel_majors()
+
+
+def use_konflux_backend(*, modular: bool = False, dist_git_branch: str | None = None) -> bool:
     """Whether this build should use Konflux.
 
     Modular packages stay on Copr until Konflux can enable a module stream.
-    There is no environment override: the choice is hardcoded.
+    Branches whose RHEL major is listed in COPR_RHEL_MAJORS also stay on Copr.
     """
-    if modular:
+    if modular or _copr_only_branch(dist_git_branch):
         return False
     return is_konflux_backend()
 
 
-def build_tool_name(*, modular: bool = False) -> str:
+def build_tool_name(*, modular: bool = False, dist_git_branch: str | None = None) -> str:
     """Gateway tool that submits this build.
 
-    Non-modular builds use ``build_package`` (Copr or Konflux, whichever
-    BUILD_BACKEND selected). Modular builds use the dedicated Copr tool when
-    the default backend is Konflux.
+    Builds use ``build_package`` (Copr or Konflux, whichever BUILD_BACKEND
+    selected). Modular builds and branches whose RHEL major is listed in
+    COPR_RHEL_MAJORS use the dedicated Copr tool when the default backend is
+    Konflux.
     """
-    if modular and is_konflux_backend():
+    if is_konflux_backend() and not use_konflux_backend(modular=modular, dist_git_branch=dist_git_branch):
         return MODULAR_COPR_BUILD_TOOL
     return "build_package"
 
@@ -94,7 +108,8 @@ async def run_build(
     Callers retain ownership of timeout policy and workflow-level retries.
     A missing advertised build tool is reported as an infrastructure failure.
     ``tool_name`` is ``build_package`` for the configured backend, or the
-    dedicated Copr tool when a modular package must not go to Konflux.
+    dedicated Copr tool when a build must not go to Konflux (a modular
+    package, or a RHEL major listed in COPR_RHEL_MAJORS).
     """
     copr_override = tool_name == MODULAR_COPR_BUILD_TOOL
     workflow = Workflow(BuildState, name="BuildWorkflow")
@@ -102,8 +117,9 @@ async def run_build(
     async def execute_build(state: BuildState) -> str:
         if copr_override:
             logger.info(
-                "Building %s with Copr; Konflux does not support modular builds",
+                "Building %s (%s) with Copr instead of Konflux",
                 state.build_input.jira_issue,
+                state.build_input.dist_git_branch,
             )
         try:
             result = await run_tool(
@@ -139,7 +155,7 @@ async def run_build(
 
         # Copr advertises gzipped build logs; Konflux returns authenticated
         # Kubearchive pod-log URLs (no .log.gz suffix). Diagnose whenever the
-        # backend handed us any log URLs to inspect. A modular Copr build
+        # backend handed us any log URLs to inspect. A Copr override build
         # keeps the Copr rule even when BUILD_BACKEND is konflux.
         if is_konflux_backend() and not copr_override:
             has_logs = bool(result.artifacts_urls)

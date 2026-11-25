@@ -144,13 +144,14 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
             principal = await init_kerberos_ticket()
         copr_user = principal.split("@", maxsplit=1)[0]
         with tool_error_context("Failed to read SRPM header", srpm_path=str(srpm_path)):
-            exclusive_arches = await self.get_exclusive_arches(srpm_path)
-        # build for the fastest supported arch (see COPR_ARCH_PREFERENCE);
-        # default to x86_64 when the package has no ExclusiveArch
-        build_arch = next(
-            (arch for arch in COPR_ARCH_PREFERENCE if arch in exclusive_arches),
-            "x86_64",
-        )
+            allowed_arches = await self.get_allowed_arches(srpm_path)
+        # build for the fastest supported arch (see COPR_ARCH_PREFERENCE)
+        build_arch = next((arch for arch in COPR_ARCH_PREFERENCE if arch in allowed_arches), None)
+        if build_arch is None:
+            raise ToolErrorWithContext(
+                "No Copr build architecture is usable for this SRPM",
+                additional_context=make_additional_context(srpm_path=str(srpm_path)),
+            )
         rhel_config = await load_rhel_config()
         with tool_error_context(
             "Failed to deduce Copr chroot",
@@ -368,7 +369,9 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
         )
 
     @staticmethod
-    async def get_exclusive_arches(srpm_path: Path) -> set[str]:
+    async def get_allowed_arches(srpm_path: Path) -> set[str]:
+        """Copr arches the SRPM allows: not in ExcludeArch and, if set, in ExclusiveArch."""
+
         def read_header():
             ts = rpm.TransactionSet()
             ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES | rpm._RPMVSF_NODIGESTS)
@@ -376,9 +379,10 @@ class BuildPackageTool(Tool[BuildPackageToolInput, ToolRunOptions, BuildPackageT
                 return ts.hdrFromFdno(f.fileno())
 
         header = await asyncio.to_thread(read_header)
-        exclude_arches = set(header[rpm.RPMTAG_EXCLUDEARCH])
-        exclusive_arches = set(header[rpm.RPMTAG_EXCLUSIVEARCH])
-        return (COPR_ARCHES - exclude_arches) & exclusive_arches
+        exclude_arches = set(header[rpm.RPMTAG_EXCLUDEARCH] or ())
+        exclusive_arches = set(header[rpm.RPMTAG_EXCLUSIVEARCH] or ())
+        allowed = COPR_ARCHES - exclude_arches
+        return allowed & exclusive_arches if exclusive_arches else allowed
 
     @staticmethod
     def branch_to_buildroot(dist_git_branch: str, rhel_config: dict) -> tuple[str, bool, str]:
@@ -471,15 +475,16 @@ class DownloadArtifactsTool(Tool[DownloadArtifactsToolInput, ToolRunOptions, Dow
 class ModularCoprBuildTool(BuildPackageTool):
     """Copr build under a distinct name so it can be registered beside Konflux.
 
-    Konflux cannot enable a module stream. Modular packages keep using this
-    tool when BUILD_BACKEND=konflux; both implementations cannot share
-    ``build_package``.
+    Konflux cannot enable a module stream. Modular packages, and RHEL majors
+    listed in the agents' COPR_RHEL_MAJORS, keep using this tool when
+    BUILD_BACKEND=konflux; both implementations cannot share ``build_package``.
     """
 
     name = MODULAR_COPR_BUILD_TOOL
     description = """
     Builds the specified SRPM in Copr.
-    Modular packages use this while Konflux cannot enable a module stream.
+    Used for builds that must not go to Konflux (modular packages and
+    configured RHEL major versions).
     """
 
 
@@ -489,6 +494,7 @@ class ModularCoprDownloadTool(DownloadArtifactsTool):
     name = MODULAR_COPR_DOWNLOAD_TOOL
     description = """
     Downloads Copr build artifacts to a temporary location.
-    Used for modular package builds when the default backend is Konflux.
+    Used for Copr builds (modular packages and configured RHEL major versions)
+    when the default backend is Konflux.
     Any gzipped log files will be automatically decompressed.
     """

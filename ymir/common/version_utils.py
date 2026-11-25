@@ -6,15 +6,10 @@ strings in various formats (e.g., rhel-9.8, rhel-9.7.z, rhel-9.0.0.z).
 """
 
 import asyncio
-import contextvars
 import re
 import subprocess
 
 _DIST_TAG_RE = re.compile(r"\.el(\d+)(_\d+)?")
-
-current_z_streams_override: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
-    "current_z_streams_override", default=None
-)
 
 
 def compare_versions(version1: str, version2: str) -> int:
@@ -191,6 +186,41 @@ def parse_branch_name(branch: str) -> tuple[str, str | None] | None:
     return major, None
 
 
+_MODULAR_BRANCH_RE = re.compile(r"^stream-(.+)-rhel-\d+\.\d+(?:\.0)?$", re.IGNORECASE)
+
+
+def module_stream_matches_branch(module_stream: str, branch: str) -> bool:
+    """Whether ``module:stream`` is the one encoded in a modular dist-git branch."""
+    module, sep, stream = module_stream.partition(":")
+    if not (sep and module and stream) or not (match := _MODULAR_BRANCH_RE.match(branch)):
+        return False
+    return match.group(1).lower() == f"{module}-{stream}".lower()
+
+
+def parse_module_stream_from_branch(branch: str) -> str | None:
+    """
+    Best-effort guess of the ``module:stream`` encoded in a modular branch name.
+
+    Branches are named ``stream-<module>-<stream>-rhel-<major>.<minor>[.0]``.
+    Both module names and streams may contain hyphens, so the split is
+    ambiguous; this assumes the stream is the last hyphen-separated segment:
+      - stream-squid-4-rhel-8.10.0          -> "squid:4"
+      - stream-go-toolset-rhel8-rhel-8.10.0 -> "go-toolset:rhel8"
+      - stream-rust-toolset-rhel-next-rhel-8.10.0 -> "rust-toolset-rhel:next"
+        (wrong: the real stream is "rust-toolset:rhel-next")
+
+    Prefer an exact ``module:stream`` from another source when available.
+    Returns None for non-modular branches.
+    """
+    match = _MODULAR_BRANCH_RE.match(branch)
+    if not match:
+        return None
+    module, sep, stream = match.group(1).rpartition("-")
+    if not (sep and module and stream):
+        return None
+    return f"{module}:{stream}"
+
+
 def construct_internal_branch_name(major_version: str, minor_version: str) -> str:
     """Construct internal RHEL branch name (e.g. rhel-9.8.0 or rhel-10.3)."""
     branch = f"rhel-{major_version}.{minor_version}"
@@ -305,8 +335,6 @@ async def is_older_zstream(
     Returns:
         True if the version targets an older z-stream, False otherwise.
     """
-    if current_z_streams is None:
-        current_z_streams = current_z_streams_override.get()
     if current_z_streams is None:
         from ymir.common.config import load_rhel_config
 

@@ -1492,11 +1492,14 @@ async def run_workflow(
                     build_input=build_input,
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
-                    tool_name=build_tool_name(modular=is_modular_issue),
+                    tool_name=build_tool_name(
+                        modular=is_modular_issue, dist_git_branch=state.dist_git_branch
+                    ),
                 )
 
-            # Modular packages stay on Copr: Konflux cannot enable a module stream.
-            if use_konflux_backend(modular=is_modular_issue):
+            # Modular packages stay on Copr (Konflux cannot enable a module
+            # stream), as do RHEL majors listed in COPR_RHEL_MAJORS.
+            if use_konflux_backend(modular=is_modular_issue, dist_git_branch=state.dist_git_branch):
                 async with tasks.scratch_build_branch(
                     state.local_clone,
                     state.fork_url,
@@ -1880,8 +1883,9 @@ async def run_workflow(
 
             The single build step for both backends: the scratch branch is pushed
             first so Konflux can build the ref, while Copr builds the generated
-            SRPM. Modular issues always use Copr, even when BUILD_BACKEND is
-            konflux, and pass module_stream so Copr enables it in the buildroot.
+            SRPM. Modular issues and RHEL majors listed in COPR_RHEL_MAJORS
+            always use Copr, even when BUILD_BACKEND is konflux; modular issues
+            pass module_stream so Copr enables it in the buildroot.
             The MR is opened only after a green build; a failed build loops back
             to fix_build_error (cherry-pick) or restarts the backport (git am).
             """
@@ -1930,11 +1934,14 @@ async def run_workflow(
                     build_input=build_input,
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
-                    tool_name=build_tool_name(modular=is_modular_issue),
+                    tool_name=build_tool_name(
+                        modular=is_modular_issue, dist_git_branch=state.dist_git_branch
+                    ),
                 )
 
-            # Modular packages stay on Copr: Konflux cannot enable a module stream.
-            if use_konflux_backend(modular=is_modular_issue):
+            # Modular packages stay on Copr (Konflux cannot enable a module
+            # stream), as do RHEL majors listed in COPR_RHEL_MAJORS.
+            if use_konflux_backend(modular=is_modular_issue, dist_git_branch=state.dist_git_branch):
                 try:
                     async with tasks.scratch_build_branch(
                         state.local_clone, state.fork_url, state.update_branch, revision, gateway_tools

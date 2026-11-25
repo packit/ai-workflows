@@ -29,6 +29,10 @@ RUN dnf -y install \
       git \
       gcc \
       libpq-devel \
+      autoconf \
+      autoconf-archive \
+      automake \
+      libtool \
       ${EXTRA_PACKAGES} \
     && dnf clean all
 

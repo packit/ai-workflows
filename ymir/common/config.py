@@ -6,6 +6,7 @@ RHEL configuration across agents and MCP gateway.
 """
 
 import json
+import logging
 import os
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
@@ -15,6 +16,15 @@ from pathlib import Path
 from typing import Any
 
 import aiofiles
+
+# Only the MCP gateway needs this dependency. Other users of ymir.common,
+# including the API image, must be able to import the config module without it.
+try:
+    from mcp.server.lowlevel.server import request_ctx
+except ImportError:
+    request_ctx = None
+
+logger = logging.getLogger(__name__)
 
 # Actual config used inside the agent process
 current_rhel_config_override: ContextVar[dict[str, Any] | None] = ContextVar(
@@ -56,9 +66,12 @@ def _mcp_rhel_config_override() -> dict[str, Any] | None:
     if os.getenv("ALLOW_RHEL_CONFIG_OVERRIDE", "").lower() != "true":
         return None
 
-    # Only the MCP gateway needs this dependency. Other users of ymir.common,
-    # including the API image, must be able to import the config module without it.
-    from mcp.server.lowlevel.server import request_ctx
+    if request_ctx is None:
+        logger.warning(
+            "MCP rhel-config overrides are enabled, but MCP could not be imported; "
+            "no override from MCP request metadata will be applied."
+        )
+        return None
 
     try:
         meta = request_ctx.get().meta
@@ -83,7 +96,8 @@ async def load_rhel_config() -> dict[str, Any]:
 
     The file path is read from the ``RHEL_CONFIG_PATH`` environment variable,
     falling back to ``rhel-config.json`` in the current working directory.
-    Optional fixture overrides are merged recursively: dictionaries retain
+    A task-local override takes precedence over permitted MCP metadata.
+    Only the selected override is merged with the file: dictionaries retain
     unspecified entries, while lists and scalar values are replaced.
 
     Returns:
@@ -91,7 +105,8 @@ async def load_rhel_config() -> dict[str, Any]:
 
     Raises:
         FileNotFoundError: If the config file does not exist.
-        ValueError: If the config file contains invalid JSON.
+        ValueError: If the config file contains invalid JSON, or the selected
+            MCP metadata override is not a JSON object.
     """
     config_file = os.environ.get("RHEL_CONFIG_PATH", "rhel-config.json")
 

@@ -29,7 +29,7 @@ from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import BaseModel, Field
 
 from ymir.common.base_utils import run_subprocess
-from ymir.common.constants import AIOHTTP_TIMEOUT
+from ymir.common.constants import AIOHTTP_TIMEOUT, GITLAB_MR_PAGE_SIZE
 from ymir.common.gitlab_api import gitlab_headers, is_private_gitlab, search_gitlab_project_mrs
 from ymir.common.http_utils import aiohttp_get_with_retries
 from ymir.common.models import (
@@ -288,6 +288,18 @@ def _get_git_auth_args(repository_url: str) -> list[str]:
     return []
 
 
+def _parse_merge_request_url(merge_request_url: str) -> tuple[str, int]:
+    """Extract the full GitLab project path and MR IID from a web URL."""
+    parsed_url = urlparse(merge_request_url)
+    match = re.fullmatch(
+        r"/(?P<project_path>[^/]+(?:/[^/]+)+)/-/merge_requests/(?P<mr_id>\d+)(?:/.*)?",
+        parsed_url.path,
+    )
+    if parsed_url.scheme != "https" or parsed_url.hostname != "gitlab.com" or not match:
+        raise ToolError(f"Could not parse merge request URL: {merge_request_url}")
+    return match.group("project_path"), int(match.group("mr_id"))
+
+
 async def _get_merge_request_from_url(merge_request_url: str) -> GitlabPullRequest:
     """
     Helper function to parse a merge request URL and return the MR object.
@@ -295,20 +307,8 @@ async def _get_merge_request_from_url(merge_request_url: str) -> GitlabPullReque
     Returns:
         The GitLab merge request (PullRequest) object
     """
-    # Extract project and MR ID from the URL
-    # URL format examples:
-    # `https://gitlab.com/namespace/project/-/merge_requests/123`
-    # `https://gitlab.com/redhat/rhel/rpms/package/-/merge_requests/123`
-    if not (
-        match := re.search(
-            r"gitlab\.com/([^/]+(?:/[^/]+){1,3})/-/merge_requests/(\d+)",
-            merge_request_url,
-        )
-    ):
-        raise ToolError(f"Could not parse merge request URL: {merge_request_url}")
-
-    project_path = match.group(1)
-    mr_id = int(match.group(2))
+    # GitLab project paths may contain arbitrarily nested subgroups.
+    project_path, mr_id = _parse_merge_request_url(merge_request_url)
 
     project_url = f"https://gitlab.com/{project_path}"
     logger.info(f"Connecting to GitLab API for merge request: {project_url}")
@@ -2017,6 +2017,7 @@ class ListProjectMergeRequestsToolInput(BaseModel):
         description="Order by field: 'created_at' or 'updated_at'",
     )
     sort: str = Field(default="asc", description="Sort direction: 'asc' or 'desc'")
+    page: int = Field(default=1, ge=1, description="One-based result page; increase to fetch later pages")
 
 
 class ListProjectMergeRequestsTool(
@@ -2031,8 +2032,8 @@ class ListProjectMergeRequestsTool(
     description = """
     Lists merge requests for a GitLab project with filtering by state,
     target branch, labels, and author. Returns MRs sorted by creation date
-    (ascending by default, i.e. oldest first).
-    Returns at most 100 MRs (single page, no pagination).
+    (ascending by default, i.e. oldest first). Returns up to 100 MRs per page;
+    increase the page input to fetch subsequent results.
     """
     input_schema = ListProjectMergeRequestsToolInput
 
@@ -2054,7 +2055,8 @@ class ListProjectMergeRequestsTool(
         params: dict[str, str] = {
             "order_by": tool_input.order_by,
             "sort": tool_input.sort,
-            "per_page": "100",
+            "per_page": str(GITLAB_MR_PAGE_SIZE),
+            "page": str(tool_input.page),
         }
         if tool_input.state is not None:
             params["state"] = tool_input.state

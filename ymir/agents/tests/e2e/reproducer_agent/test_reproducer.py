@@ -11,12 +11,12 @@ import pytest
 import yaml
 from tabulate import tabulate
 
+from ymir.agents import reproducer_agent as reproducer_agent_module
 from ymir.agents.metrics_middleware import MetricsMiddleware
 from ymir.agents.observability import setup_observability
 from ymir.agents.reproducer_agent import ReproducerState, create_reproducer_agent, run_workflow
 from ymir.common.config import rhel_config_override
 from ymir.common.mock_repos import (
-    apply_zstream_override,
     cleanup_mock_gitconfig,
     load_all_fixture_configs,
     setup_mock_repos,
@@ -216,7 +216,6 @@ class ReproducerAgentTestCase:
         self.metrics: dict = None
         self.finished_state: ReproducerState | None = None
         self.error: BaseException | None = None
-        self.zstream_override: dict[str, str] | None = None
         self.verification_results: dict[str, VerificationResult] = {}
         # Used by e2e/conftest.py results.yaml reporting (optional skip note).
         self.skip_reason: str | None = None
@@ -225,9 +224,6 @@ class ReproducerAgentTestCase:
         return f"ReproducerTestCase({self.jira_issue})"
 
     async def run(self) -> None:
-        if self.zstream_override:
-            apply_zstream_override(self.zstream_override)
-
         metrics_middleware = MetricsMiddleware()
 
         def testing_factory(gateway_tools, local_tool_options=None, extra_middlewares=None):
@@ -383,11 +379,6 @@ def mock_repos():
                 filter_file.write_text(",".join(compose_filter))
                 logger.info("Wrote compose filter for %s: %s", issue_key, compose_filter)
 
-            for tc in test_cases:
-                if tc.jira_issue == issue_key:
-                    tc.zstream_override = config.get("zstream_override")
-                    break
-
         yield
     finally:
         for f in compose_filter_base.glob(".compose_filter_*"):
@@ -412,7 +403,17 @@ def run_test_cases_concurrently(request, mock_repos, observability_fixture):
     cases_to_run = [tc for tc in test_cases if tc in selected]
 
     async def _run_all():
-        await asyncio.gather(*(tc.run() for tc in cases_to_run))
+        async def _no_open_reproducer_mrs(*_args, **_kwargs):
+            return []
+
+        # E2E repos are local fixtures; keep MR discovery offline and deterministic too.
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(
+                reproducer_agent_module,
+                "_list_open_reproducer_mrs",
+                _no_open_reproducer_mrs,
+            )
+            await asyncio.gather(*(tc.run() for tc in cases_to_run))
 
     asyncio.run(_run_all())
 
@@ -523,6 +524,16 @@ def test_reproducer_agent_artifacts(test_case: ReproducerAgentTestCase):
     assert test_dir.is_dir(), (
         f"{test_case.jira_issue}: expected test directory at {test_dir} but it does not exist"
     )
+    prefix = test_case.reproducer_config.test_directory_prefix if test_case.reproducer_config else None
+    if prefix:
+        assert result.test_directory, (
+            f"{test_case.jira_issue}: test_directory is required with a configured prefix"
+        )
+        relative_test_dir = Path(str(result.test_directory).strip().lstrip("/"))
+        assert relative_test_dir.is_relative_to(Path(prefix)), (
+            f"{test_case.jira_issue}: expected test_directory={result.test_directory!r} "
+            f"to be under configured prefix {prefix!r}"
+        )
 
     runtest = test_dir / "runtest.sh"
     assert runtest.is_file(), f"{test_case.jira_issue}: missing runtest.sh in {test_dir}"

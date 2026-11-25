@@ -35,6 +35,7 @@ from ymir.agents.rebase_consolidation import (
     find_triaged_rebase_siblings,
     get_rebase_primary_issue,
     has_new_latest_changelog_entry,
+    is_sibling_link_stale,
     uses_autochangelog,
 )
 from ymir.agents.title_agent import create_title_agent
@@ -271,6 +272,16 @@ async def post_failure_comments_to_consolidated_siblings(
     await asyncio.gather(*[post_with_error_handling(c) for c in unique_siblings])
 
 
+class SiblingCheckUnavailable(RuntimeError):
+    """The sibling marker names a primary that cannot be read right now.
+
+    Raised from the sibling check on automatic runs so the task reaches the
+    regular retry path instead of completing as a skip: triage dispatched
+    this rebase deliberately, and a transient Jira outage must not
+    permanently park it.
+    """
+
+
 async def run_workflow(
     package,
     dist_git_branch,
@@ -315,13 +326,50 @@ async def run_workflow(
                     issue_key=state.jira_issue,
                     available_tools=gateway_tools,
                 )
-                if get_rebase_primary_issue(details) is not None:
+                if (primary_issue := get_rebase_primary_issue(details)) is not None:
+                    # Align with triage (is_sibling_link_stale): the marker is a
+                    # permanent comment, so a link to a primary that already
+                    # finished is stale. Triage deliberately ignored it and
+                    # queued this issue as a primary of its own run, so the
+                    # rebase must proceed instead of deferring forever.
+                    try:
+                        stale = await is_sibling_link_stale(primary_issue, gateway_tools)
+                    except Exception as stale_error:
+                        if user_triggered:
+                            # An explicit request must not silently defer on an
+                            # unreadable primary; proceed with the requested fix.
+                            logger.error(
+                                f"Cannot verify the sibling link of {state.jira_issue} to "
+                                f"{primary_issue}: {stale_error}; proceeding with the rebase"
+                            )
+                            return "change_jira_status"
+                        # An automatic rebase was dispatched by triage on purpose;
+                        # a temporarily unreadable primary must not complete the
+                        # task as a sibling skip (that would park the rebase
+                        # forever). Fail the run so the task retries.
+                        raise SiblingCheckUnavailable(
+                            f"Cannot verify the sibling link of {state.jira_issue} to "
+                            f"{primary_issue}: {stale_error}"
+                        ) from stale_error
+                    if stale:
+                        logger.info(
+                            f"Ignoring stale sibling link on {state.jira_issue}: primary "
+                            f"{primary_issue} already finished; proceeding with its own rebase"
+                        )
+                        return "change_jira_status"
                     logger.info(
                         f"Issue {state.jira_issue} is a sibling (found sibling comment). "
                         "Siblings do not create their own MR - the primary will consolidate them. "
                         "Exiting without processing."
                     )
+                    # No Jira comment here: the sibling marker comment (posted at
+                    # triage time) already tells the user this issue is deferred
+                    # to the primary. Comments are reserved for errors and
+                    # situations that need the user's attention.
                     return Workflow.END
+            except SiblingCheckUnavailable:
+                # Retryable: must not be swallowed by the broad handler below.
+                raise
             except Exception as e:
                 logger.warning(f"Failed to check if {state.jira_issue} is a sibling: {e}, proceeding")
             return "change_jira_status"
@@ -457,8 +505,11 @@ async def run_workflow(
             )
 
         async def run_build_agent(state):
-            # Modular packages stay on Copr: Konflux cannot enable a module stream.
-            konflux_build = use_konflux_backend(modular=is_modular_issue)
+            # Modular packages stay on Copr (Konflux cannot enable a module
+            # stream), as do RHEL majors listed in COPR_RHEL_MAJORS.
+            konflux_build = use_konflux_backend(
+                modular=is_modular_issue, dist_git_branch=state.dist_git_branch
+            )
             if konflux_build:
                 revision = await _prepare_konflux_rebase_ref(state)
                 build_input = BuildInputSchema(
@@ -485,7 +536,9 @@ async def run_workflow(
                     build_input=build_input,
                     available_tools=gateway_tools,
                     local_tool_options=local_tool_options,
-                    tool_name=build_tool_name(modular=is_modular_issue),
+                    tool_name=build_tool_name(
+                        modular=is_modular_issue, dist_git_branch=state.dist_git_branch
+                    ),
                 )
 
             if konflux_build:
@@ -630,7 +683,10 @@ async def run_workflow(
 
         async def commit_push_and_open_mr(state):
             try:
-                if use_konflux_backend(modular=is_modular_issue) and state.rebase_base_head:
+                if (
+                    use_konflux_backend(modular=is_modular_issue, dist_git_branch=state.dist_git_branch)
+                    and state.rebase_base_head
+                ):
                     # Collapse the Konflux build-candidate commit into the
                     # final MR commit: soft-reset to the pristine base so the
                     # already-staged tree commits as a single commit.
@@ -804,7 +860,10 @@ async def main() -> None:
                 dry_run=dry_run,
                 max_build_attempts=max_build_attempts,
             )
-            logger.info(f"Direct run completed: {state.rebase_result.model_dump_json(indent=4)}")
+            if state.rebase_result is None:
+                logger.info("Direct run exited early (sibling skip), nothing to report")
+            else:
+                logger.info(f"Direct run completed: {state.rebase_result.model_dump_json(indent=4)}")
             return
 
     logger.info("Starting rebase agent in queue mode")
@@ -974,6 +1033,14 @@ async def main() -> None:
                         dry_run=dry_run,
                         max_build_attempts=max_build_attempts,
                     )
+                    if state.rebase_result is None:
+                        # Early workflow exit (e.g. sibling skip): nothing was
+                        # processed here, so complete the task without error.
+                        logger.info(
+                            f"Rebase workflow exited early for {rebase_data.jira_issue} "
+                            "(sibling skip); treating task as completed"
+                        )
+                        return None
                     logger.info(
                         f"Rebase processing completed for {rebase_data.jira_issue}, "
                         f"success: {state.rebase_result.success}"

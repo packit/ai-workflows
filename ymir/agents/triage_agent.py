@@ -27,14 +27,13 @@ from ymir.agents.rebase_consolidation import (
     CLUSTER_LOCK_PREFIX,
     check_and_queue_primary_if_ready,
     get_rebase_primary_issue,
+    is_sibling_link_stale,
     queue_siblings_for_triage,
     rebase_cluster_lock_key,
-    sibling_link_is_stale,
 )
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
 from ymir.agents.tasks import InvalidReproducerConfigError
 from ymir.agents.utils import (
-    build_agent_factory_with_mock_repos,
     get_agent_execution_config,
     get_chat_model,
     get_tool_call_checker_config,
@@ -288,7 +287,7 @@ async def _is_rebase_sibling(state, available_tools, user_triggered: bool, dry_r
         # Sibling without a readable link: keep deferring.
         return True
     try:
-        stale = await sibling_link_is_stale(primary_issue, available_tools)
+        stale = await is_sibling_link_stale(primary_issue, available_tools)
     except Exception as e:
         if user_triggered:
             raise RuntimeError(
@@ -445,6 +444,14 @@ async def _enqueue_reproducer(redis, state, user_triggered: bool, gateway_tools)
             state.jira_issue,
         )
         return
+    for version_hint in (reproducer_input.fix_version, reproducer_input.target_branch):
+        if version_hint and await is_older_zstream(version_hint):
+            logger.info(
+                "Skipping reproducer enqueue for %s — older z-stream (%s) not yet supported",
+                state.jira_issue,
+                version_hint,
+            )
+            return
     if reproducer_input.package:
         try:
             config = await tasks.fetch_reproducer_config(reproducer_input.package, gateway_tools)
@@ -1925,12 +1932,11 @@ async def main() -> None:
                 )
                 raise
         with span_processor.start_transaction(jira_issue, workflow="TriageWorkflow"):
-            agent_factory = build_agent_factory_with_mock_repos(create_triage_agent, jira_issue)
             try:
                 state = await run_workflow(
                     jira_issue,
                     dry_run,
-                    agent_factory,
+                    create_triage_agent,
                     auto_chain=auto_chain,
                     force_cve_triage=force_cve_triage,
                     user_triggered=user_triggered,

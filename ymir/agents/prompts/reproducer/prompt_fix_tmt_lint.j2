@@ -23,10 +23,16 @@ Dry run mode is enabled — do NOT create merge requests.
 - NEVER use direct `git clone` commands. Use `clone_repository` if you must re-clone.
 - Do NOT perform root cause analysis of the original bug. Only fix lint/metadata (and re-verify on TF if the harness or scripts must change as a result).
 - Do NOT call `cancel_testing_farm_request` yourself. The workflow cancels all Testing Farm reservations programmatically after you return your output.
+- Only edit files inside the supplied test directory. Do not move or rename it, create a parallel test, or change the bug's intended behavior.
+- Do not change workflow-owned identity or classification: Jira issue, package, reproducer type, compose, architecture, test directory, pass/fail criteria, existing-test status, existing MR URL, or adaptation status. The workflow preserves these from the original result.
 
 **Required work**
 1. Inspect `{{ tests_clone_path }}/{{ test_directory }}/` (especially `main.fmf` and related `.fmf` files). Fix every issue reported by `tmt lint`.
 2. If scripts must change to satisfy metadata (e.g. `test:` path, `require:`, framework), update them and re-copy / re-run on TF if a machine is available.
-3. Produce the same final JSON output schema as a normal reproducer run. Keep `test_directory` accurate. Set `success=true` only when the metadata is fixed and ready for the workflow to re-run `tmt lint`.
+3. Return exactly this JSON shape, with no additional keys:
+   - `success` (boolean): true only when the lint issue is fixed and ready for the workflow to rerun `tmt lint`.
+   - `summary` (string): briefly describe the lint fix or remaining failure.
+   - `testing_farm_request_id` (string or null): return the active/new request ID, or null if none is active.
+   - `retryable_error` (boolean): true only for a transient infrastructure failure.
 
 Do NOT open a merge request yourself. Do NOT post a Jira comment yourself.

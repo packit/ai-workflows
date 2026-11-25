@@ -75,3 +75,37 @@ def test_vertex_anthropic_request_retains_cache_injection_points(
     # Confirm the flag is what controls it: with caching off BeeAI strips them.
     model.allow_prompt_caching = False
     assert "cache_control_injection_points" not in transform()
+
+
+def test_empty_reply_logger_reports_reply_parts_without_text(caplog):
+    from litellm.types.utils import ModelResponse
+
+    from ymir.agents import utils
+
+    empty = ModelResponse(
+        model="claude-sonnet-5-5",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "sig"}],
+                },
+            }
+        ],
+    )
+    text = ModelResponse(
+        model="claude-sonnet-5-5",
+        choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+    )
+
+    with caplog.at_level("WARNING", logger=utils.logger.name):
+        utils._log_if_empty_reply(text)
+        assert not caplog.records
+        utils._log_if_empty_reply(empty)
+
+    assert "Empty model reply" in caplog.text
+    assert "finish_reason=stop" in caplog.text
+    assert "[('thinking', 0)]" in caplog.text

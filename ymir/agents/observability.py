@@ -20,6 +20,8 @@ from ymir.common.logging_setup import current_jira_issue, current_workflow
 
 logger = logging.getLogger(__name__)
 
+SPAN_ATTRIBUTE_LIMIT = 1024
+
 
 class AgentSpanProcessor(SpanProcessor):
     def __init__(self) -> None:
@@ -106,7 +108,10 @@ def _setup_tool_error_logging() -> None:
 
 def setup_observability(endpoint: str) -> AgentSpanProcessor:
     resource = Resource(attributes={})
-    tracer_provider = trace_sdk.TracerProvider(resource=resource)
+    # LLM spans flatten every message and tool schema into attributes; the SDK default of 128 drops the oldest
+    # ones (including jira.issue) once a long ReasoningAgent conversation is sent.
+    span_limits = trace_sdk.SpanLimits(max_span_attributes=SPAN_ATTRIBUTE_LIMIT)
+    tracer_provider = trace_sdk.TracerProvider(resource=resource, span_limits=span_limits)
     processor = AgentSpanProcessor()
     tracer_provider.add_span_processor(processor)
     tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint)))

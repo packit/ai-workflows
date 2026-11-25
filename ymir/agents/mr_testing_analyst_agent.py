@@ -43,7 +43,11 @@ from ymir.common.http_utils import aiohttp_get_with_retries
 from ymir.common.logging_setup import configure_logging, get_trajectory_writeable
 from ymir.common.models import ErrorData, ErrorListEntry, Task
 from ymir.common.utils import init_sentry
-from ymir.tools.privileged.mr_testing import fold_comment_body
+from ymir.tools.privileged.mr_testing import (
+    count_testsuite_results,
+    enrich_anewa_table_body,
+    fold_comment_body,
+)
 from ymir.tools.unprivileged.greenwave import FetchTestingFarmResultsTool
 from ymir.tools.unprivileged.text import SearchTextTool, ViewTool
 
@@ -353,10 +357,34 @@ async def _download_bytes(session: aiohttp.ClientSession, url: str) -> bytes | N
             if response.status != 200:
                 logger.warning("Got HTTP %d for %s", response.status, url)
                 return None
-            return await response.content.read(TEST_LOG_MAX_BYTES)
+            # StreamReader.read(n) returns only the first buffered chunk, so read chunks up to the cap.
+            body = bytearray()
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                body.extend(chunk)
+                if len(body) >= TEST_LOG_MAX_BYTES:
+                    break
+            return bytes(body[:TEST_LOG_MAX_BYTES])
     except (aiohttp.ClientError, TimeoutError) as e:
         logger.warning("Failed to download %s: %s", url, e)
         return None
+
+
+async def _fetch_plan_counts(
+    session: aiohttp.ClientSession, results_by_arch: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, dict[str, int]]]:
+    """Per architecture, the testcase counts for each plan, read from that architecture's results.xml."""
+    counts_by_arch: dict[str, dict[str, dict[str, int]]] = {}
+    for arch, arch_data in results_by_arch.items():
+        urls = {arch_data.get("artifacts_url"), *(arch_data.get("plan_urls") or {}).values()} - {None}
+        plan_counts: dict[str, dict[str, int]] = {}
+        for url in sorted(urls):
+            if not _is_test_artifacts_url(url):
+                continue
+            results_xml = await _download_results_xml(session, url)
+            if results_xml is not None:
+                plan_counts.update(count_testsuite_results(results_xml))
+        counts_by_arch[arch] = plan_counts
+    return counts_by_arch
 
 
 async def _download_results_xml(session: aiohttp.ClientSession, artifacts_url: str) -> str | None:
@@ -633,6 +661,25 @@ async def run_mr_testing_analyst(
                     comments=state.mr_comments,
                 )
 
+            return "enrich_anewa_counts"
+
+        async def enrich_anewa_counts(state: MrTestingAnalystWorkflowState):
+            """Non-gating only: add each plan's pass/fail counts (from its architecture's results.xml)
+            to anewa's own table in note_body, before act_on_result folds the formatted summary into it.
+            A NEWA-sourced run has no note_body, so this is a no-op for it."""
+            if state.note_body:
+                results_by_arch = state.parsed_results.get("results_by_arch") or {}
+                unfixed_by_arch = state.parsed_results.get("unfixed_results_by_arch") or {}
+                async with aiohttp.ClientSession(
+                    timeout=AIOHTTP_TIMEOUT, headers={"User-Agent": YMIR_USER_AGENT}
+                ) as session:
+                    counts_by_arch = await _fetch_plan_counts(session, results_by_arch)
+                    unfixed_counts_by_arch = (
+                        await _fetch_plan_counts(session, unfixed_by_arch) if unfixed_by_arch else None
+                    )
+                state.note_body = enrich_anewa_table_body(
+                    state.note_body, counts_by_arch, unfixed_counts_by_arch
+                )
             return "gather_jira_context"
 
         async def fetch_test_logs(state: MrTestingAnalystWorkflowState):
@@ -865,6 +912,7 @@ async def run_mr_testing_analyst(
         workflow.add_step("fetch_and_validate_mr", fetch_and_validate_mr)
         workflow.add_step("fetch_test_results", fetch_test_results)
         workflow.add_step("parse_mr_results", parse_mr_results)
+        workflow.add_step("enrich_anewa_counts", enrich_anewa_counts)
         workflow.add_step("fetch_test_logs", fetch_test_logs)
         workflow.add_step("gather_jira_context", gather_jira_context)
         workflow.add_step("run_analysis", run_analysis)

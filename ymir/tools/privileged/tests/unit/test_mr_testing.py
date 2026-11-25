@@ -7,6 +7,8 @@ from ymir.tools.privileged.mr_testing import (
     ParseMrTestResultsTool,
     ParseNewaMrCommentTool,
     ParseOsciResultsCommentTool,
+    count_testsuite_results,
+    enrich_anewa_table_body,
 )
 
 # ---------------------------------------------------------------------------
@@ -791,3 +793,95 @@ async def test_fold_mr_comment_body_rerun_replaces_prior_fold_idempotently():
     assert second == expected
     assert second.count("<!-- mr_testing:results -->") == 1
     assert "old" not in second
+
+
+# ---------------------------------------------------------------------------
+# Per-plan counts in anewa's table
+# ---------------------------------------------------------------------------
+
+_RESULTS_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+ <testsuite name="/plans/all" result="passed" tests="3">
+  <testcase name="/a" result="passed"/>
+  <testcase name="/b" result="passed"/>
+  <testcase name="/c" result="passed"/>
+ </testsuite>
+ <testsuite name="/plans/tier1/public" result="failed" tests="3">
+  <testcase name="/d" result="failed"><failure>boom</failure></testcase>
+  <testcase name="/e" result="error"/>
+  <testcase name="/f" result="passed"/>
+ </testsuite>
+ <testsuite name="/plans/others/public" result="skipped" tests="0"/>
+</testsuites>
+"""
+
+_ANEWA_BODY = (
+    "**ANEWA:** Testing for `ghostscript` on `RHEL-9.8.0` completed.\n"
+    "**Build:** `ghostscript-9.54.0-19.el9_8.4`\n\n"
+    "| Architecture | `/plans/all` | `/plans/tier1/public` | `/plans/others/public` |\n"
+    "|---|---|---|---|\n"
+    "| x86_64 | [✅ pass](https://a/x) | [❌ fail](https://a/x) | [⏭️ skip](https://a/x) |\n"
+    "| aarch64 | [✅ pass](https://a/y) | [✅ pass](https://a/y) | [⏭️ skip](https://a/y) |\n"
+)
+
+
+def test_count_testsuite_results_counts_outcomes_per_plan():
+    counts = count_testsuite_results(_RESULTS_XML)
+
+    assert counts["/plans/all"] == {"fail": 0, "error": 0, "pass": 3, "skip": 0}
+    assert counts["/plans/tier1/public"] == {"fail": 1, "error": 1, "pass": 1, "skip": 0}
+    assert counts["/plans/others/public"] == {"fail": 0, "error": 0, "pass": 0, "skip": 0}
+
+
+def test_count_testsuite_results_returns_empty_for_unparseable_xml():
+    assert count_testsuite_results("<testsuites><testsuite") == {}
+
+
+def test_enrich_anewa_table_body_adds_counts_and_keeps_links_and_layout():
+    counts = count_testsuite_results(_RESULTS_XML)
+    enriched = enrich_anewa_table_body(_ANEWA_BODY, {"x86_64": counts, "aarch64": counts})
+
+    assert "[✅ pass (3 pass)](https://a/x)" in enriched
+    assert "[❌ fail (1 fail, 1 error, 1 pass)](https://a/x)" in enriched
+    # A plan with no testcases keeps its cell as it was.
+    assert "[⏭️ skip](https://a/x)" in enriched
+    assert enriched.startswith("**ANEWA:** Testing for `ghostscript`")
+    assert "| Architecture | `/plans/all` | `/plans/tier1/public` | `/plans/others/public` |" in enriched
+
+
+def test_enrich_anewa_table_body_is_idempotent():
+    counts = count_testsuite_results(_RESULTS_XML)
+    once = enrich_anewa_table_body(_ANEWA_BODY, {"x86_64": counts})
+    twice = enrich_anewa_table_body(once, {"x86_64": counts})
+
+    assert twice == once
+    assert "pass (3 pass) (3 pass)" not in twice
+
+
+def test_enrich_anewa_table_body_handles_fixed_and_unfixed_sections():
+    counts = count_testsuite_results(_RESULTS_XML)
+    body = (
+        "### Fixed build\n" + _ANEWA_BODY + "\n### Unfixed build\n" + _ANEWA_BODY.replace("RHEL-9.8.0", "x")
+    )
+
+    enriched = enrich_anewa_table_body(body, {"x86_64": counts}, {"aarch64": counts})
+
+    fixed, unfixed = enriched.split("### Unfixed build")
+    assert "[✅ pass (3 pass)](https://a/x)" in fixed
+    assert "| aarch64 | [✅ pass (3 pass)]" in unfixed
+    assert "| x86_64 | [✅ pass](https://a/x)" in unfixed
+
+
+def test_count_testsuite_results_reads_junit_child_elements_without_result_attribute():
+    """Testing Farm's results-junit.xml marks failures with child elements and has no result attribute."""
+    junit = (
+        '<testsuites><testsuite name="/plans/all">'
+        '<testcase name="/a"><system-out>ok</system-out></testcase>'
+        '<testcase name="/b"><failure message="boom">trace</failure></testcase>'
+        '<testcase name="/c"><skipped/></testcase>'
+        "</testsuite></testsuites>"
+    )
+
+    counts = count_testsuite_results(junit)
+
+    assert counts["/plans/all"] == {"fail": 1, "error": 0, "pass": 1, "skip": 1}

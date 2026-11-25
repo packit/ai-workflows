@@ -144,10 +144,12 @@ if PARSED_RESULTS has a non-empty `unfixed_results_by_arch`.
 - **If PARSED_RESULTS' `note_id` is non-null** (anewa already posted a completed
   comment on this MR), add the formatted markdown to `mr_comments` with
   `kind: "update"` and `note_id` set to PARSED_RESULTS' `note_id` -- put just the
-  plain `testing_farm_markdown` output in `body`, **not** folded into anewa's
-  comment yourself; Python does that fold deterministically after you return,
-  using PARSED_RESULTS' own `note_body`, so a paraphrase here could never corrupt
-  or lose anewa's original comment.
+  plain `testing_farm_markdown` output in `body` (call it with
+  `include_results_table: false` -- Python already adds each plan's pass/fail counts
+  to anewa's own table, so a second per-architecture table would just duplicate it),
+  **not** folded into anewa's comment yourself; Python does that fold deterministically
+  after you return, using PARSED_RESULTS' own `note_body`, so a paraphrase here could
+  never corrupt or lose anewa's original comment.
 - **If `note_id` is null** (no anewa comment exists to fold into), add the
   formatted markdown to `mr_comments` with `kind: "new"` instead.
 

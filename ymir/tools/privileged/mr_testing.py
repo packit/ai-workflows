@@ -21,6 +21,7 @@ see that function's docstring for what remains unported.
 import json
 import logging
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
+from ymir.common.junit import testcase_status
 from ymir.tools.base import CloneableTool as Tool
 
 logger = logging.getLogger(__name__)
@@ -430,6 +432,110 @@ def fold_comment_body(note_body: str, formatted_markdown: str) -> str:
     # in "...\n\n---", since that's what this function appended last time).
     base = re.sub(r"\n*-{3,}\s*\Z", "", base).rstrip()
     return f"{base}\n\n---\n\n{FOLDED_RESULTS_MARKER}\n{formatted_markdown}"
+
+
+_COUNT_KEY_BY_STATUS = {"passed": "pass", "failed": "fail", "error": "error", "skipped": "skip"}
+_COUNT_LABEL_ORDER = ("fail", "error", "pass", "skip")
+# A count label already applied to a cell, e.g. " (2 fail, 10 pass)", so a rerun doesn't stack another one.
+_COUNT_SUFFIX_RE = re.compile(r"\s*\([^()]*\b(?:fail|error|pass|skip)\b[^()]*\)\s*$")
+
+
+def count_testsuite_results(results_xml: str) -> dict[str, dict[str, int]]:
+    """Count testcase outcomes per testsuite in a JUnit results.xml, keyed by
+    testsuite name (the tmt plan, e.g. ``/plans/all``). Unparseable XML yields
+    an empty dict, so the anewa table is left as it was."""
+    try:
+        root = ET.fromstring(results_xml)  # noqa: S314 -- same parser as the agent's _failed_test_log_urls
+    except ET.ParseError:
+        logger.warning("Could not parse results.xml to count per-plan results")
+        return {}
+    counts: dict[str, dict[str, int]] = {}
+    for suite in root.iter("testsuite"):
+        per_suite = dict.fromkeys(_COUNT_LABEL_ORDER, 0)
+        for case in suite.findall("testcase"):
+            status, _ = testcase_status(case)
+            per_suite[_COUNT_KEY_BY_STATUS[status]] += 1
+        counts[suite.get("name") or ""] = per_suite
+    return counts
+
+
+def _format_count_label(counts: dict[str, int]) -> str | None:
+    """Label such as ``2 fail, 10 pass``, or None when the plan had no testcases (e.g. skipped)."""
+    parts = [f"{counts[key]} {key}" for key in _COUNT_LABEL_ORDER if counts.get(key)]
+    return ", ".join(parts) or None
+
+
+def _apply_count_label(cell: str, label: str | None) -> str:
+    """Append ``(label)`` to a status cell, keeping any wrapping artifacts link. Leaves blank cells alone."""
+    if not label:
+        return cell
+    link_match = re.match(r"^\[(.*)\]\(([^)]+)\)$", cell)
+    status = link_match.group(1) if link_match else cell
+    status = _COUNT_SUFFIX_RE.sub("", status).strip()
+    if not status:
+        return cell
+    new_text = f"{status} ({label})"
+    return f"[{new_text}]({link_match.group(2)})" if link_match else new_text
+
+
+def _enrich_table_section(section: str, counts_by_arch: dict[str, dict[str, dict[str, int]]]) -> str:
+    """Add per-plan counts to each status cell of an anewa table. Only plan columns with
+    counts change; the Architecture column, headings, and other lines pass through as they are."""
+    out_lines = []
+    headers: list[str] = []
+    in_table = False
+    for line in section.split("\n"):
+        if "|" not in line or not (cells := _split_table_row(line)):
+            out_lines.append(line)
+            continue
+        if not in_table:
+            headers = cells
+            in_table = True
+            out_lines.append(line)
+            continue
+        plan_counts = counts_by_arch.get(cells[0])
+        if all(c.startswith("---") or c == "" for c in cells) or not plan_counts:
+            out_lines.append(line)
+            continue
+        new_cells = [cells[0]]
+        for index, cell in enumerate(cells[1:], start=1):
+            header = headers[index] if index < len(headers) else ""
+            label = _format_count_label(plan_counts.get(header.strip("`"), {}))
+            new_cells.append(_apply_count_label(cell, label))
+        out_lines.append("| " + " | ".join(new_cells) + " |")
+    return "\n".join(out_lines)
+
+
+def enrich_anewa_table_body(
+    body: str,
+    counts_by_arch: dict[str, dict[str, dict[str, int]]],
+    unfixed_counts_by_arch: dict[str, dict[str, dict[str, int]]] | None = None,
+) -> str:
+    """Rewrite anewa's completed comment so each plan cell carries its pass/fail counts
+    (e.g. ``[✅ pass](url)`` becomes ``[✅ pass (4 pass)](url)``). This replaces a second,
+    near-duplicate results table below anewa's own table. Headings and the Build line are kept.
+    Handles the single-table layout and the ``### Fixed build`` / ``### Unfixed build`` layout."""
+    fixed_match = re.search(
+        r"^### Fixed build\s*$(.*?)(?=^### Unfixed build\s*$|\Z)", body, re.MULTILINE | re.DOTALL
+    )
+    unfixed_match = re.search(r"^### Unfixed build\s*$(.*)", body, re.MULTILINE | re.DOTALL)
+
+    if not fixed_match and not unfixed_match:
+        return _enrich_table_section(body, counts_by_arch)
+
+    replacements = []
+    if fixed_match:
+        replacements.append(
+            (*fixed_match.span(1), _enrich_table_section(fixed_match.group(1), counts_by_arch))
+        )
+    if unfixed_match and unfixed_counts_by_arch:
+        new_section = _enrich_table_section(unfixed_match.group(1), unfixed_counts_by_arch)
+        replacements.append((*unfixed_match.span(1), new_section))
+
+    new_body = body
+    for start, end, new_text in sorted(replacements, key=lambda r: r[0], reverse=True):
+        new_body = new_body[:start] + new_text + new_body[end:]
+    return new_body
 
 
 class FoldMrCommentBodyInput(BaseModel):

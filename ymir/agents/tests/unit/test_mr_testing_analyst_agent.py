@@ -1077,3 +1077,109 @@ async def test_run_tags_traces_with_linked_jira_issues_not_mr_url(monkeypatch):
     )
 
     assert tagged == ["RHEL-111"]
+
+
+class _StreamedBody:
+    """Mimics aiohttp's StreamReader: read(n) returns only the first buffered chunk, not n bytes."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    async def read(self, n=-1):
+        return self._chunks[0]
+
+    async def iter_chunked(self, n):
+        for chunk in self._chunks:
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_download_bytes_returns_whole_body_when_it_arrives_in_chunks(monkeypatch):
+    chunks = [b"a" * 8000, b"b" * 5000]
+    response = flexmock(status=200, content=_StreamedBody(chunks))
+
+    @contextlib.asynccontextmanager
+    async def fake_get(session, url, **kwargs):
+        yield response
+
+    monkeypatch.setattr(m, "aiohttp_get_with_retries", fake_get)
+
+    assert await m._download_bytes(flexmock(), "https://artifacts.osci.redhat.com/x") == b"".join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_fetch_plan_counts_reads_each_architectures_results_xml(monkeypatch):
+    xml_by_url = {
+        "https://artifacts.osci.redhat.com/tf/req-x86": (
+            '<testsuites><testsuite name="/plans/all"><testcase result="passed"/></testsuite></testsuites>'
+        ),
+        "https://artifacts.osci.redhat.com/tf/req-arm": (
+            '<testsuites><testsuite name="/plans/all"><testcase result="failed"/></testsuite></testsuites>'
+        ),
+    }
+
+    async def _fake_results(session, url):
+        return xml_by_url.get(url)
+
+    monkeypatch.setattr(m, "_download_results_xml", _fake_results)
+    results_by_arch = {
+        "x86_64": {"artifacts_url": "https://artifacts.osci.redhat.com/tf/req-x86", "plan_urls": {}},
+        "aarch64": {
+            "artifacts_url": None,
+            "plan_urls": {"/plans/all": "https://artifacts.osci.redhat.com/tf/req-arm"},
+        },
+        "s390x": {"artifacts_url": "https://example.com/not-testing-farm", "plan_urls": {}},
+    }
+
+    counts = await m._fetch_plan_counts(flexmock(), results_by_arch)
+
+    assert counts["x86_64"]["/plans/all"]["pass"] == 1
+    assert counts["aarch64"]["/plans/all"]["fail"] == 1
+    assert counts["s390x"] == {}
+
+
+@pytest.mark.asyncio
+async def test_update_kind_folds_per_plan_counts_into_anewas_table(monkeypatch):
+    """Python adds each plan's counts to anewa's own table before folding the summary into it."""
+    note_body = (
+        "**ANEWA:** Testing for `foo` on `RHEL-9.8.0` completed.\n"
+        "**Build:** `foo-1.0`\n\n"
+        "| Architecture | `/plans/all` |\n"
+        "|---|---|\n"
+        "| x86_64 | [✅ pass](https://artifacts.osci.redhat.com/tf/req-x86) |\n"
+    )
+    results_xml = (
+        '<testsuites><testsuite name="/plans/all"><testcase result="passed"/></testsuite></testsuites>'
+    )
+    results_by_arch = {
+        "x86_64": {
+            "overall_status": "✅ pass",
+            "plans": {"/plans/all": "✅ pass"},
+            "artifacts_url": "https://artifacts.osci.redhat.com/tf/req-x86",
+        }
+    }
+    result = MrTestingAnalystResult(
+        analyzed=True,
+        summary="done",
+        mr_comments=[MrCommentToPost(kind="update", body="## Testing Farm Results\nnew", note_id=42)],
+    )
+    overrides = {
+        "parse_mr_test_results": {
+            "nvr": "foo-1.0",
+            "results_by_arch": results_by_arch,
+            "unfixed_results_by_arch": {},
+            "note_id": 42,
+            "note_body": note_body,
+            "report_portal_url": None,
+        }
+    }
+
+    async def _fake_results(session, url):
+        return results_xml
+
+    monkeypatch.setattr(m, "_download_results_xml", _fake_results)
+    _, calls = await _run_with_result(monkeypatch, result, parse_overrides=overrides)
+    update_call = next(kwargs for name, kwargs in calls if name == "update_merge_request_comment")
+
+    assert "[✅ pass (1 pass)](https://artifacts.osci.redhat.com/tf/req-x86)" in update_call["comment"]
+    assert update_call["comment"].startswith("**ANEWA:** Testing for `foo`")

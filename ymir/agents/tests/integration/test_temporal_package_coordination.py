@@ -322,15 +322,11 @@ async def test_publication_records_the_handoff_for_the_coordinator_without_dispa
             return PublicationInputs([], "New", False)
         return None
 
-    flexmock(publication.workflow).should_receive("info").and_return(
-        flexmock(workflow_id="triage/RHEL-1", first_execution_run_id="fixture")
-    )
+    flexmock(publication.workflow).should_receive("info").and_return(flexmock(workflow_id="triage/RHEL-1"))
     flexmock(publication.workflow).should_receive("execute_child_workflow").replace_with(child)
     flexmock(publication).should_receive("_run_activity").replace_with(execute)
 
-    result = await publication.TriagePublicationWorkflow()._run_request(
-        work.request, "fixture-pod", ingress_execution_id="fixture"
-    )
+    result = await publication._run_request(work.request, "fixture", task_queue="fixture-pod")
     assert result.destinations == []
     assert [handoff.purpose for handoff in result.coordinated_handoffs] == ["backport"]
     assert [name for name, _ in written] == [

@@ -21,12 +21,13 @@ from ymir.agents.temporal_triage_publication import (
     REQUEST_ALREADY_STARTED,
     TriagePublicationRequest,
     TriagePublicationResult,
-    TriagePublicationWorkflow,
     _jira_record,
     _post_comment,
     _run_activity,
     acknowledge_triage_request,
     apply_triage_labels,
+    claim_triage_request,
+    execute_triage_request,
     read_publication_inputs,
 )
 from ymir.agents.utils import get_agent_execution_config, resolve_chat_model_override
@@ -192,7 +193,6 @@ class TriageIngressWorkflow:
         outcomes = []
         failed = []
         last_failure = None
-        publication = TriagePublicationWorkflow()
         while True:
             if not self.pending:
                 await workflow.wait_condition(lambda: bool(self.pending) or workflow.all_handlers_finished())
@@ -203,7 +203,7 @@ class TriageIngressWorkflow:
             result = None
             try:
                 request = await _run_activity(prepare_triage_intent, intent)
-                await publication.claim(request)
+                await claim_triage_request(request)
                 skipped = await _run_activity(check_triage_intent, request, intent)
                 if not request.dry_run:
                     if intent.user_triggered:
@@ -217,7 +217,7 @@ class TriageIngressWorkflow:
                 if skipped is None:
                     pod_identity = f"{info.first_execution_run_id}:{intent.update_id}"
                     pod_id = sha256(pod_identity.encode()).hexdigest()[:36]
-                    result = await publication.execute(request, ingress_execution_id=pod_id)
+                    result = await execute_triage_request(request, pod_id)
                     skipped = result.skipped_reason
                     if result.coordinated_handoffs:
                         state = result.analysis.state

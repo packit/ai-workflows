@@ -475,10 +475,7 @@ def create_triage_control_worker(client: Client, queue: str, provisioner: PodPro
         release_coordinated_triage,
     )
     from ymir.agents.temporal_triage_ingress import INGRESS_ACTIVITIES, TriageIngressWorkflow
-    from ymir.agents.temporal_triage_publication import (
-        TriagePublicationWorkflow,
-        TriageRequestReceiptWorkflow,
-    )
+    from ymir.agents.temporal_triage_publication import TriageRequestReceiptWorkflow
 
     activities = TriagePodActivities(provisioner)
     coordination = PackageStreamActivities(client, queue)
@@ -486,7 +483,6 @@ def create_triage_control_worker(client: Client, queue: str, provisioner: PodPro
         client,
         task_queue=queue,
         workflows=[
-            TriagePublicationWorkflow,
             TriageRequestReceiptWorkflow,
             TriageIngressWorkflow,
             PackageStreamWorkflow,
@@ -504,7 +500,7 @@ def create_triage_control_worker(client: Client, queue: str, provisioner: PodPro
         max_heartbeat_throttle_interval=timedelta(seconds=6),
         workflow_runner=SandboxedWorkflowRunner(
             restrictions=SandboxRestrictions.default.with_passthrough_modules(
-                TriagePublicationWorkflow.__module__,
+                TriageRequestReceiptWorkflow.__module__,
                 TriageIngressWorkflow.__module__,
                 PackageStreamWorkflow.__module__,
             )

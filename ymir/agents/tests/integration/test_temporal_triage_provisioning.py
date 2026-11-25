@@ -6,6 +6,9 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from flexmock import flexmock
+
+from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
 
 pytest.importorskip("temporalio")
 
@@ -13,7 +16,7 @@ from pydantic_ai.durable_exec.temporal import PydanticAIPlugin
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.exceptions import ApplicationError
 
-from ymir.agents.temporal_triage_analysis import TriageAnalysisRequest
+from ymir.agents import temporal_triage_ingress as ingress
 from ymir.agents.temporal_triage_provisioning import (
     EXECUTION_LABEL,
     GATEWAY_URL,
@@ -22,7 +25,7 @@ from ymir.agents.temporal_triage_provisioning import (
     TriagePod,
     create_triage_control_worker,
 )
-from ymir.agents.temporal_triage_publication import TriagePublicationRequest, TriagePublicationWorkflow
+from ymir.agents.temporal_triage_publication import PublicationInputs
 
 ADDRESS = os.getenv("TEMPORAL_TEST_ADDRESS")
 
@@ -52,13 +55,24 @@ def test_openshift_pod_shares_only_one_execution_workspace():
 @pytest.mark.asyncio
 @pytest.mark.skipif(not ADDRESS, reason="Set TEMPORAL_TEST_ADDRESS to a local Temporal server")
 @pytest.mark.parametrize("failure", ["startup", "cancel", "lost"])
-async def test_provisioning_cleans_up_after_failure(failure):
+async def test_provisioning_cleans_up_after_failure(failure, monkeypatch):
+    monkeypatch.setenv("CHAT_MODEL", "test")
+    monkeypatch.delenv("CHAT_MODEL_TRIAGE", raising=False)
+    monkeypatch.setenv("TEMPORAL_TRIAGE_INLINE", "false")
+    monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
     created = asyncio.Event()
+    started = []
     removed = []
     ready = False
 
+    async def read_publication_inputs(request):
+        return PublicationInputs([], "New", request.dry_run)
+
+    flexmock(ingress).should_receive("read_publication_inputs").replace_with(read_publication_inputs).once()
+
     class Backend:
         async def create(self, pod):
+            started.append(pod)
             created.set()
 
         async def ready(self, pod):
@@ -78,22 +92,18 @@ async def test_provisioning_cleans_up_after_failure(failure):
     client = await Client.connect(ADDRESS, plugins=[PydanticAIPlugin()])
     token = uuid4().hex[:12]
     queue = f"triage-control-test-{token}"
-    request = TriagePublicationRequest(
-        TriageAnalysisRequest(f"RHEL-{int(token, 16)}", {}, 1), token, provision_pod=True
-    )
+    intent = TriageIntent(f"RHEL-{int(token, 16)}", token, "discovery", dry_run=True)
     async with create_triage_control_worker(client, queue, Backend()):
-        handle = await client.start_workflow(
-            TriagePublicationWorkflow.run, request, id=request.workflow_id(), task_queue=queue
-        )
+        assert await submit_triage_intent(client, intent, task_queue=queue) == "accepted"
+        handle = client.get_workflow_handle(triage_issue_workflow_id(intent.issue))
         await asyncio.wait_for(created.wait(), timeout=15)
         if failure == "cancel":
             await handle.cancel()
         with pytest.raises(WorkflowFailureError):
             await asyncio.wait_for(handle.result(), timeout=20)
         history = await handle.fetch_history()
-    assert removed == [
-        TriagePod(f"ymir-triage-{handle.first_execution_run_id}", request.analysis.jira_issue, True)
-    ]
+    [pod] = removed
+    assert started == [pod] and pod.dry_run and pod.jira_issue == intent.issue
     scheduled = (
         event.activity_task_scheduled_event_attributes
         for event in history.events
@@ -103,9 +113,14 @@ async def test_provisioning_cleans_up_after_failure(failure):
     assert activity_queues["provision_triage_pod"] == activity_queues["delete_triage_pod"] == queue
     if failure == "lost":
         assert activity_queues["watch_triage_pod"] == queue
-        assert activity_queues["read_publication_inputs"] == removed[0].task_queue
+        assert activity_queues["read_publication_inputs"] == pod.task_queue
     else:
-        assert set(activity_queues) == {"provision_triage_pod", "delete_triage_pod"}
+        assert set(activity_queues) == {
+            "prepare_triage_intent",
+            "check_triage_intent",
+            "provision_triage_pod",
+            "delete_triage_pod",
+        }
 
 
 @pytest.mark.asyncio

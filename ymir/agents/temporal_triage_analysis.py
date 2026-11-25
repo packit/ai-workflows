@@ -363,13 +363,8 @@ async def create_analysis_worker(
         read_buildroot,
     ]
     if publication:
-        from ymir.agents.temporal_triage_publication import (
-            PUBLICATION_ACTIVITIES,
-            TriagePublicationWorkflow,
-            TriageRequestReceiptWorkflow,
-        )
+        from ymir.agents.temporal_triage_publication import PUBLICATION_ACTIVITIES
 
-        workflows.extend((TriagePublicationWorkflow, TriageRequestReceiptWorkflow))
         activities.append(prepare_publication_analysis)
         activities.extend(PUBLICATION_ACTIVITIES)
 
@@ -381,9 +376,10 @@ async def create_analysis_worker(
             release_coordinated_triage,
         )
         from ymir.agents.temporal_triage_ingress import INGRESS_ACTIVITIES, TriageIngressWorkflow
+        from ymir.agents.temporal_triage_publication import TriageRequestReceiptWorkflow
 
         coordination = PackageStreamActivities(client, task_queue)
-        workflows.extend((TriageIngressWorkflow, PackageStreamWorkflow))
+        workflows.extend((TriageIngressWorkflow, TriageRequestReceiptWorkflow, PackageStreamWorkflow))
         activities.extend(
             [
                 *INGRESS_ACTIVITIES,

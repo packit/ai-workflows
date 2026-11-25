@@ -5,7 +5,6 @@ import json
 import os
 import socket
 from collections import Counter
-from datetime import timedelta
 from uuid import uuid4
 
 import pytest
@@ -18,6 +17,7 @@ from pydantic_ai.models.function import FunctionModel
 from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import Resolution, Task
+from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
 
 pytest.importorskip("temporalio")
 
@@ -25,11 +25,11 @@ from pydantic_ai.durable_exec.temporal import PydanticAIPlugin
 from temporalio.api.common.v1 import WorkflowExecution
 from temporalio.api.workflowservice.v1 import ResetWorkflowExecutionRequest
 from temporalio.client import Client, WorkflowFailureError
-from temporalio.common import WorkflowIDConflictPolicy
-from temporalio.exceptions import ApplicationError, WorkflowAlreadyStartedError
+from temporalio.exceptions import ApplicationError
 
 from ymir.agents import temporal_triage_publication as publication
-from ymir.agents.temporal_triage_analysis import TriageAnalysisRequest, create_analysis_worker
+from ymir.agents.temporal_triage_analysis import create_analysis_worker
+from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow, prepare_triage_intent
 
 ADDRESS = os.getenv("TEMPORAL_TEST_ADDRESS")
 REDIS_URL = os.getenv("TEMPORAL_TEST_REDIS_URL")
@@ -48,6 +48,13 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
     monkeypatch.setenv("REDIS_URL", REDIS_URL)
     monkeypatch.setenv("DRY_RUN", "false")
     monkeypatch.setenv("JIRA_DRY_RUN", "false")
+    monkeypatch.setenv("CHAT_MODEL", "test")
+    monkeypatch.delenv("CHAT_MODEL_TRIAGE", raising=False)
+    monkeypatch.setenv("AUTO_CHAIN", "true")
+    monkeypatch.setenv("TRIAGE_ENQUEUE_REPRODUCER", "false")
+    monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
+    monkeypatch.setenv("TEMPORAL_TRIAGE_INLINE", "true")
+    monkeypatch.setenv("TEMPORAL_TRIAGE_COORDINATION", "false")
     monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
     config = tmp_path / "rhel-config.json"
     config.write_text(json.dumps({"current_y_streams": {"9": "rhel-9.9"}, "current_z_streams": {}}))
@@ -167,24 +174,17 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
     flexmock(publication).should_receive("_enqueue_with_receipt").replace_with(enqueue_then_lose_response)
     client = await Client.connect(ADDRESS, plugins=[PydanticAIPlugin()])
     queue = f"triage-publication-test-{uuid4().hex}"
-    request = TriageAnalysisRequest(ISSUE, {}, 10, user_triggered=True)
-    first = publication.TriagePublicationRequest(request, uuid4().hex, dry_run=False)
-    triage_only = publication.TriagePublicationRequest(
-        TriageAnalysisRequest(ISSUE, {}, 10, user_triggered=True, triage_only_requested=True),
-        uuid4().hex,
-        dry_run=False,
+    issue_handle = client.get_workflow_handle_for(TriageIngressWorkflow.run, triage_issue_workflow_id(ISSUE))
+    first = TriageIntent(ISSUE, uuid4().hex, "cli", dry_run=False, user_triggered=True)
+    preview = TriageIntent(ISSUE, uuid4().hex, "cli", dry_run=True, user_triggered=True)
+    triage_only = TriageIntent(
+        ISSUE, uuid4().hex, "jira", dry_run=False, user_triggered=True, triage_only=True
     )
-    preview = publication.TriagePublicationRequest(request, uuid4().hex)
+    first_request = await prepare_triage_intent(first)
+    triage_only_request = await prepare_triage_intent(triage_only)
 
-    async def start(command):
-        return await client.start_workflow(
-            publication.TriagePublicationWorkflow.run,
-            command,
-            id=command.workflow_id(),
-            task_queue=queue,
-            execution_timeout=timedelta(seconds=70),
-            id_conflict_policy=WorkflowIDConflictPolicy.FAIL,
-        )
+    async def submit(intent, *, wait=True):
+        return await asyncio.wait_for(submit_triage_intent(client, intent, task_queue=queue, wait=wait), 25)
 
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -197,108 +197,103 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
                 while not server.started:
                     await asyncio.sleep(0.01)
             async with await create_analysis_worker(
-                client, queue, FunctionModel(model_response), publication=True
+                client, queue, FunctionModel(model_response), publication=True, ingress=True
             ):
-                first_handle = await start(first)
+                assert await submit(first, wait=False) == "accepted"
                 await asyncio.wait_for(model_started.wait(), timeout=15)
-                assert first_handle.id == f"triage/{ISSUE}"
-                assert preview.workflow_id() == triage_only.workflow_id() == first_handle.id
-                # Temporal rejects the competing start even on a different
-                # task queue while the issue's workflow is running.
-                with pytest.raises(WorkflowAlreadyStartedError):
-                    await client.start_workflow(
-                        publication.TriagePublicationWorkflow.run,
-                        preview,
-                        id=preview.workflow_id(),
-                        task_queue=f"{queue}-second-worker",
-                        id_conflict_policy=WorkflowIDConflictPolicy.FAIL,
-                    )
+                run_id = (await issue_handle.describe()).run_id
+                run = client.get_workflow_handle_for(
+                    TriageIngressWorkflow.run, issue_handle.id, run_id=run_id
+                )
+                assert await submit(preview, wait=False) == "accepted"
+                assert (await issue_handle.describe()).run_id == run_id
                 assert len(model_calls) == 1
-                next_preview = asyncio.create_task(publication.run_triage_request(client, preview, queue))
                 continue_first_model.set()
-                result = await first_handle.result()
-                assert result.analysis.state.triage_result.resolution == Resolution.BACKPORT
-                assert result.destinations == [FIX_QUEUE]
+                update = run.get_update_handle(first.update_id, result_type=dict)
+                result = await asyncio.wait_for(update.result(), timeout=20)
+                assert result["status"] == "completed"
+                assert result["output"]["resolution"] == Resolution.BACKPORT.value
                 assert len(model_calls) == 2
                 assert attempts["fields"] == 2 and accepted["fields"] == 1
-                assert attempts["labels"] == 1
+                assert attempts["labels"] == 2
                 assert labels == {"fixture-label", JiraLabels.TRIAGED_BACKPORT.value}
-                assert attempts[first.operation_id(f"handoff:{FIX_QUEUE}")] == 2
+                assert attempts[first_request.operation_id(f"handoff:{FIX_QUEUE}")] == 2
                 assert len(popped) == 1
                 assert popped[0].user_triggered is True
                 assert popped[0].metadata["jira_issue"] == ISSUE
                 assert popped[0].metadata["target_branch"] == "c9s"
-                assert accepted[first.operation_id("acknowledgement")] == 1
-                assert accepted[first.operation_id("finding")] == 1
-                assert '"mode": "full"' in comments[first.operation_id("acknowledgement")]
-                assert '"planned_follow_up": ["backport"]' in comments[first.operation_id("finding")]
+                assert accepted[first_request.operation_id("acknowledgement")] == 1
+                assert accepted[first_request.operation_id("finding")] == 1
+                assert '"mode": "full"' in comments[first_request.operation_id("acknowledgement")]
+                assert '"planned_follow_up": ["backport"]' in comments[first_request.operation_id("finding")]
 
-                repeated = await publication.run_triage_request(client, first, queue)
-                assert repeated == result
+                assert await submit(first) == result
                 assert len(model_calls) == 2
 
                 continue_preview_model.set()
-                preview_result = await next_preview
+                outcomes = await asyncio.wait_for(run.result(), timeout=20)
+                assert [outcome.status for outcome in outcomes] == ["completed", "completed"]
+                preview_result = outcomes[1].preview
                 assert preview_result.dry_run and preview_result.destinations == [FIX_QUEUE]
                 assert len(comments) == 2 and len(popped) == 1
-                assert attempts["fields"] == 2 and attempts["labels"] == 1
+                assert attempts["fields"] == 2 and attempts["labels"] == 2
 
-                later_result = await (await start(triage_only)).result()
-                assert later_result.destinations == []
-                assert '"mode": "triage-only"' in comments[triage_only.operation_id("acknowledgement")]
-                assert accepted[triage_only.operation_id("finding")] == 1
+                later_result = await submit(triage_only)
+                assert later_result["status"] == "completed"
+                await asyncio.wait_for(issue_handle.result(), timeout=20)
+                assert (
+                    '"mode": "triage-only"' in comments[triage_only_request.operation_id("acknowledgement")]
+                )
+                assert accepted[triage_only_request.operation_id("finding")] == 1
                 assert labels == {
                     "fixture-label",
                     JiraLabels.TRIAGE_ONLY.value,
                     JiraLabels.TRIAGED_DEFERRED_BACKPORT.value,
                 }
                 assert len(popped) == 1 and len(model_calls) == 6
-                assert await publication.run_triage_request(client, first, queue) == result
+                assert (await submit(first))["status"] == "duplicate"
+                await asyncio.wait_for(issue_handle.result(), timeout=20)
                 assert len(model_calls) == 6
 
-                # Even a low-level start that bypasses the receipt lookup
-                # cannot execute a completed request again.
-                duplicate = await start(first)
-                with pytest.raises(WorkflowFailureError) as duplicate_failure:
-                    await duplicate.result()
-                assert duplicate_failure.value.cause.type == publication.REQUEST_ALREADY_STARTED
-                assert len(model_calls) == 6
-
-                blocked = publication.TriagePublicationRequest(request, uuid4().hex, dry_run=False)
-                operation = blocked.operation_id(f"handoff:{FIX_QUEUE}")
+                blocked = TriageIntent(ISSUE, uuid4().hex, "jira", dry_run=False, user_triggered=True)
+                blocked_request = await prepare_triage_intent(blocked)
+                operation = blocked_request.operation_id(f"handoff:{FIX_QUEUE}")
                 blocked_operations.add(operation)
-                blocked_handle = await start(blocked)
+                assert (await submit(blocked))["status"] == "failed"
                 with pytest.raises(WorkflowFailureError) as failure:
-                    await blocked_handle.result()
-                assert "Injected terminal handoff failure" in str(failure.value.cause.cause)
+                    await asyncio.wait_for(issue_handle.result(), timeout=20)
+                assert "Injected terminal handoff failure" in str(failure.value.cause.cause.cause)
                 assert len(model_calls) == 8 and len(popped) == 1
                 assert JiraLabels.TRIAGE_ONLY.value not in labels
-                assert '"mode": "full"' in comments[blocked.operation_id("acknowledgement")]
-                assert accepted[blocked.operation_id("finding")] == 1
+                assert '"mode": "full"' in comments[blocked_request.operation_id("acknowledgement")]
+                assert accepted[blocked_request.operation_id("finding")] == 1
 
-                history = await blocked_handle.fetch_history()
+                history = await issue_handle.fetch_history()
                 scheduled = next(
                     event.activity_task_scheduled_event_attributes
                     for event in history.events
                     if event.activity_task_scheduled_event_attributes.activity_id == operation
                 )
                 blocked_operations.remove(operation)
-                await client.workflow_service.reset_workflow_execution(
+                reset = await client.workflow_service.reset_workflow_execution(
                     ResetWorkflowExecutionRequest(
                         namespace=client.namespace,
                         workflow_execution=WorkflowExecution(
-                            workflow_id=blocked_handle.id, run_id=blocked_handle.first_execution_run_id
+                            workflow_id=issue_handle.id, run_id=history.run_id
                         ),
                         workflow_task_finish_event_id=scheduled.workflow_task_completed_event_id,
                         request_id=uuid4().hex,
                         reason="Recover after the injected handoff failure",
                     )
                 )
-                resumed = await publication.run_triage_request(client, blocked, queue)
-                assert resumed.destinations == [FIX_QUEUE]
+                resumed = client.get_workflow_handle_for(
+                    TriageIngressWorkflow.run, issue_handle.id, run_id=reset.run_id
+                )
+                [outcome] = await asyncio.wait_for(resumed.result(), timeout=20)
+                assert outcome.request_id == blocked.request_id and outcome.status == "completed"
                 assert len(popped) == 2 and popped[0].execution_id != popped[1].execution_id
                 assert len(model_calls) == 8
-                assert accepted[blocked.operation_id("finding")] == 1
+                assert accepted[blocked_request.operation_id("finding")] == 1
 
             async with redis_client(REDIS_URL) as redis:
                 assert await fix_await(redis.llen(FIX_QUEUE)) == 0

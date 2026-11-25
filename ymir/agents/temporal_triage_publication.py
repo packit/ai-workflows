@@ -57,7 +57,8 @@ class TriagePublicationRequest:
     dry_run: bool = True
     enqueue_reproducer: bool = False
     provision_pod: bool = False
-    coordinate: bool = False
+    # Preserve the mode recorded in older Temporal activity results for replay.
+    coordinate: bool = True
 
     def operation_id(self, step: str) -> str:
         identity = ["ymir-triage-v1", self.analysis.jira_issue.upper(), self.request_id, step]

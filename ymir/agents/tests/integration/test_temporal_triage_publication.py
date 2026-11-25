@@ -27,6 +27,7 @@ from temporalio.api.workflowservice.v1 import ResetWorkflowExecutionRequest
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.exceptions import ApplicationError
 
+from ymir.agents import temporal_package_coordination as coordination
 from ymir.agents import temporal_triage_publication as publication
 from ymir.agents.temporal_triage_analysis import create_analysis_worker
 from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow, prepare_triage_intent
@@ -54,7 +55,6 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
     monkeypatch.setenv("TRIAGE_ENQUEUE_REPRODUCER", "false")
     monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
     monkeypatch.setenv("TEMPORAL_TRIAGE_INLINE", "true")
-    monkeypatch.setenv("TEMPORAL_TRIAGE_COORDINATION", "false")
     monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
     config = tmp_path / "rhel-config.json"
     config.write_text(json.dumps({"current_y_streams": {"9": "rhel-9.9"}, "current_z_streams": {}}))
@@ -67,7 +67,9 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
     attempts = Counter()
     popped = []
     model_calls = []
-    blocked_operations = set()
+    blocked_requests = set()
+    coordination_runs = {}
+    allow_coordination = asyncio.Event()
     model_started = asyncio.Event()
     continue_first_model = asyncio.Event()
     continue_preview_model = asyncio.Event()
@@ -89,6 +91,20 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
                 "fixVersions": [{"name": "rhel-9.9"}],
             },
         }
+
+    async def jira_get(path, params=None):
+        if path == "myself":
+            return {"accountId": "triage-bot"}
+        if path == f"issue/{ISSUE}":
+            return get_jira_details(ISSUE)
+        assert path == f"issue/{ISSUE}/comment"
+        records = [{"body": body, "author": {"accountId": "triage-bot"}} for body in comments.values()]
+        return {"comments": records, "startAt": 0, "total": len(records)}
+
+    async def jira_search(path, **_kwargs):
+        assert path == "search/jql"
+        await allow_coordination.wait()
+        return {"issues": [get_jira_details(ISSUE)], "isLast": True}
 
     @gateway.tool()
     def find_jira_comment_operation(issue_key: str, operation_id: str) -> dict:
@@ -161,8 +177,6 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
 
     async def enqueue_then_lose_response(item):
         attempts[item.operation_id] += 1
-        if item.operation_id in blocked_operations:
-            raise ApplicationError("Injected terminal handoff failure", non_retryable=True)
         written = await actual_enqueue(item)
         if written == 1:
             async with redis_client(REDIS_URL) as redis:
@@ -172,7 +186,20 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
         return written
 
     flexmock(publication).should_receive("_enqueue_with_receipt").replace_with(enqueue_then_lose_response)
+    flexmock(coordination).should_receive("jira_api_get").replace_with(jira_get)
+    flexmock(coordination).should_receive("jira_api_post").replace_with(jira_search)
     client = await Client.connect(ADDRESS, plugins=[PydanticAIPlugin()])
+    actual_start = client.start_workflow
+
+    async def start_coordinator(*args, start_signal_args, **kwargs):
+        [item] = start_signal_args
+        if item.request.request_id in blocked_requests:
+            raise ApplicationError("Injected terminal coordination submission failure", non_retryable=True)
+        handle = await actual_start(*args, start_signal_args=start_signal_args, **kwargs)
+        coordination_runs[item.request.request_id] = handle
+        return handle
+
+    flexmock(client).should_receive("start_workflow").replace_with(start_coordinator)
     queue = f"triage-publication-test-{uuid4().hex}"
     issue_handle = client.get_workflow_handle_for(TriageIngressWorkflow.run, triage_issue_workflow_id(ISSUE))
     first = TriageIntent(ISSUE, uuid4().hex, "cli", dry_run=False, user_triggered=True)
@@ -216,6 +243,10 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
                 assert len(model_calls) == 2
                 assert attempts["fields"] == 2 and accepted["fields"] == 1
                 assert attempts["labels"] == 2
+                assert labels == {"fixture-label", coordination.WAITING}
+                assert not popped
+                allow_coordination.set()
+                await asyncio.wait_for(coordination_runs[first.request_id].result(), timeout=20)
                 assert labels == {"fixture-label", JiraLabels.TRIAGED_BACKPORT.value}
                 assert attempts[first_request.operation_id(f"handoff:{FIX_QUEUE}")] == 2
                 assert len(popped) == 1
@@ -236,7 +267,7 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
                 preview_result = outcomes[1].preview
                 assert preview_result.dry_run and preview_result.destinations == [FIX_QUEUE]
                 assert len(comments) == 2 and len(popped) == 1
-                assert attempts["fields"] == 2 and attempts["labels"] == 2
+                assert attempts["fields"] == 2 and attempts["labels"] == 4
 
                 later_result = await submit(triage_only)
                 assert later_result["status"] == "completed"
@@ -257,12 +288,14 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
 
                 blocked = TriageIntent(ISSUE, uuid4().hex, "jira", dry_run=False, user_triggered=True)
                 blocked_request = await prepare_triage_intent(blocked)
-                operation = blocked_request.operation_id(f"handoff:{FIX_QUEUE}")
-                blocked_operations.add(operation)
+                operation = blocked_request.operation_id("package-stream")
+                blocked_requests.add(blocked.request_id)
                 assert (await submit(blocked))["status"] == "failed"
                 with pytest.raises(WorkflowFailureError) as failure:
                     await asyncio.wait_for(issue_handle.result(), timeout=20)
-                assert "Injected terminal handoff failure" in str(failure.value.cause.cause.cause)
+                assert "Injected terminal coordination submission failure" in str(
+                    failure.value.cause.cause.cause
+                )
                 assert len(model_calls) == 8 and len(popped) == 1
                 assert JiraLabels.TRIAGE_ONLY.value not in labels
                 assert '"mode": "full"' in comments[blocked_request.operation_id("acknowledgement")]
@@ -274,7 +307,7 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
                     for event in history.events
                     if event.activity_task_scheduled_event_attributes.activity_id == operation
                 )
-                blocked_operations.remove(operation)
+                blocked_requests.remove(blocked.request_id)
                 reset = await client.workflow_service.reset_workflow_execution(
                     ResetWorkflowExecutionRequest(
                         namespace=client.namespace,
@@ -283,7 +316,7 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
                         ),
                         workflow_task_finish_event_id=scheduled.workflow_task_completed_event_id,
                         request_id=uuid4().hex,
-                        reason="Recover after the injected handoff failure",
+                        reason="Recover after the injected coordination submission failure",
                     )
                 )
                 resumed = client.get_workflow_handle_for(
@@ -291,6 +324,7 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
                 )
                 [outcome] = await asyncio.wait_for(resumed.result(), timeout=20)
                 assert outcome.request_id == blocked.request_id and outcome.status == "completed"
+                await asyncio.wait_for(coordination_runs[blocked.request_id].result(), timeout=20)
                 assert len(popped) == 2 and popped[0].execution_id != popped[1].execution_id
                 assert len(model_calls) == 8
                 assert accepted[blocked_request.operation_id("finding")] == 1

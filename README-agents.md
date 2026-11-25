@@ -578,12 +578,11 @@ Redis triage work before cutting over an existing OpenShift installation.
 
 #### Coordinate a package stream in Temporal
 
-Set `TEMPORAL_TRIAGE_COORDINATION=true` on the shared controller. Start with a package and stream whose participating
-tickets can be triaged by Temporal or whose existing triage results can be
-read. Reconcile old rebase sibling markers and outstanding downstream work
+The shared controller coordinates downstream fix handoffs for new triage
+requests. Reconcile old rebase sibling markers and outstanding downstream work
 before handing ownership to the new workflow.
 
-A completed triage run writes its finding and
+When a live triage run has a fix to hand off, it writes its finding and
 `ymir_triage_waiting_for_coordination`, releases its execution pod, and signals
 the shared `PackageStreamWorkflow`. The workflow exposes its finite sibling
 snapshot, pending issues, and blockers in the `status` query. Jira discovery
@@ -641,8 +640,8 @@ missing record, a changed MR head, or an incompatible approach keeps the
 issue pending. The legacy workers and pipelines need a signer to publish these
 records when they validate a higher-stream fix.
 
-After recreating the cluster, start the shared controller with coordination and
-admissions enabled. Run the recovery command in the controller so it uses the
+After recreating the cluster, start the shared controller with admissions
+enabled. Run the recovery command in the controller so it uses the
 deployment's Temporal settings and Jira credentials. Recovery reads Jira
 findings and resubmits waiting issues that lack an active owner. For a partly
 delivered handoff, inspect the existing Jira state and GitLab MR before retrying.

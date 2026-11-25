@@ -58,7 +58,6 @@ async def prepare_triage_intent(intent: TriageIntent) -> TriagePublicationReques
         dry_run=intent.dry_run,
         enqueue_reproducer=os.getenv("TRIAGE_ENQUEUE_REPRODUCER", "true").lower() == "true",
         provision_pod=os.getenv("TEMPORAL_TRIAGE_INLINE", "").lower() != "true",
-        coordinate=os.getenv("TEMPORAL_TRIAGE_COORDINATION", "").lower() == "true",
     )
 
 

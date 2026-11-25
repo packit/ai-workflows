@@ -267,7 +267,6 @@ async def test_rebuild_dependency_is_checked_only_in_shared_planner():
 @pytest.mark.asyncio
 async def test_recovery_resumes_waiting_intent_and_preserves_manual_override(monkeypatch):
     monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
-    monkeypatch.setenv("TEMPORAL_TRIAGE_COORDINATION", "true")
     accepted = []
 
     async def jira(path, params=None):
@@ -308,7 +307,6 @@ async def test_recovery_resumes_waiting_intent_and_preserves_manual_override(mon
 @pytest.mark.asyncio
 async def test_publication_records_the_handoff_for_the_coordinator_without_dispatch():
     work = make_work("RHEL-1")
-    work.request.coordinate = True
     work.request.analysis.follow_up_requested = True
     result = TriageAnalysisResult(work.state, follow_up_requested=True)
     written = []

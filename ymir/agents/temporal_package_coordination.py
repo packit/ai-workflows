@@ -1,4 +1,4 @@
-"""Package-stream ownership and dependency gates for the Temporal triage canary."""
+"""Package-stream ownership and dependency gates for Temporal triage."""
 
 import json
 import os
@@ -780,11 +780,8 @@ class PackageStreamActivities:
 
 async def recover_package_coordination(client, queue: str) -> dict[str, str]:
     """Recover waiting issue intent from Jira in a fresh Temporal namespace."""
-    if (
-        not temporal_triage_accepts_requests()
-        or os.getenv("TEMPORAL_TRIAGE_COORDINATION", "").lower() != "true"
-    ):
-        raise ValueError("Enable Temporal triage coordination and admissions before recovery")
+    if not temporal_triage_accepts_requests():
+        raise ValueError("Enable Temporal triage admissions before recovery")
     account = (await jira_api_get("myself"))["accountId"]
     recovered = {}
     waiting = await _search_members(

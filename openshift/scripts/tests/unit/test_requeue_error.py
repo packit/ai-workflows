@@ -153,7 +153,7 @@ def test_main_clears_labels_before_requeue(monkeypatch, capsys, mode) -> None:
     monkeypatch.setattr(
         sys, "argv", ["requeue_error.py", "42"] + (["--dry-run"] if mode == "dry-run" else [])
     )
-    entry = {"queue": "backport_queue", "task": {"metadata": {"issue": "RHEL-1"}, "attempts": 3}}
+    entry = {"queue": "triage_queue", "task": {"metadata": {"issue": "RHEL-1"}, "attempts": 3}}
     if mode == "missing-issue":
         entry["task"]["metadata"] = {}
     flexmock(requeue_error).should_receive("fetch_via_oc").and_return("blob")
@@ -168,7 +168,7 @@ def test_main_clears_labels_before_requeue(monkeypatch, capsys, mode) -> None:
         enqueue.never()
     else:
         cleanup.with_args("RHEL-1", "mcp-gateway", set).once().ordered()
-        enqueue.with_args("valkey", "error_list", "backport_queue_todo", "raw", str, 42).and_return(
+        enqueue.with_args("valkey", "error_list", "triage_queue_todo", "raw", str, 42).and_return(
             1
         ).once().ordered()
     if mode in ("cleanup-failed", "missing-issue"):
@@ -231,20 +231,3 @@ def test_labels_to_clear_triage_includes_downstream() -> None:
 
 def test_labels_to_clear_returns_empty_for_unknown_queue() -> None:
     assert _labels_to_clear("unknown_queue") == set()
-
-
-def test_historical_triage_error_is_removed_only_after_temporal_acceptance(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["requeue_error.py", "42"])
-    task = {"metadata": {"issue": "RHEL-1", "force_cve_triage": True}}
-    flexmock(requeue_error).should_receive("fetch_via_oc").and_return("blob")
-    flexmock(requeue_error).should_receive("find_entry").and_return(
-        ("raw", {"queue": "triage_queue", "task": task})
-    )
-    flexmock(requeue_error).should_receive("clear_ymir_labels").once().ordered()
-    flexmock(subprocess).should_receive("run").with_args(list, check=True, timeout=45).once().ordered()
-    flexmock(requeue_error).should_receive("run_valkey_cli").with_args(
-        "valkey", ["-x", "LREM", "error_list", "1"], stdin=b"raw"
-    ).once().ordered()
-    flexmock(requeue_error).should_receive("atomic_requeue").never()
-
-    requeue_error.main()

@@ -535,9 +535,11 @@ to provision pods. The execution pods use the existing worker and gateway images
    configuration.
 2. For an existing Redis installation, suspend the old fetcher and sweep
    CronJobs and let outstanding Jobs finish. Stop any other legacy triage
-   queue producers and let the old triage workers finish queued and in-flight
-   requests. Scale `deployment/triage-agent` to zero. After the workers shut
-   down, verify that `triage_queue`, `triage_queue_todo`, and any parked
+   queue producers. Resolve or retire historical triage failures in
+   `error_list` while the old triage workers are available for retries. Let
+   the workers finish queued and in-flight requests, then scale
+   `deployment/triage-agent` to zero. After shutdown, verify that
+   `triage_queue`, `triage_queue_todo`, and any parked
    `triage_queue:temporal-paused` and `triage_queue_todo:temporal-paused` lists
    are empty. Shutdown can put an unfinished request back. Use
    `make show-triage-queue` to check the two input queues.

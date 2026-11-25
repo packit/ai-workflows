@@ -48,7 +48,6 @@ import re
 import secrets
 import subprocess
 import sys
-from hashlib import sha256
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -371,34 +370,6 @@ def main() -> None:
     old_attempts = task.get("attempts", 0)
     labels_to_remove = _labels_to_clear(target_queue)
     target_queue, task_json = prepare_requeue_task(task, target_queue, args.user_triggered)
-
-    if _workflow_from_queue(target_queue) == "triage":
-        print(f"Submitting historical triage error {args.error_id} ({jira_issue}) to Temporal.")
-        if args.dry_run:
-            return
-        clear_ymir_labels(jira_issue, args.jira_deployment, labels_to_remove)
-        args_for_submit = [
-            "oc",
-            "exec",
-            "deployment/triage-controller",
-            "--",
-            "python3",
-            "-m",
-            "ymir.agents.temporal_triage_admin",
-            "submit",
-            jira_issue,
-            "--request-id",
-            f"error:{sha256(raw.encode()).hexdigest()}",
-        ]
-        if metadata.get("force_cve_triage"):
-            args_for_submit.append("--force-cve-triage")
-        if task.get("triage_only"):
-            args_for_submit.append("--triage-only")
-        if args.user_triggered:
-            args_for_submit.append("--user-triggered")
-        subprocess.run(args_for_submit, check=True, timeout=45)  # noqa: S603
-        run_valkey_cli(args.deployment, ["-x", "LREM", args.queue, "1"], stdin=raw.encode())
-        return
 
     print(
         f"Requeuing error_id={args.error_id} ({jira_issue}) onto '{target_queue}' "

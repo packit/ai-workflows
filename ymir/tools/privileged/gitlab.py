@@ -56,28 +56,10 @@ logger = logging.getLogger(__name__)
 
 _STDERR_HINT_MAX = 500
 
-# Transient network failures observed in clone/fetch stderr (gateway logs):
-# "RPC failed; curl 56 Recv failure: Connection reset by peer",
-# "fetch-pack: unexpected disconnect while reading sideband packet",
-# "fatal: early EOF". Local-state failures (missing refs, pack rename
-# errors, template collisions) are not transient and must not be retried —
-# notably "fetch-pack: invalid index-pack output", which also appears as a
-# trailing symptom of non-retryable local filesystem failures.
-_TRANSIENT_GIT_ERROR_RE = re.compile(
-    r"connection reset by peer"
-    r"|connection timed out"
-    r"|could not resolve host"
-    r"|early eof"
-    r"|unexpected disconnect"
-    r"|rpc failed; curl \d+"
-    r"|recv failure",
-    re.IGNORECASE,
-)
-
-
-def _is_transient_git_failure(stderr: str | None) -> bool:
-    """Return True when git stderr indicates a transient network failure."""
-    return bool(_TRANSIENT_GIT_ERROR_RE.search(stderr or ""))
+# Git subprocess retries (clone/fetch) deliberately retry on ~all failures,
+# not just network symptoms: the stderr text is too unreliable to classify
+# (the same message can trail both transient and permanent causes), and the
+# cost of retrying a permanent failure a few times is acceptable.
 
 
 def _git_subprocess_error(stderr: str | None, message: str) -> ToolError:
@@ -96,6 +78,7 @@ async def _run_git_cmd(
     env: dict[str, str] | None = None,
     timeout: float | None = 3600,
     retry_transient: bool = False,
+    retry_cleanup_path: Path | None = None,
 ) -> str | None:
     """Run a git subprocess with structured logging, timing, and error handling.
 
@@ -105,11 +88,14 @@ async def _run_git_cmd(
         cwd: Working directory for the subprocess.
         env: Environment variables to pass to the subprocess.
         timeout: Timeout in seconds, or None for no timeout.
-        retry_transient: Retry transient network failures (connection resets,
-            early EOF, unexpected disconnects) with exponential backoff,
+        retry_transient: Retry failed commands with exponential backoff,
+            accepting that a permanent failure costs a few extra attempts,
             mirroring the HTTP retry policy in aiohttp_get_with_retries.
-            Local-state failures (missing refs, pack rename errors, template
-            collisions) are never retried.
+            Used for clone/fetch, whose failures are mostly network-related
+            and whose stderr cannot be reliably classified as transient.
+        retry_cleanup_path: Remove this directory before each retry. Needed
+            for `git clone`, whose failed attempts leave a populated
+            destination that git refuses to clone into again.
 
     Raises:
         ToolError: If the command fails or times out.
@@ -130,10 +116,15 @@ async def _run_git_cmd(
             raise ToolError(f"{label} timed out after {int(timeout)}s") from None
         elapsed = time.monotonic() - t0
         if returncode:
-            if retry_transient and _is_transient_git_failure(stderr) and attempt < attempts - 1:
+            if retry_transient and attempt < attempts - 1:
+                if retry_cleanup_path is not None:
+                    # A failed `git clone` leaves a populated destination and
+                    # git refuses to clone into a non-empty directory — remove
+                    # the partial clone so the retry starts clean.
+                    await asyncio.to_thread(_remove_existing_clone_path, retry_cleanup_path)
                 delay = GIT_SUBPROCESS_RETRY_BACKOFF_BASE * (2**attempt) + random.uniform(0, 1)  # noqa: S311
                 logger.warning(
-                    "%s failed with a transient network error (exit_code=%d, elapsed=%.1fs), "
+                    "%s failed (exit_code=%d, elapsed=%.1fs), "
                     "retrying in %.1fs (attempt %d/%d)",
                     label,
                     returncode,
@@ -752,6 +743,7 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
                     label=f"git clone {safe_url}",
                     env=git_env,
                     retry_transient=True,
+                    retry_cleanup_path=clone_path,
                 )
 
         return StringToolOutput(result=f"Successfully cloned the specified repository to {clone_path}")

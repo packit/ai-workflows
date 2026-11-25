@@ -1,10 +1,13 @@
 """Tools for working with upstream repositories and fix URLs.
 
 GitHub API Access:
-These tools call privileged MCP tools (get_github_pull_request, get_github_compare)
-to fetch GitHub information. The privileged tools run in the MCP gateway with
-GITHUB_READONLY_TOKEN authentication, isolated from agent processes that have
-shell execution capabilities.
+When resolving fix URLs, GitHub metadata (PR head SHA, compare commit
+lists) is fetched through the privileged MCP tools get_github_pull_request
+and get_github_compare, running in the MCP gateway with
+GITHUB_READONLY_TOKEN — either injected as github_tools or via
+MCP_GATEWAY_URL. When neither is available (standalone unprivileged
+gateway), the same public API is queried directly and unauthenticated
+under the shared 30s timeout.
 
 SECURITY: Agent processes never have direct access to GITHUB_READONLY_TOKEN,
 preventing credential leakage via prompt injection attacks.

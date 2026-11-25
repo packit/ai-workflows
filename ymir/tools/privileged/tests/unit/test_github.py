@@ -322,6 +322,70 @@ class TestGetGithubPatchTool:
         assert captured["timeout"] is constants.GITHUB_AIOHTTP_TIMEOUT
 
 
+class TestGithubMetadataToolTimeouts:
+    """Metadata tools run under caller deadlines (extract tool: 120s) and
+    must keep the tight per-request cap, unlike the patch fetch tools."""
+
+    @staticmethod
+    def _capture_session(monkeypatch, json_data):
+        captured = {}
+
+        @asynccontextmanager
+        async def fake_get(url, **kwargs):
+            yield flexmock(
+                json=lambda: _async_return(json_data),
+                raise_for_status=lambda: None,
+                status=200,
+            )
+
+        class FakeSession:
+            def __init__(self, timeout=None, **kwargs):
+                captured["timeout"] = timeout
+                self.get = fake_get
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_pr_tool_uses_tight_metadata_timeout(self, monkeypatch):
+        captured = self._capture_session(monkeypatch, {"head": {"sha": "abc"}, "state": "open"})
+        tool = GetGithubPullRequestTool(options={"working_directory": None})
+
+        result = await tool.run(
+            input=GetGithubPullRequestToolInput(pr_url="https://github.com/owner/repo/pull/42")
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert result.result["head_sha"] == "abc"
+        assert captured["timeout"] is constants.GITHUB_METADATA_AIOHTTP_TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_compare_tool_uses_tight_metadata_timeout(self, monkeypatch):
+        captured = self._capture_session(monkeypatch, {"commits": [{"sha": "abc"}]})
+        tool = GetGithubCompareTool(options={"working_directory": None})
+
+        result = await tool.run(
+            input=GetGithubCompareToolInput(
+                repo_url="https://github.com/owner/repo", base_ref="v1.0", target_ref="v1.1"
+            )
+        ).middleware(GlobalTrajectoryMiddleware(pretty=True))
+
+        assert result.result["commits"] == ["abc"]
+        assert captured["timeout"] is constants.GITHUB_METADATA_AIOHTTP_TIMEOUT
+
+    def test_metadata_timeout_fits_extract_deadline_with_retries(self):
+        """Worst case (3 attempts + backoff) must stay under the extract tool's
+        120s overall deadline."""
+        timeout = constants.GITHUB_METADATA_AIOHTTP_TIMEOUT
+        worst_case = 3 * timeout.total + 2 * constants.AIOHTTP_RETRY_BACKOFF_BASE * (2**2)
+        assert worst_case < 120
+
+
 class TestGetGithubPatchFullTool:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

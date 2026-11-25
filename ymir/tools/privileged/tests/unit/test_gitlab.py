@@ -1,5 +1,7 @@
 import asyncio
+import json
 import os
+import re
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,10 +17,13 @@ from ogr.abstract import PRStatus
 from ogr.services.gitlab import GitlabService
 from ogr.services.gitlab.project import GitlabProject
 
+from ymir.common import constants, http_utils
 from ymir.common.constants import GITLAB_MR_PAGE_SIZE
 from ymir.common.models import OpenMergeRequestResult
+from ymir.tools.privileged import gitlab as gitlab_module
 from ymir.tools.privileged import reviewer_resolver as _resolver
 from ymir.tools.privileged.gitlab import (
+    MAX_PATCH_CONTENT_LENGTH,
     AddBlockingMergeRequestCommentTool,
     AddMergeRequestCommentTool,
     AddMergeRequestLabelsTool,
@@ -28,6 +33,8 @@ from ymir.tools.privileged.gitlab import (
     ForkRepositoryTool,
     GetAuthorizedCommentsFromMergeRequestTool,
     GetFailedPipelineJobsFromMergeRequestTool,
+    GetPatchFromUrlFullTool,
+    GetPatchFromUrlTool,
     GetRemoteBranchHeadTool,
     ListProjectMergeRequestsTool,
     OpenMergeRequestTool,
@@ -36,6 +43,7 @@ from ymir.tools.privileged.gitlab import (
     ResolveReviewersTool,
     RetryPipelineJobTool,
     SetMergeRequestReviewersTool,
+    _get_api_diff_url,
     _get_git_auth_args,
     _parse_merge_request_url,
     _remove_existing_clone_path,
@@ -1798,3 +1806,465 @@ async def test_resolve_qe_reviewers_tool():
     flexmock(_resolver).should_receive("resolve_qe_reviewers").replace_with(_mock_resolve)
     result = await ResolveQeReviewersTool().run(input={"package": "bash", "dist_git_branch": "c10s"})
     assert result.result == [99]
+
+
+# ---------------------------------------------------------------------------
+# GetPatchFromUrlTool / GetPatchFromUrlFullTool
+# ---------------------------------------------------------------------------
+
+PRIVATE_COMMIT_PATCH_URL = "https://gitlab.com/redhat/rhel/rpms/json-glib/-/commit/5e0be60e.patch"
+PRIVATE_COMMIT_API_URL = (
+    "https://gitlab.com/api/v4/projects/redhat%2Frhel%2Frpms%2Fjson-glib"
+    "/repository/commits/5e0be60e/diff?per_page=100"
+)
+PUBLIC_PATCH_URL = "https://gitlab.gnome.org/GNOME/json-glib/-/commit/7528ac2.patch"
+
+
+def _small_patch(body_lines: int = 1) -> str:
+    added = "".join(f"+line {i}\n" for i in range(body_lines))
+    return (
+        "diff --git a/file.c b/file.c\n"
+        "--- a/file.c\n"
+        "+++ b/file.c\n"
+        f"@@ -1,1 +1,{body_lines + 1} @@\n"
+        " context\n"
+        f"{added}"
+    )
+
+
+def _api_entry(old_path, new_path=None, diff="", a_mode="100644", b_mode="100644", **flags):
+    return {
+        "old_path": old_path,
+        "new_path": new_path or old_path,
+        "a_mode": a_mode,
+        "b_mode": b_mode,
+        "new_file": False,
+        "renamed_file": False,
+        "deleted_file": False,
+        "diff": diff,
+        **flags,
+    }
+
+
+def _diff_line_stats(body) -> dict:
+    """Commit stats matching a GitLab API diff body, as GitLab computes them."""
+    try:
+        entries = json.loads(body)
+        lines = [line for entry in entries for line in (entry.get("diff") or "").splitlines()]
+    except (ValueError, TypeError, AttributeError):
+        lines = []
+    return {
+        "additions": sum(line.startswith("+") for line in lines),
+        "deletions": sum(line.startswith("-") for line in lines),
+    }
+
+
+def _mock_patch_get(body, status=200, headers=None, content_length=None, charset=None, stats=None):
+    """Mock aiohttp GET for patch fetches; returns a list of (url, kwargs) per patch request.
+
+    Commit stats requests are answered with ``stats``, or with stats matching ``body``.
+    """
+    captured: list[tuple[str, dict]] = []
+    raw = body.encode() if isinstance(body, str) else body
+    commit_stats = stats if stats is not None else _diff_line_stats(body)
+
+    @asynccontextmanager
+    async def fake_get(url, **kwargs):
+        if re.search(r"/repository/commits/[0-9a-f]+$", url):
+
+            async def json_response():
+                return {"id": "abc", "stats": commit_stats}
+
+            yield flexmock(status=200, raise_for_status=lambda: None, json=json_response)
+            return
+        captured.append((url, kwargs))
+
+        async def text_response():
+            return raw.decode()
+
+        async def iter_chunked(size):
+            for start in range(0, len(raw), size):
+                yield raw[start : start + size]
+
+        yield flexmock(
+            status=status,
+            headers=headers or {},
+            text=text_response,
+            content_length=content_length,
+            charset=charset,
+            content=flexmock(iter_chunked=iter_chunked),
+        )
+
+    flexmock(aiohttp.ClientSession).should_receive("get").replace_with(fake_get)
+    return captured
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (PRIVATE_COMMIT_PATCH_URL, PRIVATE_COMMIT_API_URL),
+        (PRIVATE_COMMIT_PATCH_URL.replace("https://", "http://"), PRIVATE_COMMIT_API_URL),
+        (PUBLIC_PATCH_URL, PUBLIC_PATCH_URL),
+        (
+            "https://gitlab.com/libssh/libssh-mirror/-/commit/abc123.patch",
+            "https://gitlab.com/libssh/libssh-mirror/-/commit/abc123.patch",
+        ),
+        (
+            "https://gitlab.com/redhat/rhel/rpms/json-glib/-/merge_requests/1.patch",
+            "https://gitlab.com/redhat/rhel/rpms/json-glib/-/merge_requests/1.patch",
+        ),
+    ],
+)
+def test_get_api_diff_url(url, expected):
+    assert _get_api_diff_url(url) == expected
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_preview_is_truncated():
+    patch = _small_patch(body_lines=500)
+    assert len(patch) > MAX_PATCH_CONTENT_LENGTH
+    _mock_patch_get(patch)
+
+    output = await GetPatchFromUrlTool().run(input={"patch_url": PUBLIC_PATCH_URL})
+
+    assert output.result.startswith(patch[:MAX_PATCH_CONTENT_LENGTH])
+    assert f"of {len(patch)} total" in output.result
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_preview_returns_error_string_on_http_error():
+    _mock_patch_get("forbidden", status=403)
+
+    output = await GetPatchFromUrlTool().run(input={"patch_url": PUBLIC_PATCH_URL})
+
+    assert output.result == f"Error: Failed to fetch patch from {PUBLIC_PATCH_URL}: HTTP 403"
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_preview_returns_incomplete_content_without_raising(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    entries = [_api_entry("big.c", too_large=True), _api_entry("img.png", diff="Binary files differ\n")]
+    _mock_patch_get(json.dumps(entries), headers={"X-Next-Page": "2"})
+
+    output = await GetPatchFromUrlTool().run(input={"patch_url": PRIVATE_COMMIT_PATCH_URL})
+
+    assert "diff --git a/big.c b/big.c" in output.result
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_full_returns_untruncated_public_patch_without_token(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    patch = _small_patch(body_lines=500)
+    captured = _mock_patch_get(patch)
+
+    output = await GetPatchFromUrlFullTool().run(input={"patch_url": PUBLIC_PATCH_URL})
+
+    assert output.result == patch
+    url, kwargs = captured[0]
+    assert url == PUBLIC_PATCH_URL
+    assert "PRIVATE-TOKEN" not in kwargs["headers"]
+    assert kwargs["allow_redirects"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_full_decodes_declared_charset():
+    patch = _small_patch().replace("context", "contéxt")
+    _mock_patch_get(patch.encode("latin-1"), charset="latin-1")
+
+    output = await GetPatchFromUrlFullTool().run(input={"patch_url": PUBLIC_PATCH_URL})
+
+    assert output.result == patch
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_full_raises_on_http_error():
+    _mock_patch_get("forbidden", status=403)
+
+    with pytest.raises(ToolError, match="HTTP 403"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": PUBLIC_PATCH_URL})
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_full_rejects_non_patch_content():
+    _mock_patch_get("<html><body>Sign in</body></html>")
+
+    with pytest.raises(ToolError, match="does not look like a patch"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": PUBLIC_PATCH_URL})
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_full_rejects_declared_oversized_body():
+    _mock_patch_get(_small_patch(), content_length=gitlab_module.MAX_FULL_PATCH_CONTENT_LENGTH + 1)
+
+    with pytest.raises(ToolError, match=r"exceeds the \d+ byte limit"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": PUBLIC_PATCH_URL})
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_full_rejects_streamed_oversized_body(monkeypatch):
+    monkeypatch.setattr(gitlab_module, "MAX_FULL_PATCH_CONTENT_LENGTH", 10)
+    _mock_patch_get(_small_patch())
+
+    with pytest.raises(ToolError, match="exceeds the 10 byte limit"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": PUBLIC_PATCH_URL})
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_full_converts_private_api_diff(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    entries = [
+        _api_entry(
+            "0001-fix.patch",
+            a_mode="0",
+            new_file=True,
+            diff="@@ -0,0 +1,2 @@\n+From abc\n+Subject: fix\n",
+        ),
+        _api_entry("json-glib.spec", diff="@@ -1,1 +1,2 @@\n Name: json-glib\n+Patch0: 0001-fix.patch\n"),
+        _api_entry("old.patch", b_mode="0", deleted_file=True, diff="@@ -1,1 +0,0 @@\n-gone\n"),
+        _api_entry("a.txt", "b.txt", renamed_file=True),
+        _api_entry("build.sh", b_mode="100755"),
+    ]
+    captured = _mock_patch_get(json.dumps(entries))
+
+    output = await GetPatchFromUrlFullTool().run(input={"patch_url": PRIVATE_COMMIT_PATCH_URL})
+
+    url, kwargs = captured[0]
+    assert url == PRIVATE_COMMIT_API_URL
+    assert kwargs["headers"]["PRIVATE-TOKEN"] == "secret"
+    assert kwargs["allow_redirects"] is False
+    assert output.result == (
+        "diff --git a/0001-fix.patch b/0001-fix.patch\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/0001-fix.patch\n"
+        "@@ -0,0 +1,2 @@\n+From abc\n+Subject: fix\n"
+        "diff --git a/json-glib.spec b/json-glib.spec\n"
+        "--- a/json-glib.spec\n"
+        "+++ b/json-glib.spec\n"
+        "@@ -1,1 +1,2 @@\n Name: json-glib\n+Patch0: 0001-fix.patch\n"
+        "diff --git a/old.patch b/old.patch\n"
+        "deleted file mode 100644\n"
+        "--- a/old.patch\n"
+        "+++ /dev/null\n"
+        "@@ -1,1 +0,0 @@\n-gone\n"
+        "diff --git a/a.txt b/b.txt\n"
+        "rename from a.txt\n"
+        "rename to b.txt\n"
+        "diff --git a/build.sh b/build.sh\n"
+        "old mode 100644\n"
+        "new mode 100755\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_full_converted_api_diff_applies(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mod.txt").write_text("a\n")
+    (repo / "old.txt").write_text("gone\n")
+    (repo / "a.txt").write_text("same\n")
+    (repo / "build.sh").write_text("echo hi\n")
+    (repo / "both.sh").write_text("x\n")
+    (repo / "nonl.txt").write_text("x")
+    (repo / 'tab\tand"quote.txt').write_text("q\n")
+    (repo / "old name.txt").write_text("r\n")
+    for script in ("build.sh", "both.sh"):
+        (repo / script).chmod(0o644)
+    entries = [
+        _api_entry("new.txt", a_mode="0", new_file=True, diff="@@ -0,0 +1 @@\n+new\n"),
+        _api_entry("empty.txt", a_mode="0", new_file=True),
+        _api_entry("mod.txt", diff="@@ -1 +1,2 @@\n a\n+b\n"),
+        _api_entry("old.txt", b_mode="0", deleted_file=True, diff="@@ -1 +0,0 @@\n-gone\n"),
+        _api_entry("a.txt", "b.txt", renamed_file=True),
+        _api_entry("build.sh", b_mode="100755"),
+        _api_entry("both.sh", b_mode="100755", diff="@@ -1 +1 @@\n-x\n+y\n"),
+        _api_entry('tab\tand"quote.txt', diff="@@ -1 +1 @@\n-q\n+Q\n"),
+        _api_entry("old name.txt", "new\\name.txt", renamed_file=True),
+        _api_entry(
+            "nonl.txt",
+            diff="@@ -1 +1 @@\n-x\n\\ No newline at end of file\n+y\n\\ No newline at end of file\n",
+        ),
+    ]
+    _mock_patch_get(json.dumps(entries))
+    output = await GetPatchFromUrlFullTool().run(input={"patch_url": PRIVATE_COMMIT_PATCH_URL})
+
+    patch_file = tmp_path / "commit.patch"
+    patch_file.write_text(output.result)
+    proc = await asyncio.create_subprocess_exec("git", "init", "-q", cwd=repo)
+    await proc.wait()
+    proc = await asyncio.create_subprocess_exec(
+        "git", "apply", str(patch_file), cwd=repo, stderr=asyncio.subprocess.PIPE
+    )
+    _, stderr = await proc.communicate()
+
+    assert proc.returncode == 0, stderr.decode()
+    assert (repo / "new.txt").read_text() == "new\n"
+    assert (repo / "empty.txt").read_text() == ""
+    assert (repo / "mod.txt").read_text() == "a\nb\n"
+    assert not (repo / "old.txt").exists()
+    assert not (repo / "a.txt").exists()
+    assert (repo / "b.txt").read_text() == "same\n"
+    assert (repo / "build.sh").stat().st_mode & 0o111
+    assert (repo / "both.sh").stat().st_mode & 0o111
+    assert (repo / "both.sh").read_text() == "y\n"
+    assert (repo / "nonl.txt").read_text() == "y"
+    assert (repo / 'tab\tand"quote.txt').read_text() == "Q\n"
+    assert not (repo / "old name.txt").exists()
+    assert (repo / "new\\name.txt").read_text() == "r\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ["too_large", "collapsed"])
+async def test_get_patch_from_url_full_rejects_omitted_api_diffs(monkeypatch, flag):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    _mock_patch_get(json.dumps([_api_entry("big.c", **{flag: True})]))
+
+    with pytest.raises(ToolError, match=r"omitted the diff of big\.c"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": PRIVATE_COMMIT_PATCH_URL})
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_full_rejects_binary_api_diffs(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    entries = [_api_entry("logo.png", diff="Binary files a/logo.png and b/logo.png differ\n")]
+    _mock_patch_get(json.dumps(entries))
+
+    with pytest.raises(ToolError, match=r"changes binary files \(logo\.png\)"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": PRIVATE_COMMIT_PATCH_URL})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "raises"),
+    [
+        ({"X-Next-Page": "2"}, True),
+        ({"X-Next-Page": "", "X-Prev-Page": "1"}, True),
+        ({"X-Next-Page": "", "X-Prev-Page": ""}, False),
+        ({"X-Next-Page": " "}, False),
+    ],
+)
+async def test_get_patch_from_url_full_pagination(monkeypatch, headers, raises):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    entries = [_api_entry("a.c", diff="@@ -1 +1 @@\n-a\n+b\n")]
+    _mock_patch_get(json.dumps(entries), headers=headers)
+
+    if raises:
+        with pytest.raises(ToolError, match="more than 100 changed files"):
+            await GetPatchFromUrlFullTool().run(input={"patch_url": PRIVATE_COMMIT_PATCH_URL})
+    else:
+        output = await GetPatchFromUrlFullTool().run(input={"patch_url": PRIVATE_COMMIT_PATCH_URL})
+        assert output.result.startswith("diff --git a/a.c b/a.c\n")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("patch_url", "body"),
+    [
+        # JSON that is not served by the GitLab commit diff API is never converted.
+        ("https://example.com/hunks.json", json.dumps([_api_entry("a.c", diff="@@ -1 +1 @@\n-a\n+b\n")])),
+        # Malformed API entries are not converted into a fake patch.
+        (PRIVATE_COMMIT_PATCH_URL, "[{}]"),
+        (PRIVATE_COMMIT_PATCH_URL, json.dumps([{"old_path": "a.c", "new_path": "a.c", "new_file": True}])),
+        (PRIVATE_COMMIT_PATCH_URL, json.dumps([_api_entry("a.c", diff=0)])),
+    ],
+)
+async def test_get_patch_from_url_full_does_not_convert_unrecognized_json(monkeypatch, patch_url, body):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    _mock_patch_get(body)
+
+    with pytest.raises(ToolError, match="does not look like a patch"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": patch_url})
+
+
+@pytest.mark.asyncio
+async def test_authenticated_patch_fetch_upgrades_http_and_does_not_follow_redirects(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    raw_url = "http://gitlab.com/redhat/rhel/rpms/json-glib/-/raw/rhel-10.3/fix.patch"
+    captured = _mock_patch_get("", status=302)
+
+    with pytest.raises(ToolError, match="HTTP 302"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": raw_url})
+
+    preview = await GetPatchFromUrlTool().run(input={"patch_url": raw_url})
+
+    assert preview.result == f"Error: Failed to fetch patch from {raw_url}: HTTP 302"
+    for url, kwargs in captured:
+        assert url == raw_url.replace("http://", "https://")
+        assert kwargs["headers"]["PRIVATE-TOKEN"] == "secret"
+        assert kwargs["allow_redirects"] is False
+
+
+@pytest.mark.asyncio
+async def test_patch_fetch_sends_token_for_fork_namespace_commits(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    monkeypatch.setenv("FORK_NAMESPACE", "ymir-dev-forks")
+    entries = [_api_entry("a.c", diff="@@ -1 +1 @@\n-a\n+b\n")]
+    captured = _mock_patch_get(json.dumps(entries))
+
+    await GetPatchFromUrlFullTool().run(
+        input={"patch_url": "https://gitlab.com/ymir-dev-forks/json-glib/-/commit/abc123.patch"}
+    )
+
+    url, kwargs = captured[0]
+    assert url == (
+        "https://gitlab.com/api/v4/projects/ymir-dev-forks%2Fjson-glib/repository/commits/abc123/diff?per_page=100"
+    )
+    assert kwargs["headers"]["PRIVATE-TOKEN"] == "secret"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("a_mode", "b_mode"), [("100644", "100644"), (None, "100644"), ("100644", None)])
+async def test_get_patch_from_url_full_rejects_empty_plain_modification(monkeypatch, a_mode, b_mode):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    _mock_patch_get(json.dumps([_api_entry("a.c", a_mode=a_mode, b_mode=b_mode)]))
+
+    with pytest.raises(ToolError, match=r"omitted the diff of a\.c"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": PRIVATE_COMMIT_PATCH_URL})
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_full_rejects_partial_content():
+    _mock_patch_get(_small_patch(), status=206)
+
+    with pytest.raises(ToolError, match="HTTP 206"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": PUBLIC_PATCH_URL})
+
+
+@pytest.mark.asyncio
+async def test_exhausted_retryable_status_is_reported(monkeypatch):
+    monkeypatch.setattr(constants, "AIOHTTP_RETRY_BACKOFF_BASE", 0)
+    monkeypatch.setattr(http_utils.random, "uniform", lambda *_args: 0)
+    _mock_patch_get("unavailable", status=503)
+
+    with pytest.raises(ToolError, match="HTTP 503"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": PUBLIC_PATCH_URL})
+    preview = await GetPatchFromUrlTool().run(input={"patch_url": PUBLIC_PATCH_URL})
+
+    assert preview.result == f"Error: Failed to fetch patch from {PUBLIC_PATCH_URL}: HTTP 503"
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_full_checks_diff_against_commit_stats(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    entries = [_api_entry("a.c", diff="@@ -1 +1 @@\n-a\n+b\n")]
+    # GitLab stopped listing files at its diff limit; the commit changes more lines.
+    _mock_patch_get(json.dumps(entries), stats={"additions": 5, "deletions": 1})
+
+    with pytest.raises(ToolError, match=r"adds 5 and removes 1 lines, but the diff adds 1"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": PRIVATE_COMMIT_PATCH_URL})
+
+
+@pytest.mark.asyncio
+async def test_get_patch_from_url_full_rejects_converted_patch_over_limit(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "secret")
+    # Headers repeat each path four times, so long paths grow during conversion.
+    entries = [_api_entry("d/" * 100 + f"f{i}.c", diff="@@ -1 +1 @@\n-a\n+b\n") for i in range(3)]
+    body = json.dumps(entries)
+    converted = GetPatchFromUrlTool._json_hunks_to_text(entries)
+    assert len(converted) > len(body)
+    monkeypatch.setattr(gitlab_module, "MAX_FULL_PATCH_CONTENT_LENGTH", len(body))
+    _mock_patch_get(body)
+
+    with pytest.raises(ToolError, match=rf"exceeds the {len(body)} byte limit"):
+        await GetPatchFromUrlFullTool().run(input={"patch_url": PRIVATE_COMMIT_PATCH_URL})

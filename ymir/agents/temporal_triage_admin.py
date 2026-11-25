@@ -1,55 +1,19 @@
-"""Submit triage requests, recover package coordination, and transfer retired Redis queues."""
+"""Submit triage requests and recover package coordination."""
 
 import argparse
 import asyncio
 import json
 import os
 import sys
-from hashlib import sha256
 from uuid import uuid4
 
-from ymir.common.base_utils import fix_await, redis_client
-from ymir.common.constants import RedisQueues
-from ymir.common.models import Task, TriageInputSchema
 from ymir.common.temporal_triage import (
     CONTROL_QUEUE,
-    PARKED_QUEUE_SUFFIX,
     TriageIntent,
     connect_triage_ingress,
     submit_triage_intent,
     triage_issue_workflow_id,
 )
-
-LEGACY_QUEUES = (RedisQueues.TRIAGE_QUEUE_TODO.value, RedisQueues.TRIAGE_QUEUE.value)
-
-
-async def transfer_queue(redis, client, queue: str) -> int:
-    """Transfer a quiescent queue, removing each original only after acceptance."""
-    count = 0
-    while (payload := await fix_await(redis.lindex(queue, -1))) is not None:
-        raw = json.loads(payload)
-        task = Task.model_validate(raw)
-        metadata = TriageInputSchema.model_validate(task.metadata)
-        request_id = (
-            raw.get("execution_id")
-            or sha256(payload.encode() if isinstance(payload, str) else payload).hexdigest()
-        )
-        await submit_triage_intent(
-            client,
-            TriageIntent(
-                metadata.issue,
-                f"redis:{request_id}",
-                "redis",
-                dry_run=False,
-                user_triggered=task.user_triggered,
-                triage_only=task.triage_only,
-                force_cve_triage=metadata.force_cve_triage,
-            ),
-        )
-        if not await fix_await(redis.lrem(queue, -1, payload)):
-            raise RuntimeError(f"{queue} changed during transfer")
-        count += 1
-    return count
 
 
 async def main(args: argparse.Namespace) -> None:
@@ -59,13 +23,6 @@ async def main(args: argparse.Namespace) -> None:
 
         queue = os.getenv("TEMPORAL_TRIAGE_CONTROL_QUEUE", CONTROL_QUEUE)
         print(json.dumps(await recover_package_coordination(client, queue), indent=2))
-        return
-
-    if args.command == "drain":
-        async with redis_client(os.environ["REDIS_URL"]) as redis:
-            for queue in (*LEGACY_QUEUES, *(name + PARKED_QUEUE_SUFFIX for name in LEGACY_QUEUES)):
-                count = await transfer_queue(redis, client, queue)
-                print(f"{queue}: {count} requests transferred", flush=True)
         return
 
     intent = TriageIntent(
@@ -100,6 +57,5 @@ if __name__ == "__main__":
     submit.add_argument("--force-cve-triage", action="store_true")
     submit.add_argument("--user-triggered", action="store_true")
     submit.add_argument("--triage-only", action="store_true")
-    actions.add_parser("drain")
     actions.add_parser("recover-coordination", help="Resubmit waiting package-stream issues from Jira")
     asyncio.run(main(parser.parse_args()))

@@ -1,4 +1,4 @@
-"""Serialize Jira, CLI and Redis submissions under one issue workflow."""
+"""Serialize Jira, CLI, and retry submissions under one issue workflow."""
 
 import asyncio
 import os
@@ -180,7 +180,7 @@ class TriageIngressWorkflow:
             raise ApplicationError("Triage intent belongs to a different issue", non_retryable=True)
         if not intent.request_id.strip() or len(intent.request_id) > 200:
             raise ApplicationError("Expected a request ID of 1 to 200 characters", non_retryable=True)
-        if intent.source not in {"cli", "jira", "discovery", "retry", "redis"}:
+        if intent.source not in {"cli", "jira", "discovery", "retry"}:
             raise ApplicationError("Unknown triage submission source", non_retryable=True)
 
     @workflow.run

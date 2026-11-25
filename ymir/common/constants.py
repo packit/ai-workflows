@@ -48,9 +48,6 @@ POST_PUSH_TESTING_TIMEOUT_STR = "3 hours"
 class RedisQueues(Enum):
     """Constants for Redis queue names used by Ymir agents"""
 
-    # Retained for inspecting and transferring the retired input queues.
-    TRIAGE_QUEUE = "triage_queue"
-    TRIAGE_QUEUE_TODO = "triage_queue_todo"
     REBASE_QUEUE_C9S = "rebase_queue_c9s"
     REBASE_QUEUE_C10S = "rebase_queue_c10s"
     BACKPORT_QUEUE_C9S = "backport_queue_c9s"

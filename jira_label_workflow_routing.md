@@ -3,8 +3,8 @@
 Triage submits directly to Temporal. The issue workflow records authorized
 manual intent before consuming its trigger label and owns retry exhaustion.
 The downstream Redis queues still carry fix and reproducer work. References
-below to the triage queues describe legacy entries that can be transferred
-during cutover. [Temporal cutover](openshift/README.md#cut-over-triage-to-temporal)
+below to the triage queues describe the legacy workflow. Finish queued triage
+work before cutover. [Temporal cutover](openshift/README.md#cut-over-triage-to-temporal)
 
 
 This document describes how Jira labels control workflow routing through the processing pipeline.
@@ -156,8 +156,8 @@ These labels are applied to GitLab merge requests (not Jira issues):
 
 | Queue | Type | Triggers | Labels Added | Status |
 |-------|------|----------|--------------|--------|
-| `triage_queue` | Input | No labels OR `ymir_retry_needed` | `ymir_triage_in_progress` (set by fetcher atomic flip for retry/todo, or by agent at triage start for fresh issues) | Active |
-| `triage_queue_todo` | Input (priority) | `ymir_todo` | Same as `triage_queue`. The triage agent BRPOPs `[triage_queue_todo, triage_queue]`, so ymir_todo tasks jump ahead of fresh/retry tasks. | Active |
+| `triage_queue` | Input | No labels OR `ymir_retry_needed` | `ymir_triage_in_progress` (set by fetcher atomic flip for retry/todo, or by agent at triage start for fresh issues) | Legacy |
+| `triage_queue_todo` | Input (priority) | `ymir_todo` | Same as `triage_queue`. The triage agent BRPOPs `[triage_queue_todo, triage_queue]`, so ymir_todo tasks jump ahead of fresh/retry tasks. | Legacy |
 | `rebase_queue_c9s` | Input | Resolution=REBASE, RHEL 8/9 | `ymir_triaged_rebase` | Active (AUTO_CHAIN only) |
 | `rebase_queue_c9s_todo` | Input (priority) | Resolution=REBASE, RHEL 8/9 (ymir_todo) | Same as `rebase_queue_c9s`. The rebase agent BRPOPs `[rebase_queue_c9s_todo, rebase_queue_c9s]`. | Active (AUTO_CHAIN only) |
 | `rebase_queue_c10s` | Input | Resolution=REBASE, RHEL 10+ | `ymir_triaged_rebase` | Active (AUTO_CHAIN only) |

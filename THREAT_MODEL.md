@@ -58,8 +58,7 @@ uses the changelog event as the request identity. The controller reads that
 event before consuming its label and records acknowledgements and terminal
 failures through the Jira gateway. The controller's projected service account
 can create, inspect and delete Pods in the Ymir namespace. Execution pods have
-no mounted service account token. The one-time transfer of retired Redis
-lists removes each entry after its Temporal Update is accepted.
+no mounted service account token.
 
 The package-stream coordinator uses the controller's Jira identity and a
 scoped read-only GitLab token. It accepts per-issue validation evidence only
@@ -149,7 +148,7 @@ redirects and other caller-supplied URLs before making a request.
 | Local `.secrets/` credential bundle (dev machines, CI runners) | Co-located keytabs, GitLab PAT, Jira token, GCP keys | critical |
 | Jira API token | Read/write access to RHEL/PACKIT Jira issues, including status transitions that trigger errata creation and compose inclusion | high |
 | GCP Vertex AI service-account keys (dev/prod) | Access to hosted LLM inference; misuse enables cost abuse or model manipulation | high |
-| Redis/Valkey task queues (`triage_queue`, `merge_consolidation_queue`) | Integrity of in-flight automation state; controls which package/branch/issue is processed next | high |
+| Redis/Valkey task queues (`backport_queue_c10s`, `merge_consolidation_queue`) | Integrity of in-flight automation state; controls which package/branch/issue is processed next | high |
 | Container images (`quay.io/jotnar/*`) | Build supply-chain integrity for all deployed agent/service images | high |
 | Testing Farm API token | Ability to trigger test runs against package builds | medium |
 | Sumo Logic logs, OTEL traces (Phoenix), Sentry logs | May contain tool inputs/outputs; sensitive if credential redaction fails | medium |

@@ -569,9 +569,9 @@ TEMPORAL_ADDRESS=127.0.0.1:7235 uv run --extra temporal ymir RHEL-287570 \
 
 With no `TEMPORAL_ADDRESS`, the CLI submits to the Compose Temporal server
 in the `ymir-cli` namespace and prints the same JSON result. The local Jira
-fixtures and output directory options apply in this mode. Use the
-OpenShift guide to transfer an existing installation's pending or parked
-Redis triage work. [OpenShift cutover](openshift/README.md#cut-over-triage-to-temporal)
+fixtures and output directory options apply in this mode. Finish pending
+Redis triage work before cutting over an existing OpenShift installation.
+[OpenShift cutover](openshift/README.md#cut-over-triage-to-temporal)
 
 #### Coordinate a package stream in Temporal
 

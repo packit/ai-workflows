@@ -527,25 +527,25 @@ The execution pods use the existing worker and gateway images.
    `TEMPORAL_TRIAGE_ADMISSIONS=false` in `temporal-triage-env` while staging
    the new configuration.
 2. For an existing Redis installation, suspend the old fetcher and sweep
-   CronJobs and let outstanding Jobs finish. Scale `deployment/triage-agent`
-   to zero and let it finish shutting down. Stop any other processes still
-   submitting legacy triage queue entries.
+   CronJobs and let outstanding Jobs finish. Stop any other legacy triage
+   queue producers and let the old triage workers finish queued and in-flight
+   requests. Scale `deployment/triage-agent` to zero. After the workers shut
+   down, verify that `triage_queue`, `triage_queue_todo`, and any parked
+   `triage_queue:temporal-paused` and `triage_queue_todo:temporal-paused` lists
+   are empty. Shutdown can put an unfinished request back. Use
+   `make show-triage-queue` to check the two input queues.
 3. Apply the updated manifests and verify that `deployment/triage-controller`
    is ready. Reconcile Jira labels, GitLab MRs, and any incomplete legacy rebase
    sibling groups before resubmitting ambiguous work.
 4. Enable `TEMPORAL_TRIAGE_ADMISSIONS=true` and restart the controller so
-   that it receives the change. Run `make drain-legacy-triage` once while the
-   legacy queues are quiescent. It transfers the two triage lists and their
-   parked lists. An entry is removed after its Temporal Update is accepted.
-   Re-running the drain submits the same request ID for any retained entry.
+   that it receives the change.
 5. Verify a Jira discovery request, a postponed-issue retry, and a manual
    submission in Temporal. Resume the updated CronJobs and retire the scaled-down
    deployment. The downstream fix and reproducer queues remain in Valkey.
 
 To roll back, pause Temporal submissions, reconcile accepted workflows and
 their downstream effects, then redeploy the previous release and restore
-only unfinished work using Jira and GitLab. Entries already transferred by
-the drain are owned by Temporal.
+only unfinished work using Jira and GitLab.
 
 ## Triggering the Pipeline Manually
 

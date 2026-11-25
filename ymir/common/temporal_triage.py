@@ -7,7 +7,6 @@ from typing import Any
 
 CONTROL_QUEUE = "ymir-triage-control"
 INGRESS_WORKFLOW = "TriageIngressWorkflow"
-PARKED_QUEUE_SUFFIX = ":temporal-paused"
 
 
 def triage_issue_workflow_id(issue: str) -> str:

@@ -143,10 +143,6 @@ process:
 	oc exec deployment/triage-controller -- python3 -m ymir.agents.temporal_triage_admin submit "$(ISSUE)" \
 		$(if $(filter true,$(FORCE_CVE_TRIAGE)),--force-cve-triage)
 
-.PHONY: drain-legacy-triage
-drain-legacy-triage:
-	oc exec deployment/triage-controller -- python3 -m ymir.agents.temporal_triage_admin drain
-
 # Manually enqueue a reproducer job (also when TRIAGE_ENQUEUE_REPRODUCER=false).
 # Same interface as the local `make trigger-reproducer` target.
 # Required: JIRA_ISSUE, PACKAGE

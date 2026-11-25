@@ -11,22 +11,23 @@ from pathlib import Path
 from uuid import uuid4
 
 
-def cleanup(controller: str) -> None:
+def cleanup(controller: str, suite_label: str) -> None:
     subprocess.run(["podman", "rm", "--force", "--ignore", controller], check=False)
     for resource in ("pod", "volume"):
         ids = subprocess.check_output(
-            ["podman", resource, "ls", "-q", "--filter", f"label=ymir-triage-suite={controller}"], text=True
+            ["podman", resource, "ls", "-q", "--filter", f"label={suite_label}={controller}"], text=True
         ).split()
         if ids:
             subprocess.run(["podman", resource, "rm", "--force", *ids], check=True)
 
 
 def main() -> int:
-    args = sys.argv[1:]
-    at = args.index("triage-agent-e2e-tests")
-    controller = f"ymir-triage-e2e-{uuid4().hex[:12]}"
+    workflow, *args = sys.argv[1:]
+    at = args.index(f"{workflow}-agent-e2e-tests")
+    controller = f"ymir-{workflow}-e2e-{uuid4().hex[:12]}"
+    suite_label = f"ymir-{workflow}-suite"
 
-    with tempfile.TemporaryDirectory(prefix="ymir-triage-") as directory:
+    with tempfile.TemporaryDirectory(prefix="ymir-worker-") as directory:
         socket = Path(directory) / "podman.sock"
         with subprocess.Popen(
             ["podman", "system", "service", "--time=0", f"unix://{socket}"], stdout=subprocess.DEVNULL
@@ -51,12 +52,12 @@ def main() -> int:
                     "-e",
                     "YMIR_PODMAN_URL=unix:///run/ymir-podman.sock",
                     "-e",
-                    f"YMIR_TRIAGE_CONTROLLER={controller}",
+                    f"YMIR_E2E_CONTROLLER={controller}",
                 ]
                 return subprocess.run([*args[:at], *flags, *args[at:]], check=False).returncode
             finally:
                 try:
-                    cleanup(controller)
+                    cleanup(controller, suite_label)
                 finally:
                     server.terminate()
 

@@ -23,8 +23,8 @@ from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxR
 from ymir.agents import temporal_triage_ingress as ingress
 from ymir.agents.temporal_triage_analysis import TriageAnalysisRequest
 from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow
-from ymir.agents.temporal_triage_provisioning import TriagePod
 from ymir.agents.temporal_triage_publication import TriagePublicationRequest, TriageRequestReceiptWorkflow
+from ymir.agents.temporal_worker_pods import WorkerPod
 
 ADDRESS = os.getenv("TEMPORAL_TEST_ADDRESS")
 pytestmark = pytest.mark.skipif(not ADDRESS, reason="Set TEMPORAL_TEST_ADDRESS to a local Temporal server")
@@ -68,7 +68,7 @@ async def test_ingress_serializes_requests_and_reports_failure(monkeypatch):
         steps.append(("begin", intent.request_id, skipped))
 
     @activity.defn(name="provision_triage_pod")
-    async def provision(pod: TriagePod) -> None:
+    async def provision(pod: WorkerPod) -> None:
         attempt = activity.info().attempt
         provisioning_attempts.append(attempt)
         if attempt == 1:
@@ -82,7 +82,7 @@ async def test_ingress_serializes_requests_and_reports_failure(monkeypatch):
         raise ApplicationError("Fixture pod startup failed")
 
     @activity.defn(name="delete_triage_pod")
-    async def delete(pod: TriagePod) -> None:
+    async def delete(pod: WorkerPod) -> None:
         pods.remove(pod.name)
         steps.append(("delete", pod.name))
 

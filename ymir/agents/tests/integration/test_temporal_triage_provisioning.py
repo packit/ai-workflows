@@ -17,26 +17,27 @@ from temporalio.client import Client, WorkflowFailureError
 from temporalio.exceptions import ApplicationError
 
 from ymir.agents import temporal_triage_ingress as ingress
-from ymir.agents.temporal_triage_provisioning import (
-    EXECUTION_LABEL,
+from ymir.agents.temporal_triage_provisioning import TRIAGE_WORKER_POD, create_triage_control_worker
+from ymir.agents.temporal_triage_publication import PublicationInputs
+from ymir.agents.temporal_worker_pods import (
     GATEWAY_URL,
     READY_FILE,
-    OpenShiftTriageProvisioner,
-    TriagePod,
-    create_triage_control_worker,
+    OpenShiftPodProvisioner,
+    WorkerPod,
+    WorkerPodConfig,
 )
-from ymir.agents.temporal_triage_publication import PublicationInputs
 
 ADDRESS = os.getenv("TEMPORAL_TEST_ADDRESS")
+POD_TEMPLATE = Path("openshift/templates/temporal-worker-pod.yml")
 
 
 def test_openshift_pod_shares_only_one_execution_workspace():
-    backend = OpenShiftTriageProvisioner(
-        "testing", Path("openshift/templates/temporal-triage-pod.yml"), "temporal.testing:7233", "testing"
+    backend = OpenShiftPodProvisioner(
+        "testing", POD_TEMPLATE, "temporal.testing:7233", "testing", TRIAGE_WORKER_POD
     )
-    pod = TriagePod("ymir-triage-fixture", "RHEL-987654", True)
+    pod = WorkerPod("ymir-triage-fixture", "RHEL-987654", True)
     manifest = backend.manifest(pod)
-    assert manifest["metadata"]["labels"][EXECUTION_LABEL] == pod.name
+    assert manifest["metadata"]["labels"]["ymir-triage-execution"] == pod.name
     assert manifest["metadata"]["namespace"] == "testing"
     assert manifest["spec"]["automountServiceAccountToken"] is False
     assert {"name": "workspace", "emptyDir": {}} in manifest["spec"]["volumes"]
@@ -50,6 +51,40 @@ def test_openshift_pod_shares_only_one_execution_workspace():
     assert {"name": "TEMPORAL_TASK_QUEUE", "value": pod.task_queue} in worker["env"]
     assert {"name": "MCP_BIND_HOST", "value": "127.0.0.1"} in gateway["env"]
     assert worker["readinessProbe"]["exec"]["command"][-1] == READY_FILE
+    assert {"name": "YMIR_TRIAGE_ISSUE", "value": pod.jira_issue} in worker["env"]
+    assert worker["image"] == "beeai-agent:c10s"
+    assert worker["args"][-1] == "ymir.agents.temporal_triage_worker"
+
+
+def test_shared_template_accepts_workflow_specific_settings():
+    config = WorkerPodConfig(
+        workflow="reproducer",
+        module="fixture.worker",
+        image="beeai-agent:c9s",
+        deadline_seconds=5400,
+        worker_env={"CONTAINER_VERSION": "c9s"},
+        worker_resources={"requests": {"memory": "4Gi"}},
+        gateway_env={"BUILD_BACKEND": "copr"},
+        gateway_secrets=("testing-farm-env",),
+    )
+    backend = OpenShiftPodProvisioner("testing", POD_TEMPLATE, "temporal.testing:7233", "testing", config)
+    pod = WorkerPod("ymir-reproducer-fixture", None, False)
+    manifest = backend.manifest(pod)
+    assert manifest["metadata"]["labels"] == {
+        "app": "ymir-temporal-reproducer",
+        "ymir-reproducer-execution": pod.name,
+    }
+    assert manifest["spec"]["activeDeadlineSeconds"] == 5400
+    worker, gateway = manifest["spec"]["containers"]
+    assert worker["image"] == "beeai-agent:c9s"
+    assert worker["args"] == ["/usr/bin/python3", "-m", "fixture.worker"]
+    assert worker["resources"] == config.worker_resources
+    env = {entry["name"]: entry["value"] for entry in worker["env"]}
+    assert env["CONTAINER_VERSION"] == "c9s"
+    assert env["TEMPORAL_TASK_QUEUE"] == pod.task_queue and "YMIR_JIRA_ISSUE" not in env
+    assert {"name": "BUILD_BACKEND", "value": "copr"} in gateway["env"]
+    assert {"secretRef": {"name": "testing-farm-env"}} in gateway["envFrom"]
+    assert {"secretRef": {"name": "testing-farm-env"}} not in worker["envFrom"]
 
 
 @pytest.mark.asyncio
@@ -126,7 +161,7 @@ async def test_provisioning_cleans_up_after_failure(failure, monkeypatch):
 @pytest.mark.asyncio
 async def test_in_cluster_provisioner_deletes_only_the_observed_pod_uid():
     calls = []
-    pod = TriagePod("ymir-triage-fixture", "RHEL-987654", True)
+    pod = WorkerPod("ymir-triage-fixture", "RHEL-987654", True)
 
     class API:
         state = None
@@ -141,11 +176,12 @@ async def test_in_cluster_provisioner_deletes_only_the_observed_pod_uid():
                 self.state = None
             return self.state
 
-    backend = OpenShiftTriageProvisioner(
+    backend = OpenShiftPodProvisioner(
         "testing",
-        Path("openshift/templates/temporal-triage-pod.yml"),
+        POD_TEMPLATE,
         "temporal.testing:7233",
         "testing",
+        TRIAGE_WORKER_POD,
         api=API(),
     )
     await backend.create(pod)

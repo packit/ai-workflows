@@ -1,6 +1,5 @@
 """Execute and publish a triage request admitted by the issue workflow."""
 
-import asyncio
 import json
 import os
 from dataclasses import dataclass, replace
@@ -11,7 +10,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
-from temporalio.exceptions import ApplicationError, FailureError, WorkflowAlreadyStartedError
+from temporalio.exceptions import ApplicationError, WorkflowAlreadyStartedError
 
 from ymir.agents import tasks
 from ymir.agents import triage_agent as triage
@@ -22,7 +21,8 @@ from ymir.agents.temporal_triage_analysis import (
     _gateway,
     triage_issue_workflow_id,
 )
-from ymir.agents.temporal_triage_provisioning import TriagePod, TriagePodActivities
+from ymir.agents.temporal_triage_provisioning import TriagePodActivities
+from ymir.agents.temporal_worker_pods import WorkerPod, run_in_worker_pod
 from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import POSTPONED_RESOLUTIONS, IssueStatus, Resolution, Task
@@ -427,46 +427,19 @@ async def execute_triage_request(
     if not request.provision_pod:
         return await _run_request(request, execution_id)
 
-    pod = TriagePod(
+    pod = WorkerPod(
         f"ymir-triage-{execution_id}",
         request.analysis.jira_issue,
         request.dry_run,
     )
-    try:
-        await workflow.execute_activity_method(
-            TriagePodActivities.provision_triage_pod,
-            pod,
-            schedule_to_close_timeout=timedelta(minutes=6),
-            start_to_close_timeout=timedelta(minutes=5),
-            heartbeat_timeout=timedelta(seconds=75),
-            cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
-            retry_policy=RetryPolicy(maximum_attempts=2),
-        )
-        watch = workflow.start_activity_method(
-            TriagePodActivities.watch_triage_pod,
-            pod,
-            start_to_close_timeout=timedelta(minutes=43),
-            heartbeat_timeout=timedelta(seconds=75),
-            retry_policy=RetryPolicy(maximum_attempts=1),
-        )
-        run = asyncio.create_task(_run_request(request, execution_id, task_queue=pod.task_queue))
-        try:
-            done, _ = await workflow.wait([run, watch], return_when=asyncio.FIRST_COMPLETED)
-            if run in done:
-                return await run
-            await watch
-            raise ApplicationError("Triage pod monitor exited before triage finished", non_retryable=True)
-        finally:
-            run.cancel()
-            watch.cancel()
-            await asyncio.gather(run, watch, return_exceptions=True)
-    finally:
-        try:
-            await _run_activity(TriagePodActivities.delete_triage_pod, pod)
-        except FailureError as error:
-            raise ApplicationError(
-                f"Could not confirm deletion of {pod.name}", type=POD_CLEANUP_FAILED, non_retryable=True
-            ) from error
+    return await run_in_worker_pod(
+        pod,
+        lambda queue: _run_request(request, execution_id, task_queue=queue),
+        activities=TriagePodActivities,
+        run_timeout=timedelta(minutes=43),
+        cleanup_retry_policy=WRITE_RETRY,
+        cleanup_error_type=POD_CLEANUP_FAILED,
+    )
 
 
 async def _run_request(

@@ -418,11 +418,8 @@ async def run_temporal_cases(cases: list[TriageAgentTestCase], address: str) -> 
     from temporalio.testing import WorkflowEnvironment
 
     from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow
-    from ymir.agents.temporal_triage_provisioning import (
-        PODMAN_LIMIT,
-        PodmanTriageProvisioner,
-        create_triage_control_worker,
-    )
+    from ymir.agents.temporal_triage_provisioning import TRIAGE_WORKER_POD, create_triage_control_worker
+    from ymir.agents.temporal_worker_pods import PODMAN_LIMIT, PodmanPodProvisioner
     from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
 
     queue = f"triage-e2e-{uuid4().hex}"
@@ -487,10 +484,11 @@ async def run_temporal_cases(cases: list[TriageAgentTestCase], address: str) -> 
             client = environment.client
         else:
             client = await Client.connect(address, **client_options)
-        provisioner = await PodmanTriageProvisioner.for_e2e(
-            os.environ["YMIR_TRIAGE_CONTROLLER"],
+        provisioner = await PodmanPodProvisioner.for_e2e(
+            os.environ["YMIR_E2E_CONTROLLER"],
             client.service_client.config.target_host,
             client.namespace,
+            TRIAGE_WORKER_POD,
             local=address == "local",
         )
         async with create_triage_control_worker(client, queue, provisioner):

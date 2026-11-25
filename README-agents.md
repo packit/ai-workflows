@@ -538,6 +538,16 @@ standalone Make target.
 The mock Jira E2E target uses its own Temporal server and up to three Podman
 execution pods.
 
+The OpenShift worker-pod template supplies the shared workspace and loopback
+MCP gateway. A workflow's controller supplies `WorkerPodConfig` with its
+worker module and image, and can override the deadline, resources, environment,
+and gateway secret references. The worker module uses `serve_worker_pod` to
+connect to Temporal, prepare the workspace, and report readiness. The workflow
+registers its own Activities and uses `run_in_worker_pod` to provision,
+monitor, and clean up the pod. The Podman E2E launcher takes the workflow name
+and starts its Compose test controller with a temporary socket.
+[Worker-pod template](openshift/templates/temporal-worker-pod.yml)
+
 An acknowledgement records the manual request ID and mode in Jira. The
 published finding records the disposition, target and planned follow-up.
 Jira comment attempts reconcile against a marker on a comment from the

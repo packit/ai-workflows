@@ -124,7 +124,7 @@ COPY ymir/agents/ /home/beeai/ymir/agents/
 COPY ymir/tools/ /home/beeai/ymir/tools/
 COPY ymir/common/ /home/beeai/ymir/common/
 COPY ymir/jira_issue_fetcher/ /home/beeai/ymir/jira_issue_fetcher/
-COPY openshift/templates/temporal-triage-pod.yml /home/beeai/temporal-triage-pod.yml
+COPY openshift/templates/temporal-worker-pod.yml /home/beeai/temporal-worker-pod.yml
 RUN chgrp -R root /home/beeai && chmod -R g+rwX /home/beeai
 
 # Set up GitLab SSH host keys

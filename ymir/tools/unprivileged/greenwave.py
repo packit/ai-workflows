@@ -1,4 +1,5 @@
 import logging
+import xml.etree.ElementTree as ET
 from urllib.parse import quote as urlquote
 from urllib.parse import urlparse
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from ymir.common.constants import AIOHTTP_TIMEOUT, YMIR_USER_AGENT
 from ymir.common.http_utils import aiohttp_get_with_retries
+from ymir.common.junit import testcase_status
 from ymir.tools.base import CloneableTool as Tool
 
 TESTING_FARM_ARTIFACTS_URL = "https://artifacts.osci.redhat.com/testing-farm"
@@ -82,6 +84,24 @@ class FetchGreenWaveTool(Tool[FetchGreenWaveInput, ToolRunOptions, StringToolOut
             return StringToolOutput(result=f"Error fetching GreenWave gating status: {e}")
 
 
+def _summarize_results_xml(content: str) -> str | None:
+    """Condense a JUnit results file to one line per testcase. The raw file can be megabytes of
+    system-out, which would flood the agent's context. Returns None if the content isn't parseable XML."""
+    try:
+        root = ET.fromstring(content)  # noqa: S314 -- same parser as the MR agent's results.xml handling
+    except ET.ParseError:
+        return None
+    lines = []
+    for suite in root.iter("testsuite"):
+        cases = suite.findall("testcase")
+        lines.append(f"Testsuite {suite.get('name')}: {len(cases)} testcases")
+        for case in cases:
+            status, message = testcase_status(case)
+            line = f"  [{status}] {case.get('name')}"
+            lines.append(f"{line}: {message}" if message else line)
+    return "\n".join(lines) if lines else None
+
+
 class FetchTestingFarmResultsInput(BaseModel):
     artifact_url: str = Field(
         description=(
@@ -145,10 +165,17 @@ class FetchTestingFarmResultsTool(Tool[FetchTestingFarmResultsInput, ToolRunOpti
                 try:
                     async with aiohttp_get_with_retries(session, url) as response:
                         if response.status == 200:
-                            # Limit reading to 10MB to prevent OOM on large files
-                            content_bytes = await response.content.read(10 * 1024 * 1024)
-                            content = content_bytes.decode("utf-8", errors="replace")
-                            return StringToolOutput(result=content)
+                            # Limit reading to 10MB to prevent OOM on large files. StreamReader.read(n)
+                            # returns only the first buffered chunk (~8KB), so read chunks up to the cap.
+                            max_bytes = 10 * 1024 * 1024
+                            content_bytes = bytearray()
+                            async for chunk in response.content.iter_chunked(64 * 1024):
+                                content_bytes.extend(chunk)
+                                if len(content_bytes) >= max_bytes:
+                                    break
+                            content = bytes(content_bytes[:max_bytes]).decode("utf-8", errors="replace")
+                            summary = _summarize_results_xml(content)
+                            return StringToolOutput(result=summary if summary is not None else content)
                         logger.warning("Got HTTP %d for %s", response.status, url)
                 except Exception as e:
                     logger.warning("Error fetching %s: %s", url, e)

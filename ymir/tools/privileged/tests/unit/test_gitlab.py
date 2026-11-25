@@ -2268,3 +2268,127 @@ async def test_get_patch_from_url_full_rejects_converted_patch_over_limit(monkey
 
     with pytest.raises(ToolError, match=rf"exceeds the {len(body)} byte limit"):
         await GetPatchFromUrlFullTool().run(input={"patch_url": PRIVATE_COMMIT_PATCH_URL})
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "error: RPC failed; curl 56 Recv failure: Connection reset by peer",
+        "fetch-pack: unexpected disconnect while reading sideband packet\nfatal: early EOF",
+        "fatal: unable to access 'https://github.com/vim/vim/': Could not resolve host: github.com",
+    ],
+)
+async def test_clone_repository_retries_transient_network_failure(mock_git_repo_basepath, caplog, stderr):
+    """A transient network error during fetch is retried and can succeed."""
+    clone_path = mock_git_repo_basepath / "vim"
+
+    async def _mock_sleep(_delay):
+        return None
+
+    flexmock(asyncio).should_receive("sleep").replace_with(_mock_sleep)
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(
+        _make_subprocess_sequence(
+            [
+                (0, ""),  # git init succeeds
+                (128, stderr),  # git fetch fails transiently
+                (0, ""),  # git fetch retry succeeds
+                (0, ""),  # git checkout succeeds
+            ]
+        )
+    )
+
+    result = await CloneRepositoryTool().run(
+        input={
+            "repository": "https://github.com/vim/vim",
+            "branch": "main",
+            "clone_path": clone_path,
+        }
+    )
+
+    assert "Successfully cloned" in result.result
+    assert "transient network error" in caplog.text
+    assert "retrying" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_does_not_retry_missing_ref(mock_git_repo_basepath, caplog):
+    """A missing remote ref is a data problem, not transient — no retry."""
+    clone_path = mock_git_repo_basepath / "vim"
+    stderr_msg = "fatal: couldn't find remote ref refs/heads/rhel-9.9.0"
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(
+        _make_subprocess_sequence(
+            [
+                (0, ""),  # git init succeeds
+                (128, stderr_msg),  # git fetch fails
+            ]
+        )
+    )
+
+    with pytest.raises(ToolError):
+        await CloneRepositoryTool().run(
+            input={
+                "repository": "https://gitlab.com/redhat/rhel/rpms/json-glib",
+                "branch": "rhel-9.9.0",
+                "clone_path": clone_path,
+            }
+        )
+
+    assert "retrying" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_exhausted_transient_retries_raise(mock_git_repo_basepath, caplog):
+    """Persistent transient failures give up after the configured attempts."""
+
+    async def _mock_sleep(_delay):
+        return None
+
+    flexmock(asyncio).should_receive("sleep").replace_with(_mock_sleep)
+    stderr_msg = "error: RPC failed; curl 56 Recv failure: Connection reset by peer"
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(
+        _make_subprocess_sequence(
+            [
+                (0, ""),  # git init succeeds
+                (128, stderr_msg),  # git fetch fails (attempt 1)
+                (128, stderr_msg),  # git fetch fails (attempt 2)
+                (128, stderr_msg),  # git fetch fails (attempt 3)
+            ]
+        )
+    )
+    clone_path = mock_git_repo_basepath / "vim"
+
+    with pytest.raises(ToolError) as exc_info:
+        await CloneRepositoryTool().run(
+            input={
+                "repository": "https://github.com/grafana/grafana",
+                "branch": "main",
+                "clone_path": clone_path,
+            }
+        )
+
+    assert "Connection reset by peer" in str(exc_info.value.__cause__)
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        ("error: RPC failed; curl 56 Recv failure: Connection reset by peer", True),
+        ("fatal: early EOF", True),
+        ("fetch-pack: unexpected disconnect while reading sideband packet", True),
+        (None, False),
+        ("", False),
+        ("fatal: couldn't find remote ref refs/heads/rhel-9.9.0", False),
+        ("fatal: refusing to fetch into branch 'refs/heads/c10s' checked out", False),
+        (
+            "error: unable to write file .git/objects/pack/pack-x.pack: No such file or directory",
+            False,
+        ),
+        ("fatal: fetch-pack: invalid index-pack output", False),
+    ],
+)
+def test_is_transient_git_failure(stderr, expected):
+    """Only network symptoms are transient; local-state failures are not."""
+    from ymir.tools.privileged.gitlab import _is_transient_git_failure
+
+    assert _is_transient_git_failure(stderr) is expected
+

@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from beeai_framework.errors import FrameworkError
 from beeai_framework.tools.mcp import MCPTool
 from beeai_framework.workflows import Workflow
 from flexmock import flexmock
@@ -123,7 +124,7 @@ async def test_build_project_identifier_preserves_jira_metadata(
             state.jira_issues_collected = [jira_issue] if jira_issue else []
             state.consolidation_result = MRConsolidationOutputSchema(
                 success=True,
-                status="Prepared SRPM",
+                status="consolidation_complete",
                 srpm_path=Path("/git-repos/package/package-1-1.src.rpm"),
             )
             workflow.set_start("run_build_agent")
@@ -291,7 +292,7 @@ async def test_konflux_build_pushes_ref_and_populates_build_fields(
             state.spec_name = "renamed.spec"
             state.consolidation_result = MRConsolidationOutputSchema(
                 success=True,
-                status="Prepared SRPM",
+                status="consolidation_complete",
                 srpm_path=Path("/git-repos/package/package-1-1.src.rpm"),
             )
             workflow.set_start("run_build_agent")
@@ -382,7 +383,7 @@ async def test_rhel8_consolidation_builds_with_copr_when_backend_is_konflux(monk
             state.spec_name = "package.spec"
             state.consolidation_result = MRConsolidationOutputSchema(
                 success=True,
-                status="Prepared SRPM",
+                status="consolidation_complete",
                 srpm_path=Path("/git-repos/package/package-1-1.src.rpm"),
             )
             workflow.set_start("run_build_agent")
@@ -472,7 +473,7 @@ async def test_terminal_build_failure_is_reported(monkeypatch, failure_kind):
             state.spec_name = "package.spec"
             state.consolidation_result = MRConsolidationOutputSchema(
                 success=True,
-                status="Consolidated patches",
+                status="consolidation_complete",
                 srpm_path=(
                     None if failure_kind == "missing_srpm" else Path("/git-repos/package/package-1-1.src.rpm")
                 ),
@@ -492,7 +493,8 @@ async def test_terminal_build_failure_is_reported(monkeypatch, failure_kind):
 
     assert len(build_calls) == (0 if failure_kind in {"missing_srpm", "prepare_error"} else 1)
     assert state.consolidation_result.success is False
-    assert state.consolidation_result.status == "Build verification failed"
+    assert state.consolidation_result.status == "failed"
+    assert state.consolidation_result.status_detail == "Build verification failed"
     assert (
         state.consolidation_result.error
         == {
@@ -503,3 +505,45 @@ async def test_terminal_build_failure_is_reported(monkeypatch, failure_kind):
         }[failure_kind]
     )
     assert state.build_verified is False
+
+
+@pytest.mark.parametrize("mr_count", [1, 2])
+@pytest.mark.asyncio
+async def test_auto_consolidation_only_notifies_after_eligibility(monkeypatch, mr_count):
+    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway.invalid/sse")
+
+    @contextlib.asynccontextmanager
+    async def mock_mcp_tools(*args, **kwargs):
+        yield []
+
+    monkeypatch.setattr(mr_consolidation_agent, "mcp_tools", mock_mcp_tools)
+    monkeypatch.setattr(mr_consolidation_agent, "create_log_agent", lambda *args: None)
+    comments = []
+
+    async def run_tool(name, **kwargs):
+        if name == "list_project_merge_requests":
+            return [{"url": f"mr/{i}", "description": f"Resolves: RHEL-{i}"} for i in range(1, mr_count + 1)]
+        assert name == "add_jira_comment"
+        comments.append(kwargs["issue_key"])
+        return None
+
+    async def fail_prepare(**kwargs):
+        raise RuntimeError("clone unavailable")
+
+    monkeypatch.setattr(mr_consolidation_agent, "run_tool", run_tool)
+    monkeypatch.setattr(mr_consolidation_agent.tasks, "fork_and_prepare_dist_git", fail_prepare)
+    options = {
+        "package": "package",
+        "dist_git_branch": "c10s",
+        "dry_run": False,
+        "consolidation_agent_factory": lambda *args: None,
+    }
+    if mr_count == 1:
+        state = await mr_consolidation_agent.run_workflow(**options)
+        assert state.consolidation_result.status == "nothing_to_consolidate"
+        assert comments == []
+    else:
+        with pytest.raises(FrameworkError) as raised:
+            await mr_consolidation_agent.run_workflow(**options)
+        assert str(raised.value.__cause__) == "clone unavailable"
+        assert comments == ["RHEL-1", "RHEL-2"]

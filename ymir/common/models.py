@@ -9,11 +9,11 @@ import re
 from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Any, Literal, Self
 from urllib.parse import unquote, urlsplit
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
 from ymir.common.constants import REPRODUCER_TEST_REPOSITORY_HOST
 from ymir.common.validators import UniqueSortedList
@@ -1263,17 +1263,35 @@ class MRConsolidationInputSchema(BaseModel):
     build_error: str | None = Field(default=None, description="Error encountered during package build")
 
 
+ConsolidationStatus = Literal[
+    "nothing_to_consolidate",  # Fewer than 2 MRs, or no backport MR found
+    "mr_not_found",  # Could not find MR for specified issue
+    "consolidation_complete",  # Successfully consolidated and created MR
+    "failed",  # Consolidation failed (see error field for details)
+]
+
+
 class MRConsolidationOutputSchema(BaseModel):
     """Output schema for the MR consolidation agent."""
 
     success: bool = Field(description="Whether the consolidation was successfully completed")
-    status: str = Field(description="Consolidation status with details of how the merge was performed")
+    status: ConsolidationStatus = Field(description="Consolidation status indicating the outcome type")
+    status_detail: str | None = Field(
+        default=None,
+        description="Human-readable details about the status",
+    )
     srpm_path: Path | None = Field(default=None, description="Absolute path to generated SRPM")
     error: str | None = Field(default=None, description="Specific details about an error")
     files_to_git_add: list[str] | None = Field(
         default=None,
         description="List of files that should be git added and committed",
     )
+
+    @model_validator(mode="after")
+    def check_outcome(self) -> Self:
+        if self.success != (self.status in ("consolidation_complete", "nothing_to_consolidate")):
+            raise ValueError(f"success={self.success} contradicts consolidation status {self.status!r}")
+        return self
 
 
 # ============================================================================

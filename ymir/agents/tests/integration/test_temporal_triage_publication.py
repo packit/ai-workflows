@@ -29,8 +29,8 @@ from temporalio.exceptions import ApplicationError
 
 from ymir.agents import temporal_package_coordination as coordination
 from ymir.agents import temporal_triage_publication as publication
-from ymir.agents.temporal_triage_analysis import create_analysis_worker
 from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow, prepare_triage_intent
+from ymir.agents.temporal_triage_worker import create_analysis_worker
 
 ADDRESS = os.getenv("TEMPORAL_TEST_ADDRESS")
 REDIS_URL = os.getenv("TEMPORAL_TEST_REDIS_URL")

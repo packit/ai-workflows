@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import traceback
 from pathlib import Path
 
 from beeai_framework.tools import Tool
@@ -751,8 +752,6 @@ async def queue_siblings_for_triage(
         except SiblingLabelsUnreadableError:
             raise
         except Exception as e:
-            import traceback
-
             logger.warning(
                 f"Failed to queue sibling {candidate_key}: {e}\nTraceback: {traceback.format_exc()}"
             )

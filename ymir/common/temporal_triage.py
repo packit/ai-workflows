@@ -5,6 +5,15 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
+try:
+    from temporalio import client as temporal_client
+    from temporalio import common as temporal_common
+except ModuleNotFoundError as error:
+    if error.name != "temporalio":
+        raise
+    # The local Compose CLI can run without the Temporal SDK on the host.
+    temporal_client = temporal_common = None
+
 CONTROL_QUEUE = "ymir-triage-control"
 INGRESS_WORKFLOW = "TriageIngressWorkflow"
 
@@ -41,19 +50,18 @@ class TriageIntent:
 
 
 async def connect_triage_ingress():
-    from temporalio.client import Client
-
+    if temporal_client is None:
+        raise ModuleNotFoundError("The Temporal client requires temporalio", name="temporalio")
     address = os.environ["TEMPORAL_ADDRESS"]
-    return await Client.connect(address, namespace=os.getenv("TEMPORAL_NAMESPACE", "default"))
+    return await temporal_client.Client.connect(address, namespace=os.getenv("TEMPORAL_NAMESPACE", "default"))
 
 
 async def submit_triage_intent(
     client, intent: TriageIntent, *, task_queue: str | None = None, wait: bool = False
 ) -> str | dict:
     """Durably enqueue an intent and optionally wait for that request's result."""
-    from temporalio.client import WithStartWorkflowOperation, WorkflowUpdateStage
-    from temporalio.common import WorkflowIDConflictPolicy
-
+    if temporal_client is None:
+        raise ModuleNotFoundError("The Temporal client requires temporalio", name="temporalio")
     if not temporal_triage_accepts_requests():
         raise TriageAdmissionsPaused("Temporal triage admissions are paused")
     returns_result = wait or intent.source == "cli"
@@ -61,14 +69,18 @@ async def submit_triage_intent(
         "enqueue_and_wait" if returns_result else "enqueue",
         intent,
         id=intent.update_id,
-        start_workflow_operation=WithStartWorkflowOperation(
+        start_workflow_operation=temporal_client.WithStartWorkflowOperation(
             INGRESS_WORKFLOW,
             intent.issue.strip().upper(),
             id=triage_issue_workflow_id(intent.issue),
             task_queue=task_queue or os.getenv("TEMPORAL_TRIAGE_CONTROL_QUEUE", CONTROL_QUEUE),
-            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+            id_conflict_policy=temporal_common.WorkflowIDConflictPolicy.USE_EXISTING,
         ),
-        wait_for_stage=WorkflowUpdateStage.ACCEPTED if returns_result else WorkflowUpdateStage.COMPLETED,
+        wait_for_stage=(
+            temporal_client.WorkflowUpdateStage.ACCEPTED
+            if returns_result
+            else temporal_client.WorkflowUpdateStage.COMPLETED
+        ),
         result_type=dict if returns_result else str,
         rpc_timeout=timedelta(seconds=20),
     )

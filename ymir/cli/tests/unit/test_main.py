@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import typer
 from flexmock import flexmock
+from typer.testing import CliRunner
 
 from ymir.cli import main as cli_main
 from ymir.cli.main import (
@@ -697,8 +698,6 @@ class TestEnvVarRestoration:
 
 
 def test_cli_waits_for_the_temporal_request_and_prints_json(monkeypatch, tmp_path):
-    from typer.testing import CliRunner
-
     monkeypatch.setenv("TEMPORAL_ADDRESS", "localhost:7233")
     monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
 

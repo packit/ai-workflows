@@ -4,6 +4,7 @@ import pytest
 from flexmock import flexmock
 
 from ymir.common.constants import JiraLabels
+from ymir.sweep import base
 from ymir.sweep.no_patch import NoPatchSweep
 from ymir.sweep.tests.unit.conftest import make_issue
 
@@ -19,8 +20,6 @@ async def test_no_patch_preserves_triage_only_and_leaves_labels_to_temporal():
         return [issue]
 
     flexmock(NoPatchSweep).should_receive("_get_blocked_issues_async").replace_with(blocked)
-    from ymir.sweep import base
-
     submitted = []
 
     async def submit(client, intent):

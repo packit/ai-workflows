@@ -13,7 +13,6 @@ from ymir.agents.pydantic_agent import pydantic_model_settings
 from ymir.agents.temporal_package_coordination import (
     CoordinatedTriage,
     PackageStreamActivities,
-    package_stream,
 )
 from ymir.agents.temporal_triage_analysis import TriageAnalysisRequest
 from ymir.agents.temporal_triage_publication import (
@@ -28,12 +27,14 @@ from ymir.agents.temporal_triage_publication import (
     apply_triage_labels,
     claim_triage_request,
     execute_triage_request,
+    package_stream,
     read_publication_inputs,
 )
 from ymir.agents.utils import get_agent_execution_config, resolve_chat_model_override
 from ymir.common.constants import JiraLabels
 from ymir.common.models import IssueStatus
 from ymir.common.temporal_triage import TriageIntent, triage_issue_workflow_id
+from ymir.jira_issue_fetcher.jira_issue_fetcher import JiraIssueFetcher
 
 
 @activity.defn
@@ -79,8 +80,6 @@ async def check_triage_intent(request: TriagePublicationRequest, intent: TriageI
 async def begin_triage_intent(request: TriagePublicationRequest, intent: TriageIntent, skipped: bool) -> None:
     remove = []
     if intent.triggers:
-        from ymir.jira_issue_fetcher.jira_issue_fetcher import JiraIssueFetcher
-
         labels = (await read_publication_inputs(request)).labels
         fetcher = JiraIssueFetcher()
         for label, event in intent.triggers.items():

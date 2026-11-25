@@ -1,7 +1,7 @@
 import pytest
 from flexmock import flexmock
 
-from ymir.agents import rebase_consolidation
+from ymir.agents import rebase_agent, rebase_consolidation
 from ymir.agents.rebase_agent import _clear_rebase_resolved_errors, _consolidated_issue_keys
 from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
@@ -214,8 +214,6 @@ async def test_successful_consolidated_rebase_clears_primary_and_distinct_siblin
 
     async def mock_clear(redis_conn, issue, queue, *, target_branch, dry_run):
         calls.append((redis_conn, issue, queue, target_branch, dry_run))
-
-    from ymir.agents import rebase_agent
 
     flexmock(rebase_agent).should_receive("clear_resolved_errors").replace_with(mock_clear).once()
     redis = object()
@@ -656,9 +654,6 @@ async def test_find_triaged_rebase_siblings_no_unbound_error_on_jira_failure():
 
 @pytest.mark.asyncio
 async def test_find_triaged_rebase_siblings_requires_exact_primary_key(monkeypatch):
-    from ymir.agents import rebase_consolidation
-    from ymir.common.models import RebaseData
-
     async def run_tool(name, **kwargs):
         if name == "search_jira_issues":
             return [{"key": "RHEL-300"}]

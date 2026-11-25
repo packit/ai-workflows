@@ -22,12 +22,21 @@ from ymir.agents.temporal_triage_analysis import (
 )
 from ymir.agents.temporal_triage_provisioning import TriagePodActivities
 from ymir.agents.temporal_worker_pods import WorkerPod, run_in_worker_pod
-from ymir.common.base_utils import fix_await, redis_client
+from ymir.agents.triage_agent import TriageState
+from ymir.common.base_utils import fix_await, redis_client, resolve_dist_git_namespace
 from ymir.common.constants import JiraLabels, RedisQueues
-from ymir.common.models import POSTPONED_RESOLUTIONS, IssueStatus, Resolution, Task
+from ymir.common.models import (
+    POSTPONED_RESOLUTIONS,
+    BackportData,
+    IssueStatus,
+    RebaseData,
+    RebuildData,
+    Resolution,
+    Task,
+)
 from ymir.common.temporal_triage import triage_issue_workflow_id
 from ymir.common.utils import run_tool
-from ymir.common.version_utils import detect_modular_issue
+from ymir.common.version_utils import detect_modular_issue, parse_rhel_version
 from ymir.tools.privileged.jira import SetJiraFieldsToolInput
 
 RECEIPT_TTL = int(timedelta(days=7).total_seconds())
@@ -98,6 +107,46 @@ class TriagePublicationResult:
     dry_run: bool
     skipped_reason: str | None = None
     coordinated_handoffs: list[RedisHandoff] | None = None
+
+
+def stream_rank(version: str) -> tuple[int, int] | None:
+    stream = parse_rhel_version(version)
+    return (int(stream[0]), int(stream[1])) if stream else None
+
+
+@dataclass(frozen=True)
+class PackageStream:
+    package: str
+    component: str
+    version: str
+    namespace: str
+    branch: str
+
+    @property
+    def workflow_id(self) -> str:
+        identity = [self.namespace, self.package, self.component, self.version, self.branch]
+        digest = sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()[:24]
+        return f"package-stream/{self.package}/{self.branch}/{digest}"
+
+
+def package_stream(state: TriageState) -> PackageStream | None:
+    finding = state.triage_result
+    if not finding or finding.resolution not in FIX_RESOLUTIONS or not state.target_branch:
+        return None
+    data = finding.data
+    if not isinstance(data, (BackportData, RebaseData, RebuildData)):
+        return None
+    version = stream_rank(data.fix_version or "")
+    if version is None:
+        return None
+    namespace = resolve_dist_git_namespace(state.target_branch, state.dist_git_namespace)
+    return PackageStream(
+        data.package.lower(),
+        (state.raw_downstream_component or data.package).lower(),
+        f"rhel-{version[0]}.{version[1]}",
+        namespace,
+        state.target_branch,
+    )
 
 
 @workflow.defn
@@ -530,8 +579,6 @@ async def _run_request(
                     )
                     seen.add(key)
         if held:
-            from ymir.agents.temporal_package_coordination import package_stream
-
             if (key := package_stream(state)) is None:
                 raise ApplicationError("Cannot identify the Jira package-stream", non_retryable=True)
             result = replace(result, coordination_workflow_id=key.workflow_id)

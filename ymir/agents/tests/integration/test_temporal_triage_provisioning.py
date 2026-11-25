@@ -17,8 +17,9 @@ from temporalio.client import Client, WorkflowFailureError
 from temporalio.exceptions import ApplicationError
 
 from ymir.agents import temporal_triage_ingress as ingress
-from ymir.agents.temporal_triage_provisioning import TRIAGE_WORKER_POD, create_triage_control_worker
+from ymir.agents.temporal_triage_provisioning import TRIAGE_WORKER_POD
 from ymir.agents.temporal_triage_publication import PublicationInputs
+from ymir.agents.temporal_triage_worker import create_triage_control_worker
 from ymir.agents.temporal_worker_pods import (
     GATEWAY_URL,
     READY_FILE,

@@ -6,14 +6,13 @@ from argparse import Namespace
 import pytest
 from flexmock import flexmock
 
+pytest.importorskip("temporalio")
+
 from ymir.agents import temporal_triage_admin as admin
 
 
 @pytest.mark.asyncio
 async def test_recover_coordination_uses_configured_control_queue(monkeypatch, capsys):
-    pytest.importorskip("temporalio")
-    from ymir.agents import temporal_package_coordination as coordination
-
     monkeypatch.setenv("TEMPORAL_TRIAGE_CONTROL_QUEUE", "recovery-queue")
     client = object()
 
@@ -26,7 +25,7 @@ async def test_recover_coordination_uses_configured_control_queue(monkeypatch, c
         return {"RHEL-1": "accepted"}
 
     flexmock(admin).should_receive("connect_triage_ingress").replace_with(connect).once()
-    flexmock(coordination).should_receive("recover_package_coordination").replace_with(recover).once()
+    flexmock(admin).should_receive("recover_package_coordination").replace_with(recover).once()
 
     await admin.main(Namespace(command="recover-coordination"))
 

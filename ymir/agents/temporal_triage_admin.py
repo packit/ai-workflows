@@ -7,6 +7,7 @@ import os
 import sys
 from uuid import uuid4
 
+from ymir.agents.temporal_package_coordination import recover_package_coordination
 from ymir.common.temporal_triage import (
     CONTROL_QUEUE,
     TriageIntent,
@@ -19,8 +20,6 @@ from ymir.common.temporal_triage import (
 async def main(args: argparse.Namespace) -> None:
     client = await connect_triage_ingress()
     if args.command == "recover-coordination":
-        from ymir.agents.temporal_package_coordination import recover_package_coordination
-
         queue = os.getenv("TEMPORAL_TRIAGE_CONTROL_QUEUE", CONTROL_QUEUE)
         print(json.dumps(await recover_package_coordination(client, queue), indent=2))
         return

@@ -8,7 +8,6 @@ from anthropic import AsyncAnthropicVertex
 from beeai_framework.tools.mcp import MCPTool
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPToolInfo
-from pydantic_ai.models.anthropic import AnthropicModel  # noqa: F401  # Load before replacing the SDK client.
 
 from ymir.agents.pydantic_agent import run_pydantic_agent
 from ymir.agents.triage_agent import TriageRunContext, create_triage_agent

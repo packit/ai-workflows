@@ -17,7 +17,7 @@ from temporalio.service import RPCError, RPCStatusCode
 
 from ymir.agents.temporal_triage_analysis import _gateway
 from ymir.agents.temporal_triage_publication import (
-    FIX_RESOLUTIONS,
+    PackageStream,
     RedisHandoff,
     TriagePublicationRequest,
     _jira_record,
@@ -26,9 +26,10 @@ from ymir.agents.temporal_triage_publication import (
     _task_handoff,
     apply_triage_labels,
     enqueue_triage_handoff,
+    stream_rank,
 )
 from ymir.agents.triage_agent import TriageState, read_rebuild_buildroot
-from ymir.common.base_utils import redis_client, resolve_dist_git_namespace
+from ymir.common.base_utils import redis_client
 from ymir.common.constants import JiraLabels
 from ymir.common.cve import extract_cve_ids
 from ymir.common.gitlab_api import gitlab_api_get
@@ -39,7 +40,7 @@ from ymir.common.temporal_triage import (
     submit_triage_intent,
     temporal_triage_accepts_requests,
 )
-from ymir.common.version_utils import get_fix_version_variants, parse_rhel_version
+from ymir.common.version_utils import get_fix_version_variants
 
 WAIT_INTERVAL = timedelta(minutes=15)
 WAITING = JiraLabels.TRIAGE_COORDINATION_WAITING.value
@@ -68,26 +69,6 @@ _TRIAGED = frozenset(
 )
 
 
-def stream_rank(version: str) -> tuple[int, int] | None:
-    stream = parse_rhel_version(version)
-    return (int(stream[0]), int(stream[1])) if stream else None
-
-
-@dataclass(frozen=True)
-class PackageStream:
-    package: str
-    component: str
-    version: str
-    namespace: str
-    branch: str
-
-    @property
-    def workflow_id(self) -> str:
-        identity = [self.namespace, self.package, self.component, self.version, self.branch]
-        digest = sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()[:24]
-        return f"package-stream/{self.package}/{self.branch}/{digest}"
-
-
 @dataclass
 class CoordinatedTriage:
     key: PackageStream
@@ -98,26 +79,6 @@ class CoordinatedTriage:
     @property
     def issue(self) -> str:
         return self.request.analysis.jira_issue
-
-
-def package_stream(state: TriageState) -> PackageStream | None:
-    finding = state.triage_result
-    if not finding or finding.resolution not in FIX_RESOLUTIONS or not state.target_branch:
-        return None
-    data = finding.data
-    if not isinstance(data, (BackportData, RebaseData, RebuildData)):
-        return None
-    version = stream_rank(data.fix_version or "")
-    if version is None:
-        return None
-    namespace = resolve_dist_git_namespace(state.target_branch, state.dist_git_namespace)
-    return PackageStream(
-        data.package.lower(),
-        (state.raw_downstream_component or data.package).lower(),
-        f"rhel-{version[0]}.{version[1]}",
-        namespace,
-        state.target_branch,
-    )
 
 
 def _jira_literal(value: str) -> str:

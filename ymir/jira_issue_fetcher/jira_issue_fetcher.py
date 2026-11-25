@@ -51,7 +51,6 @@ from ymir.common.temporal_triage import (
 )
 from ymir.common.version_utils import construct_internal_branch_name, parse_rhel_version
 
-configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Name of the Jira group that membership in identifies a Red Hat Employee.
@@ -930,6 +929,7 @@ async def main():
 
 
 if __name__ == "__main__":
+    configure_logging(level=logging.INFO)
     required_vars = ["JIRA_URL", "JIRA_EMAIL", "JIRA_TOKEN", "REDIS_URL"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
 

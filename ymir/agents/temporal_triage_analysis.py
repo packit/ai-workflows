@@ -17,11 +17,8 @@ from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage, UsageLimits
 from temporalio import activity, workflow
-from temporalio.client import Client
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
-from temporalio.worker import Worker
-from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
 
 from ymir.agents import triage_agent as triage
 from ymir.agents.cve_applicability_agent import APPLICABILITY_GATEWAY_TOOLS, create_triage_applicability_agent
@@ -263,16 +260,7 @@ async def _propose_jira_fields(**arguments: Any) -> dict:
     return proposal.model_dump(mode="json", exclude_none=True)
 
 
-async def create_analysis_worker(
-    client: Client,
-    task_queue: str,
-    model: Model,
-    *,
-    gateway_connection_attempts: int = 1,
-    ingress: bool = False,
-) -> Worker:
-    from ymir.agents.temporal_triage_publication import PUBLICATION_ACTIVITIES
-
+async def configure_triage_agents(model: Model, gateway_connection_attempts: int) -> list[AgentPlugin]:
     global triage_model_agent, applicability_agent
     async with mcp_tools(
         os.environ["MCP_GATEWAY_URL"], max_retries=gateway_connection_attempts
@@ -328,49 +316,4 @@ async def create_analysis_worker(
             *applicability_tools,
         ],
     )
-    workflows = [TriageAnalysisWorkflow]
-    activities = [
-        read_eligibility,
-        prepare_publication_analysis,
-        normalize_version,
-        read_rebase_author,
-        resolve_target,
-        prepare_applicability,
-        cleanup_applicability,
-        read_buildroot,
-        *PUBLICATION_ACTIVITIES,
-    ]
-
-    if ingress:
-        from ymir.agents.temporal_package_coordination import (
-            PackageStreamActivities,
-            PackageStreamWorkflow,
-            plan_package_stream,
-            release_coordinated_triage,
-        )
-        from ymir.agents.temporal_triage_ingress import INGRESS_ACTIVITIES, TriageIngressWorkflow
-        from ymir.agents.temporal_triage_publication import TriageRequestReceiptWorkflow
-
-        coordination = PackageStreamActivities(client, task_queue)
-        workflows.extend((TriageIngressWorkflow, TriageRequestReceiptWorkflow, PackageStreamWorkflow))
-        activities.extend(
-            [
-                *INGRESS_ACTIVITIES,
-                plan_package_stream,
-                release_coordinated_triage,
-                coordination.submit_package_coordination,
-                coordination.submit_sibling_triage,
-            ]
-        )
-    return Worker(
-        client,
-        task_queue=task_queue,
-        workflows=workflows,
-        activities=list(dict.fromkeys(activities)),
-        plugins=[AgentPlugin(triage_model_agent), AgentPlugin(applicability_agent)],
-        workflow_runner=SandboxedWorkflowRunner(
-            restrictions=SandboxRestrictions.default.with_passthrough_modules(
-                *(definition.__module__ for definition in workflows)
-            )
-        ),
-    )
+    return [AgentPlugin(triage_model_agent), AgentPlugin(applicability_agent)]

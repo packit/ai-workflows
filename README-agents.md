@@ -492,62 +492,7 @@ make JIRA_ISSUE=RHEL-12345 FORCE_CVE_TRIAGE=true run-triage-agent-standalone
 
 Use commas to delimit multiple patch/commit URLs in `UPSTREAM_PATCHES`.
 
-### Local Temporal triage experiment
-
-The opt-in Phase 1 runner analyzes the existing `RHEL-287570` rebuild case
-against a read-only Jira fixture served over MCP. It uses the triage agent's
-instructions and output validator. The Temporal workflow runs the agent loop
-and schedules model requests and Jira tool calls as separate Activities.
-
-Start a [Temporal development server](https://docs.temporal.io/cli/command-reference/server)
-in one terminal and run the experiment in another.
-
-```bash
-temporal server start-dev --ip 127.0.0.1
-uv run --extra temporal python scripts/temporal-triage-phase-one.py
-```
-
-The scripted run shuts down its first worker after the dependency lookup is
-recorded and while the second model Activity is active. A replacement worker
-with workflow caching disabled completes the same execution. The script verifies
-the completed Activity counts, the actual model and MCP calls, and the typed
-rebuild result. Use the printed workflow ID in the UI at `http://localhost:8233`.
-The demo binds one model for the lifetime of each local worker. Pydantic AI
-2.30.0 is tested with the optional Temporal Python SDK 1.32.0.
-
-To test the existing Vertex Claude route, export `GOOGLE_APPLICATION_CREDENTIALS`,
-`GOOGLE_VERTEX_PROJECT`, and `GOOGLE_VERTEX_LOCATION`, and set `CHAT_MODEL` or
-`CHAT_MODEL_TRIAGE` to a Vertex Claude model. Then run the same fixture with
-`--vertex`.
-
-```bash
-uv run --extra temporal python scripts/temporal-triage-phase-one.py --vertex
-```
-
-### Run the full triage analysis on Temporal
-
-The opt-in analysis workflow uses the same eligibility, Jira prefetch, branch
-selection, applicability, and rebuild checks as the current triage entry point.
-It returns the finding, target branch, and follow-up intent. Jira publication
-and downstream dispatch are available through the opt-in workflow below.
-
-With a local Temporal server running, configure the standard agent model and
-`RHEL_CONFIG_PATH`. Point `MCP_GATEWAY_URL` at the test gateway and set
-`GIT_REPO_BASEPATH` to the workspace root shared with that gateway.
-
-```bash
-uv run --extra temporal python scripts/temporal-triage.py RHEL-287570
-```
-
-The runner prints a Workflow ID for Temporal UI. `--follow-up-requested`
-records the intent used by the queue entry point. `--user-triggered` and
-`--triage-only` select the corresponding Jira policy inputs. The worker uses
-an execution-scoped directory for prepared sources and cleans it up after the
-applicability check.
-
-Analysis and publication share the Workflow ID `triage/<Jira issue>` in the
-Temporal namespace. A standalone analysis reports a busy issue if that ID
-is active.
+### Test Temporal triage
 
 Run the scripted parity tests against the local server.
 
@@ -556,7 +501,7 @@ TEMPORAL_TEST_ADDRESS=127.0.0.1:7233 uv run --extra test --extra temporal \
   pytest ymir/agents/tests/integration/test_temporal_triage_analysis.py
 ```
 
-The live-model E2E suite runs the Temporal publication workflow in dry-run mode
+The live-model E2E suite submits through Temporal triage ingress in dry-run mode
 using rootless Podman. The controller starts its own Temporal development
 server. Each case gets its own pod, Temporal task queue, worker, loopback MCP
 gateway, and writable workspace. Each worker prepares its own mock repositories.
@@ -574,79 +519,6 @@ To use an existing development server, set `TEMPORAL_TRIAGE_ADDRESS` to an
 address reachable from the controller and execution pods. You can select
 individual cases with `TRIAGE_E2E_PYTEST_ARGS='-k RHEL-278652'`.
 
-### Publish Temporal triage and hand off to the existing workers
-
-Use a stable `--request-id` to preview the publication workflow. For a manual
-trigger, use the Jira change/event ID or assign an ID once and reuse it whenever
-you reconnect to that request.
-
-```bash
-uv run --extra temporal python scripts/temporal-triage.py RHEL-287570 \
-  --request-id maintenance-123 --user-triggered
-```
-
-With the Phase 3 gateway and a test Redis in `REDIS_URL`, add `--publish` to
-write the acknowledgement and finding in Jira and deliver the existing queue
-payloads. `DRY_RUN=true` or `JIRA_DRY_RUN=true` selects a preview even when
-`--publish` is set. `--user-triggered` requests the full pipeline. Add
-`--triage-only` to stop after triage. `--enqueue-reproducer` includes the
-reproducer when package policy permits it. The Redis worker and fetcher still
-run the regular production path. Use a Jira issue assigned to this opt-in
-runner and a Redis instance with the intended consumers.
-
-Temporal allows one active triage run per issue, including across test and
-publication task queues in the same namespace. A publication command waits for
-any active run for the issue to close before starting a new request. Keep the
-command running while it waits. The same request ID and mode reconnect to the
-recorded run while its Temporal history is retained. Preview and publication
-each have a request receipt so a preview can be followed by publication.
-
-An acknowledgement records the manual request ID and mode in Jira. The
-published finding records the disposition, target and planned follow-up.
-Jira comment attempts reconcile against a marker on a comment from the
-authenticated Jira account. If Jira's response is lost and the comment is
-still absent, retries check for the comment without submitting a second POST.
-An unresolved outcome needs investigation. Redis records a delivery receipt
-in the same Lua call that enqueues the task. Redis comment claims and delivery
-receipts expire after seven days.
-
-Activity retries keep the completed analysis in Temporal history. If an enqueue
-ends in failure, repair Redis and reset the parent workflow to the completed
-Workflow Task that scheduled the failed enqueue Activity. Use the
-`workflowTaskCompletedEventId` on its scheduled event in Temporal history.
-Reset and reattach before starting another request for that Jira issue. Rerun
-the same command after the reset to start a worker on the same task queue.
-These reset instructions apply to the inline runner. A provisioned run removes
-its pod and workspace after cleanup. Recover the next attempt from Jira and
-GitLab if the execution workspace is gone.
-
-```bash
-temporal workflow reset --workflow-id "$WORKFLOW_ID" --event-id "$EVENT_ID" \
-  --reason "Resume Redis handoff"
-```
-
-#### Run triage in an OpenShift pod
-
-Build and publish the C10S `temporal-worker` image target and the updated MCP
-gateway image. Set their image references in a copy of the pod template.
-Configure the controller's `oc` context to create, inspect, and delete Pods in
-the execution namespace. The pod template uses the existing Ymir ConfigMaps
-and Secrets. Pass a Temporal address reachable inside OpenShift if it differs
-from the controller's address. [OpenShift execution template](openshift/templates/temporal-triage-pod.yml)
-
-```bash
-uv run --extra temporal python scripts/temporal-triage.py RHEL-287570 \
-  --request-id maintenance-123 --user-triggered \
-  --openshift-namespace ymir --pod-template /path/to/triage-pod.yml \
-  --address localhost:7233 --pod-temporal-address temporal.ymir.svc:7233
-```
-
-Keep the controller available until the workflow finishes. The control worker
-reserves the issue Workflow ID, creates the pod, waits for readiness, and routes
-execution Activities to the pod's task queue. The pod has an execution deadline
-and uses a per-pod `emptyDir` workspace. Container restarts in that pod reuse
-the workspace. Pod loss triggers workflow failure and cleanup.
-
 Run the publication tests with a local Temporal server and a **disposable**
 Valkey instance. The tests use the actual downstream queue names.
 
@@ -656,7 +528,7 @@ TEMPORAL_TEST_ADDRESS=127.0.0.1:7233 TEMPORAL_TEST_REDIS_URL=redis://127.0.0.1:6
   ymir/agents/tests/integration/test_temporal_triage_publication.py
 ```
 
-#### Run triage through Temporal
+### Run triage through Temporal
 
 Jira discovery, sweeps, the CLI, and retries submit directly to the issue
 workflow `triage/<JIRA-KEY>`. The shared worker runs Temporal task queues.
@@ -665,6 +537,15 @@ Local Compose provides an inline worker for the development pipeline and
 standalone Make target.
 The mock Jira E2E target uses its own Temporal server and up to three Podman
 execution pods.
+
+An acknowledgement records the manual request ID and mode in Jira. The
+published finding records the disposition, target and planned follow-up.
+Jira comment attempts reconcile against a marker on a comment from the
+authenticated Jira account. If Jira's response is lost and the comment is
+still absent, retries check for the comment without submitting a second POST.
+An unresolved outcome needs investigation. Redis records a delivery receipt
+in the same Lua call that enqueues the task. Redis comment claims and delivery
+receipts expire after seven days.
 
 ```bash
 make run-triage-agent-standalone JIRA_ISSUE=RHEL-15216 DRY_RUN=true MOCK_JIRA=true
@@ -678,7 +559,8 @@ configure the local controller and gateway when Compose brings them up.
 
 Use `TEMPORAL_ADDRESS` to send the CLI to an existing controller. The CLI
 prints the result of its own request. Use `--detach` to return after admission
-and `--full` to request downstream processing.
+and `--full` to request downstream processing. Reuse the request ID and dry-run
+mode to reconnect to the same request while its Temporal history is retained.
 
 ```bash
 TEMPORAL_ADDRESS=127.0.0.1:7235 uv run --extra temporal ymir RHEL-287570 \
@@ -756,13 +638,15 @@ missing record, a changed MR head, or an incompatible approach keeps the
 issue pending. The legacy workers and pipelines need a signer to publish these
 records when they validate a higher-stream fix.
 
-After recreating the cluster, start the shared controller and run the recovery
-command with the Temporal settings and Jira credentials. Recovery reads Jira
+After recreating the cluster, start the shared controller with coordination and
+admissions enabled. Run the recovery command in the controller so it uses the
+deployment's Temporal settings and Jira credentials. Recovery reads Jira
 findings and resubmits waiting issues that lack an active owner. For a partly
 delivered handoff, inspect the existing Jira state and GitLab MR before retrying.
 
 ```bash
-uv run --extra temporal python scripts/temporal-triage.py --recover-coordination
+oc exec deployment/triage-controller -- \
+  python3 -m ymir.agents.temporal_triage_admin recover-coordination
 ```
 
 For rollback, pause admissions, reconcile all open package-stream workflows

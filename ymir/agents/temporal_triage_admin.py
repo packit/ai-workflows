@@ -1,4 +1,4 @@
-"""Submit triage requests and transfer retired Redis queues at cutover."""
+"""Submit triage requests, recover package coordination, and transfer retired Redis queues."""
 
 import argparse
 import asyncio
@@ -12,6 +12,7 @@ from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.constants import RedisQueues
 from ymir.common.models import Task, TriageInputSchema
 from ymir.common.temporal_triage import (
+    CONTROL_QUEUE,
     PARKED_QUEUE_SUFFIX,
     TriageIntent,
     connect_triage_ingress,
@@ -53,6 +54,13 @@ async def transfer_queue(redis, client, queue: str) -> int:
 
 async def main(args: argparse.Namespace) -> None:
     client = await connect_triage_ingress()
+    if args.command == "recover-coordination":
+        from ymir.agents.temporal_package_coordination import recover_package_coordination
+
+        queue = os.getenv("TEMPORAL_TRIAGE_CONTROL_QUEUE", CONTROL_QUEUE)
+        print(json.dumps(await recover_package_coordination(client, queue), indent=2))
+        return
+
     if args.command == "drain":
         async with redis_client(os.environ["REDIS_URL"]) as redis:
             for queue in (*LEGACY_QUEUES, *(name + PARKED_QUEUE_SUFFIX for name in LEGACY_QUEUES)):
@@ -93,4 +101,5 @@ if __name__ == "__main__":
     submit.add_argument("--user-triggered", action="store_true")
     submit.add_argument("--triage-only", action="store_true")
     actions.add_parser("drain")
+    actions.add_parser("recover-coordination", help="Resubmit waiting package-stream issues from Jira")
     asyncio.run(main(parser.parse_args()))

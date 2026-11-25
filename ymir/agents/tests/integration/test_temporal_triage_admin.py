@@ -1,6 +1,7 @@
-"""Exercise lossless transfer of a legacy list entry."""
+"""Exercise the triage administration commands."""
 
 import json
+from argparse import Namespace
 
 import pytest
 from flexmock import flexmock
@@ -37,3 +38,27 @@ async def test_transfer_retries_an_uncertain_submission_with_same_id():
     assert len(records) == 1
     assert await admin.transfer_queue(redis, object(), queue) == 1
     assert records == [] and accepted[0] == accepted[1]
+
+
+@pytest.mark.asyncio
+async def test_recover_coordination_uses_configured_control_queue(monkeypatch, capsys):
+    pytest.importorskip("temporalio")
+    from ymir.agents import temporal_package_coordination as coordination
+
+    monkeypatch.setenv("TEMPORAL_TRIAGE_CONTROL_QUEUE", "recovery-queue")
+    client = object()
+
+    async def connect():
+        return client
+
+    async def recover(recovery_client, queue):
+        assert recovery_client is client
+        assert queue == "recovery-queue"
+        return {"RHEL-1": "accepted"}
+
+    flexmock(admin).should_receive("connect_triage_ingress").replace_with(connect).once()
+    flexmock(coordination).should_receive("recover_package_coordination").replace_with(recover).once()
+
+    await admin.main(Namespace(command="recover-coordination"))
+
+    assert json.loads(capsys.readouterr().out) == {"RHEL-1": "accepted"}

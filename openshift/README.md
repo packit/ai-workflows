@@ -516,16 +516,23 @@ oc rollout restart deployment/triage-controller  # plus any other affected deplo
 
 ## Cut over triage to Temporal
 
-Create `temporal-triage-env` in the Ymir namespace before deployment. Set
-`TEMPORAL_ADDRESS` to the existing Temporal service and
-`TEMPORAL_NAMESPACE` to its Ymir namespace. Set
-`TEMPORAL_POD_ADDRESS` if the execution pods reach Temporal at a different
-address. The controller uses its own service account to provision pods.
-The execution pods use the existing worker and gateway images.
+Deployment creates `temporal-triage-env` in the Ymir OpenShift namespace if
+absent. On the first deployment, pass the existing Temporal service address
+and its Ymir namespace to `make deploy`. Omit `TEMPORAL_NAMESPACE` to use
+`default`. The ConfigMap starts with submissions paused. For later changes,
+edit the existing ConfigMap. Redeploying preserves its values.
 
-1. Publish the updated C10S agent, fetcher, and sweep images. Set
-   `TEMPORAL_TRIAGE_ADMISSIONS=false` in `temporal-triage-env` while staging
-   the new configuration.
+```bash
+TEMPORAL_ADDRESS=temporal.example.com:7233 TEMPORAL_NAMESPACE=ymir make deploy
+```
+
+Set `TEMPORAL_POD_ADDRESS` in the ConfigMap if the execution pods reach
+Temporal at a different address. The controller uses its own service account
+to provision pods. The execution pods use the existing worker and gateway images.
+
+1. Publish the updated C10S agent, fetcher, and sweep images. For an existing
+   ConfigMap, set `TEMPORAL_TRIAGE_ADMISSIONS=false` while staging the new
+   configuration.
 2. For an existing Redis installation, suspend the old fetcher and sweep
    CronJobs and let outstanding Jobs finish. Stop any other legacy triage
    queue producers and let the old triage workers finish queued and in-flight
@@ -537,8 +544,8 @@ The execution pods use the existing worker and gateway images.
 3. Apply the updated manifests and verify that `deployment/triage-controller`
    is ready. Reconcile Jira labels, GitLab MRs, and any incomplete legacy rebase
    sibling groups before resubmitting ambiguous work.
-4. Enable `TEMPORAL_TRIAGE_ADMISSIONS=true` and restart the controller so
-   that it receives the change.
+4. Enable `TEMPORAL_TRIAGE_ADMISSIONS=true` and restart the controller and
+   rebase deployments so they receive the change.
 5. Verify a Jira discovery request, a postponed-issue retry, and a manual
    submission in Temporal. Resume the updated CronJobs and retire the scaled-down
    deployment. The downstream fix and reproducer queues remain in Valkey.

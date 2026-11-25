@@ -6,9 +6,12 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"
 
 oc project jotnar-ymir--jotnar-ymir
-if ! oc get configmap temporal-triage-env >/dev/null; then
-    echo "Configure the Temporal endpoint as described in openshift/README.md before deploying." >&2
-    exit 1
+temporal_configmap=$(oc get configmap temporal-triage-env --ignore-not-found -o name)
+if [ -z "$temporal_configmap" ]; then
+    : "${TEMPORAL_ADDRESS:?Set TEMPORAL_ADDRESS to the Temporal server address for the first deployment}"
+    temporal_manifest=$(oc set data --local -f configmap-temporal-triage-env.yml -o yaml \
+        "TEMPORAL_ADDRESS=$TEMPORAL_ADDRESS" "TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}")
+    printf '%s\n' "$temporal_manifest" | oc create -f -
 fi
 
 apply() {

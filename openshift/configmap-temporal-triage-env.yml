@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: temporal-triage-env
+data:
+  TEMPORAL_NAMESPACE: default
+  TEMPORAL_TRIAGE_CONTROL_QUEUE: ymir-triage-control
+  TEMPORAL_TRIAGE_ADMISSIONS: "false"

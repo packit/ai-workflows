@@ -214,11 +214,13 @@ class MrTestingAnalystWorkflowState(BaseModel):
     mr_description: str | None = Field(default=None)
     linked_issue_keys: list[str] = Field(default_factory=list)
     linked_issues: list[JiraIssueContext] = Field(default_factory=list)
-    mr_comments: list[dict[str, Any]] = Field(default_factory=list)
+    # Full comment bodies stay in memory for the fetch and parse steps but are kept out of the workflow
+    # trace: the openinference workflow processor records every step's state on the root span.
+    mr_comments: list[dict[str, Any]] = Field(default_factory=list, exclude=True)
 
     parsed_results: dict[str, Any] = Field(default_factory=dict)
     note_id: Any = None
-    note_body: str | None = None
+    note_body: str | None = Field(default=None, exclude=True)
     osci_pipeline_id: str | None = None
 
     result: MrTestingAnalystResult | None = Field(default=None)
@@ -648,7 +650,7 @@ async def run_mr_testing_analyst(
                 comments=state.mr_comments,
             )
             if parsed.get("note_id") is not None or parsed.get("results_by_arch"):
-                state.parsed_results = parsed
+                state.parsed_results = {k: v for k, v in parsed.items() if k != "note_body"}
                 state.note_id = parsed.get("note_id")
                 state.note_body = parsed.get("note_body")
             else:

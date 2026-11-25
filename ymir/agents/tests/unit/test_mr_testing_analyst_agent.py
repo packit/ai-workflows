@@ -378,7 +378,8 @@ async def test_linked_issues_gather_jira_context_and_prompt_has_no_posting_knobs
     # Raw MR comments are no longer appended -- only the already-parsed result.
     assert "MR_COMMENTS" not in prompt
     parsed_json = re.search(r"^\{.*\}$", prompt, re.MULTILINE).group(0)
-    assert json.loads(parsed_json) == parsed_results
+    # anewa's full comment body is kept out of PARSED_RESULTS (Python folds it, the model never needs it)
+    assert json.loads(parsed_json) == {k: v for k, v in parsed_results.items() if k != "note_body"}
 
 
 @pytest.mark.asyncio
@@ -1183,3 +1184,22 @@ async def test_update_kind_folds_per_plan_counts_into_anewas_table(monkeypatch):
 
     assert "[✅ pass (1 pass)](https://artifacts.osci.redhat.com/tf/req-x86)" in update_call["comment"]
     assert update_call["comment"].startswith("**ANEWA:** Testing for `foo`")
+
+
+def test_workflow_state_trace_excludes_full_comment_bodies_but_keeps_them_in_memory():
+    """The openinference workflow processor records each step's model_dump on the root span, so bulky
+    bodies must stay out of it."""
+    state = m.MrTestingAnalystWorkflowState(
+        mr_url="https://gitlab.com/x/-/merge_requests/1",
+        mr_comments=[{"author": "bot", "body": "x" * 9000}],
+        note_body="**ANEWA:** " + "y" * 9000,
+    )
+
+    traced = state.model_dump(exclude_none=True)
+
+    assert "mr_comments" not in traced
+    assert "note_body" not in traced
+    # beeai copies the state with model_copy(deep=True) between steps, which keeps excluded fields.
+    copied = state.model_copy(deep=True)
+    assert copied.mr_comments[0]["body"] == "x" * 9000
+    assert copied.note_body.startswith("**ANEWA:**")

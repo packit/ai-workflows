@@ -82,8 +82,7 @@ PARSED_RESULTS is the output of either `parse_mr_test_results` (anewa) or
 check which shape it is:
 
 - If it has a `results_by_arch` key (anewa's shape -- fields: `nvr`,
-  `results_by_arch`, `unfixed_results_by_arch`, `note_id`, `note_body`,
-  `report_portal_url`) and `results_by_arch` is non-empty, an anewa comment was
+  `results_by_arch`, `unfixed_results_by_arch`, `note_id`, `report_portal_url`) and `results_by_arch` is non-empty, an anewa comment was
   found -- proceed with Steps 2-7 as written below (the "default" anewa path).
 - If it has a `found` key instead (NEWA's shape -- fields: `found`, `comment_id`,
   `completed`, `all_passed` (NOT authoritative -- NEWA's own self-reported leading
@@ -148,8 +147,8 @@ if PARSED_RESULTS has a non-empty `unfixed_results_by_arch`.
   `include_results_table: false` -- Python already adds each plan's pass/fail counts
   to anewa's own table, so a second per-architecture table would just duplicate it),
   **not** folded into anewa's comment yourself; Python does that fold deterministically
-  after you return, using PARSED_RESULTS' own `note_body`, so a paraphrase here could
-  never corrupt or lose anewa's original comment.
+  after you return, using anewa's original comment, which Python already holds, so a
+  paraphrase here could never corrupt or lose it.
 - **If `note_id` is null** (no anewa comment exists to fold into), add the
   formatted markdown to `mr_comments` with `kind: "new"` instead.
 

@@ -48,10 +48,8 @@ POST_PUSH_TESTING_TIMEOUT_STR = "3 hours"
 class RedisQueues(Enum):
     """Constants for Redis queue names used by Ymir agents"""
 
+    # Retained for inspecting and transferring the retired input queues.
     TRIAGE_QUEUE = "triage_queue"
-    # Priority twin of TRIAGE_QUEUE for ymir_todo-triggered tasks. The triage
-    # agent BRPOPs from [TRIAGE_QUEUE_TODO, TRIAGE_QUEUE] so Redis serves the
-    # priority queue first whenever it has anything.
     TRIAGE_QUEUE_TODO = "triage_queue_todo"
     REBASE_QUEUE_C9S = "rebase_queue_c9s"
     REBASE_QUEUE_C10S = "rebase_queue_c10s"
@@ -109,8 +107,6 @@ class RedisQueues(Enum):
     def input_queues(cls) -> set[str]:
         """Return input queue names that contain Task objects with metadata"""
         return {
-            cls.TRIAGE_QUEUE.value,
-            cls.TRIAGE_QUEUE_TODO.value,
             cls.REBASE_QUEUE_C9S.value,
             cls.REBASE_QUEUE_C10S.value,
             cls.BACKPORT_QUEUE_C9S.value,
@@ -197,6 +193,7 @@ class JiraLabels(Enum):
     NEEDS_ATTENTION = "ymir_needs_attention"
     TRIAGED = "ymir_triaged"
     TRIAGE_IN_PROGRESS = "ymir_triage_in_progress"
+    TRIAGE_COORDINATION_WAITING = "ymir_triage_waiting_for_coordination"
     TRIAGED_BACKPORT = "ymir_triaged_backport"
     TRIAGED_REBASE = "ymir_triaged_rebase"
 

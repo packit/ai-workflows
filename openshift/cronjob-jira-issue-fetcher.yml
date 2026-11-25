@@ -6,7 +6,7 @@ metadata:
     app: jira-issue-fetcher
     component: scheduler
 spec:
-  # Every 15 minutes — tops up the triage queue toward QUEUE_DEPTH_THRESHOLD.
+  # Every 15 minutes, submit up to MAX_ISSUES eligible requests.
   schedule: "*/15 * * * *"
   concurrencyPolicy: Forbid  # Prevent overlapping runs
   successfulJobsHistoryLimit: 1
@@ -39,6 +39,8 @@ spec:
             envFrom:
             - configMapRef:
                 name: endpoints-env
+            - configMapRef:
+                name: temporal-triage-env
             - configMapRef:
                 name: jira-env
             - secretRef:

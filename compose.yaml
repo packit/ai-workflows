@@ -4,6 +4,8 @@ x-beeai-env: &beeai-env
   GITLAB_TOKEN: ${GITLAB_TOKEN:-}
   UPSTREAM_SEARCH_API_URL: http://upstream-sea.hosted.upshift.rdu2.redhat.com:80/v1
   REDIS_URL: redis://valkey:6379/0
+  TEMPORAL_ADDRESS: temporal:7233
+  TEMPORAL_TRIAGE_ADMISSIONS: ${TEMPORAL_TRIAGE_ADMISSIONS:-true}
   COLLECTOR_ENDPOINT: http://otel-collector:4318/v1/traces
   TRACE_VIEWER_URL: ${TRACE_VIEWER_URL:-http://localhost:8082}
   GIT_REPO_BASEPATH: /git-repos
@@ -153,17 +155,13 @@ services:
       - "127.0.0.1:8000:8000"
     restart: "no"
     profiles: ["cli"]
-    networks:
-      default:
-        aliases:
-          - mcp-gateway
 
   valkey:
     image: docker.io/valkey/valkey:8
     volumes:
       - valkey-data:/data
     restart: unless-stopped
-    profiles: ["agents", "e2e-test"]
+    profiles: ["agents", "e2e-test", "cli"]
 
   phoenix-db:
     image: quay.io/sclorg/postgresql-16-c9s
@@ -243,19 +241,51 @@ services:
     restart: unless-stopped
     profiles: ["agents"]
 
-  triage-agent:
+  temporal:
+    image: docker.io/temporalio/admin-tools:1.32.2
+    entrypoint: ["temporal"]
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--namespace", "ymir-cli"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    ports:
+      - "127.0.0.1:${TEMPORAL_UI_PORT:-8235}:8233"
+      - "127.0.0.1:${TEMPORAL_GRPC_PORT:-7235}:7233"
+    profiles: ["agents", "cli"]
+
+  triage-controller: &triage-controller
     <<: *beeai-agent-c10s
+    image: beeai-agent:triage-controller
+    build:
+      <<: *beeai-agent-c10s-build
+      target: temporal-worker
+    depends_on:
+      mcp-gateway: {condition: service_started}
+      valkey: {condition: service_started}
+      otel-collector: {condition: service_started}
+      temporal: {condition: service_healthy}
     environment:
       <<: *beeai-env
-    command: ["python", "-m", "ymir.agents.triage_agent"]
+      TEMPORAL_TRIAGE_INLINE: "true"
+    command: ["python3", "-m", "ymir.agents.temporal_triage_service"]
     profiles: ["agents"]
 
   triage-cli:
-    <<: *beeai-agent-c10s
-    depends_on: []
+    <<: *triage-controller
+    depends_on:
+      mcp-gateway-cli: {condition: service_started}
+      valkey: {condition: service_started}
+      trace-server: {condition: service_started}
+      temporal: {condition: service_healthy}
     userns_mode: keep-id
     environment:
       <<: *beeai-env
+      TEMPORAL_TRIAGE_INLINE: "true"
+      TEMPORAL_NAMESPACE: ymir-cli
+      MCP_GATEWAY_URL: http://mcp-gateway-cli:8000/sse
       COLLECTOR_ENDPOINT: http://trace-server:8080/v1/traces
       GOOGLE_APPLICATION_CREDENTIALS: /home/beeai/jotnar-vertex-dev.json
     volumes:
@@ -263,7 +293,6 @@ services:
       - ${GIT_REPOS_HOST:-git-repos}:${GIT_REPO_BASEPATH:-/git-repos}:rw,z
       - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z
       - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z
-    command: ["python", "-m", "ymir.agents.triage_agent"]
     restart: "no"
     profiles: ["cli"]
 
@@ -300,6 +329,9 @@ services:
       <<: *beeai-env
       MOCK_REPOS_DIR: /home/beeai/mock_repos/triage
       TEMPORAL_TRIAGE_ADDRESS: ${TEMPORAL_TRIAGE_ADDRESS:-local}
+      ALLOW_RHEL_CONFIG_OVERRIDE: ${ALLOW_RHEL_CONFIG_OVERRIDE:-false}
+      AUTO_CHAIN: "true"
+      TRIAGE_ENQUEUE_REPRODUCER: "false"
       PYTEST_ADDOPTS: ${TRIAGE_E2E_PYTEST_ARGS:-}
       # SAFETY: These MUST be set to prevent E2E tests from writing to production Jira.
       # Tests use real issue keys (e.g., RHEL-174694) and will post comments to
@@ -454,6 +486,8 @@ services:
       dockerfile: Containerfile.jira-issue-fetcher
     environment:
       - REDIS_URL=redis://valkey:6379/0
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_TRIAGE_ADMISSIONS=${TEMPORAL_TRIAGE_ADMISSIONS:-true}
     env_file:
       - .secrets/jira-issue-fetcher.env
     restart: "no"
@@ -476,6 +510,8 @@ services:
       dockerfile: Containerfile.sweep
     environment:
       - REDIS_URL=redis://valkey:6379/0
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_TRIAGE_ADMISSIONS=${TEMPORAL_TRIAGE_ADMISSIONS:-true}
     env_file:
       - .secrets/sweep.env
     restart: "no"

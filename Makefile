@@ -52,17 +52,18 @@ konflux-token:
 
 .PHONY: run-beeai-bash
 run-beeai-bash:
-	$(COMPOSE_AGENTS) run --rm triage-agent /bin/bash
+	$(COMPOSE_AGENTS) run --rm triage-controller /bin/bash
 
 .PHONY: run-triage-agent-standalone
 run-triage-agent-standalone:
-	$(COMPOSE_AGENTS) run --rm \
-		-e JIRA_ISSUE=$(JIRA_ISSUE) \
-		-e DRY_RUN=$(DRY_RUN) \
-		-e MOCK_JIRA=$(MOCK_JIRA) \
-		-e JIRA_DRY_RUN=$(JIRA_DRY_RUN) \
-		-e FORCE_CVE_TRIAGE=$(FORCE_CVE_TRIAGE) \
-		triage-agent
+	@if [ -z "$(strip $(JIRA_ISSUE))" ]; then \
+		echo "Usage: make run-triage-agent-standalone JIRA_ISSUE=RHEL-12345 DRY_RUN=true"; \
+		exit 1; \
+	fi
+	DRY_RUN=$(DRY_RUN) MOCK_JIRA=$(MOCK_JIRA) JIRA_DRY_RUN=$(JIRA_DRY_RUN) $(COMPOSE_AGENTS) up -d triage-controller
+	$(COMPOSE_AGENTS) exec -T triage-controller python3 -m ymir.agents.temporal_triage_admin submit "$(JIRA_ISSUE)" \
+		--wait --triage-only --user-triggered $(if $(filter true,$(DRY_RUN) $(JIRA_DRY_RUN)),--dry-run) \
+		$(if $(filter true,$(FORCE_CVE_TRIAGE)),--force-cve-triage)
 
 .PHONY: run-triage-agent-e2e-tests list-triage-agent-e2e-tests
 run-triage-agent-e2e-tests:
@@ -383,7 +384,7 @@ clean:
 
 .PHONY: logs-triage
 logs-triage:
-	$(COMPOSE_AGENTS) logs -f triage-agent
+	$(COMPOSE_AGENTS) logs -f triage-controller
 
 .PHONY: logs-backport
 logs-backport:
@@ -413,7 +414,8 @@ trigger-pipeline:
 		exit 1; \
 	fi
 	@echo "Triggering pipeline for issue: $(JIRA_ISSUE) (force_cve_triage=$(FORCE_CVE_TRIAGE))"
-	$(COMPOSE_AGENTS) exec valkey redis-cli LPUSH triage_queue '{"metadata": {"issue": "$(JIRA_ISSUE)", "force_cve_triage": $(FORCE_CVE_TRIAGE)}}'
+	$(COMPOSE_AGENTS) exec -T triage-controller python3 -m ymir.agents.temporal_triage_admin submit "$(JIRA_ISSUE)" \
+		$(if $(filter true,$(FORCE_CVE_TRIAGE)),--force-cve-triage) $(if $(filter true,$(DRY_RUN)),--dry-run)
 
 # Manually enqueue a reproducer job (also when TRIAGE_ENQUEUE_REPRODUCER=false).
 # Required: JIRA_ISSUE, PACKAGE
@@ -455,28 +457,12 @@ print(json.dumps({ \
 
 
 .PHONY: triage-issue
-triage-issue:
-	@if [ -z "$(JIRA_ISSUE)" ]; then \
-		echo "Usage: make triage-issue JIRA_ISSUE=RHEL-12345 [DRY_RUN=true]"; \
-		exit 1; \
-	fi
-	$(COMPOSE_AGENTS) run --rm \
-		-e JIRA_ISSUE=$(JIRA_ISSUE) \
-		-e DRY_RUN=$(DRY_RUN) \
-		-e AUTO_CHAIN=false \
-		triage-agent
+triage-issue: run-triage-agent-standalone
 
 .PHONY: process
 process:
-	@if [ -z "$(JIRA_ISSUE)" ]; then \
-		echo "Usage: make process JIRA_ISSUE=RHEL-12345 [DRY_RUN=true]"; \
-		exit 1; \
-	fi
-	$(COMPOSE_AGENTS) run --rm \
-		-e JIRA_ISSUE=$(JIRA_ISSUE) \
-		-e DRY_RUN=$(DRY_RUN) \
-		-e AUTO_CHAIN=true \
-		triage-agent
+	$(COMPOSE_AGENTS) exec -T triage-controller python3 -m ymir.agents.temporal_triage_admin submit "$(JIRA_ISSUE)" \
+		--wait $(if $(filter true,$(DRY_RUN)),--dry-run)
 
 .PHONY: run-issue-verification-agent-standalone
 run-issue-verification-agent-standalone:

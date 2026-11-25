@@ -40,6 +40,8 @@ spec:
             - configMapRef:
                 name: endpoints-env
             - configMapRef:
+                name: temporal-triage-env
+            - configMapRef:
                 name: jira-env
             - secretRef:
                 name: jira-env

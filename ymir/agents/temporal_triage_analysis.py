@@ -30,6 +30,7 @@ from ymir.agents.triage_agent import PreparedApplicability, TriageRunContext, Tr
 from ymir.common.config import rhel_config_override
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import AssessedApplicabilityResult, CVEEligibilityResult, TriageOutputSchema
+from ymir.common.temporal_triage import triage_issue_workflow_id as triage_issue_workflow_id
 from ymir.common.utils import mcp_tools
 from ymir.tools.privileged.jira import SetJiraFieldsToolInput
 from ymir.tools.unprivileged.commands import RunShellCommandTool
@@ -37,10 +38,6 @@ from ymir.tools.unprivileged.text import SearchTextTool, ViewTool
 from ymir.tools.unprivileged.version_mapper import VersionMapperTool
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=2)
-
-
-def triage_issue_workflow_id(jira_issue: str) -> str:
-    return f"triage/{jira_issue.strip().upper()}"
 
 
 @dataclass
@@ -54,6 +51,8 @@ class TriageAnalysisRequest:
     follow_up_requested: bool = False
     config_override: dict[str, Any] | None = None
     collect_jira_fields: bool = False
+    retry_operational_errors: bool = False
+    defer_rebuild_check: bool = False
 
 
 @dataclass
@@ -62,6 +61,7 @@ class TriageAnalysisResult:
     follow_up_requested: bool
     triage_usage: RunUsage | None = None
     jira_fields: tuple[SetJiraFieldsToolInput, ...] = ()
+    coordination_workflow_id: str | None = None
 
 
 @asynccontextmanager
@@ -74,9 +74,14 @@ async def _gateway(jira_issue: str, override: dict[str, Any] | None):
 
 
 @activity.defn
-async def read_eligibility(jira_issue: str, override: dict | None) -> CVEEligibilityResult:
+async def read_eligibility(
+    jira_issue: str, override: dict | None, retry_operational_errors: bool = False
+) -> CVEEligibilityResult:
     async with _gateway(jira_issue, override) as tools:
-        return await triage.read_cve_eligibility(jira_issue, tools)
+        result = await triage.read_cve_eligibility(jira_issue, tools)
+    if retry_operational_errors and result.error and not triage.cve_eligibility_needs_input(result.error):
+        raise ApplicationError(result.error, type="TriageEligibilityUnavailable")
+    return result
 
 
 async def _prepare_analysis(
@@ -178,7 +183,10 @@ class TriageAnalysisWorkflow:
         triage_usage = None
         jira_fields = ()
         override = request.config_override
-        state.cve_eligibility_result = await _execute(read_eligibility, state.jira_issue, override)
+        eligibility_args = [state.jira_issue, override]
+        if request.retry_operational_errors:
+            eligibility_args.append(True)
+        state.cve_eligibility_result = await _execute(read_eligibility, *eligibility_args)
         step = triage.apply_cve_eligibility(state, request.force_cve_triage)
 
         if step == "run_triage_analysis":
@@ -232,7 +240,7 @@ class TriageAnalysisWorkflow:
                     state.applicability_local_clone = None
                     state.applicability_unpacked_sources = None
 
-            if step == "verify_rebuild_buildroot":
+            if step == "verify_rebuild_buildroot" and (not request.defer_rebuild_check or state.triage_only):
                 triage.apply_rebuild_buildroot(state, await _execute(read_buildroot, state, override))
 
         follow_up = request.follow_up_requested and not (request.triage_only_requested or state.triage_only)
@@ -284,6 +292,7 @@ async def create_analysis_worker(
     *,
     publication: bool = False,
     gateway_connection_attempts: int = 1,
+    ingress: bool = False,
 ) -> Worker:
     global triage_model_agent, applicability_agent
     async with mcp_tools(
@@ -364,11 +373,31 @@ async def create_analysis_worker(
         activities.append(prepare_publication_analysis)
         activities.extend(PUBLICATION_ACTIVITIES)
 
+    if ingress:
+        from ymir.agents.temporal_package_coordination import (
+            PackageStreamActivities,
+            PackageStreamWorkflow,
+            plan_package_stream,
+            release_coordinated_triage,
+        )
+        from ymir.agents.temporal_triage_ingress import INGRESS_ACTIVITIES, TriageIngressWorkflow
+
+        coordination = PackageStreamActivities(client, task_queue)
+        workflows.extend((TriageIngressWorkflow, PackageStreamWorkflow))
+        activities.extend(
+            [
+                *INGRESS_ACTIVITIES,
+                plan_package_stream,
+                release_coordinated_triage,
+                coordination.submit_package_coordination,
+                coordination.submit_sibling_triage,
+            ]
+        )
     return Worker(
         client,
         task_queue=task_queue,
         workflows=workflows,
-        activities=activities,
+        activities=list(dict.fromkeys(activities)),
         plugins=[AgentPlugin(triage_model_agent), AgentPlugin(applicability_agent)],
         workflow_runner=SandboxedWorkflowRunner(
             restrictions=SandboxRestrictions.default.with_passthrough_modules(

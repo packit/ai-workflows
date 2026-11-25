@@ -97,7 +97,7 @@ requeue-error:
 	python3 scripts/requeue_error.py $(ERROR_ID) $(if $(filter true TRUE 1 yes YES,$(USER_TRIGGERED)),--user-triggered)
 
 logs-triage:
-	oc logs -f deployment/triage-agent
+	oc logs -f deployment/triage-controller
 
 logs-backport-c9s:
 	oc logs -f deployment/backport-agent-c9s
@@ -140,10 +140,12 @@ process:
 		echo "ERROR: ISSUE parameter is required. Usage: make process ISSUE=RHEL-XXXX"; \
 		exit 1; \
 	fi
-	@echo "Pushing $(ISSUE) to triage_queue..."
-	@oc exec deployment/valkey -- valkey-cli --tls --cert /tls/tls.crt --key /tls/tls.key --cacert /etc/pki/service-ca/service-ca.crt LPUSH triage_queue \
-		'{"metadata":{"issue":"$(ISSUE)"},"attempts":0,"user_triggered":false}'
-	@echo "✓ Task queued successfully. View queue with: make show-triage-queue"
+	oc exec deployment/triage-controller -- python3 -m ymir.agents.temporal_triage_admin submit "$(ISSUE)" \
+		$(if $(filter true,$(FORCE_CVE_TRIAGE)),--force-cve-triage)
+
+.PHONY: drain-legacy-triage
+drain-legacy-triage:
+	oc exec deployment/triage-controller -- python3 -m ymir.agents.temporal_triage_admin drain
 
 # Manually enqueue a reproducer job (also when TRIAGE_ENQUEUE_REPRODUCER=false).
 # Same interface as the local `make trigger-reproducer` target.

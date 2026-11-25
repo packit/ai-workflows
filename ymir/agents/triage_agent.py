@@ -1,17 +1,13 @@
-import asyncio
 import functools
 import json
 import logging
 import os
 import shutil
-import traceback
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-import sentry_sdk
-from beeai_framework.errors import FrameworkError
 from opentelemetry import trace as trace_api
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_ai import Agent, ModelRetry, PromptedOutput, RunContext
@@ -19,11 +15,9 @@ from pydantic_ai.capabilities import Instrumentation
 
 import ymir.agents.tasks as tasks
 from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_triage_applicability_agent
-from ymir.agents.observability import setup_observability
 from ymir.agents.pydantic_agent import adapt_tool, run_pydantic_agent
 from ymir.agents.rebase_consolidation import (
     CLUSTER_LOCK_PREFIX,
-    check_and_queue_primary_if_ready,
     get_rebase_primary_issue,
     queue_siblings_for_triage,
     rebase_cluster_lock_key,
@@ -32,21 +26,17 @@ from ymir.agents.rebase_consolidation import (
 from ymir.agents.rebuild_consolidation import find_rebuild_siblings
 from ymir.agents.tasks import InvalidReproducerConfigError
 from ymir.agents.utils import (
-    build_agent_factory_with_mock_repos,
     get_agent_execution_config,
     mcp_tools,
     patch_fetch_tool_name,
     render_template,
-    resolve_chat_model_override,
     run_tool,
 )
-from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
+from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.config import load_rhel_config
 from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels, RedisQueues
 from ymir.common.cve import extract_cve_ids
-from ymir.common.error_list import clear_resolved_errors
-from ymir.common.issue_lock import issue_lock, waiting_issue_lock
-from ymir.common.logging_setup import configure_logging, current_jira_issue
+from ymir.common.issue_lock import waiting_issue_lock
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     POSTPONED_RESOLUTIONS,
@@ -57,8 +47,6 @@ from ymir.common.models import (
     ConfidenceAssessment,
     CVEEligibilityResult,
     ErrorData,
-    ErrorListEntry,
-    IssueStatus,
     NotAffectedData,
     OpenEndedAnalysisData,
     PostponedData,
@@ -81,11 +69,9 @@ from ymir.common.utils import (
     check_build_in_buildroot,
     extract_text_from_adf,
     get_latest_candidate_build,
-    init_sentry,
 )
 from ymir.common.version_utils import (
     construct_internal_branch_name,
-    detect_modular_issue,
     extract_downstream_package,
     get_maintenance_majors,
     is_modular,
@@ -1079,6 +1065,10 @@ async def read_cve_eligibility(jira_issue: str, gateway_tools) -> CVEEligibility
     return eligibility
 
 
+def cve_eligibility_needs_input(error: str) -> bool:
+    return "Fix Versions field is empty" in error
+
+
 def apply_cve_eligibility(state: TriageState, force_cve_triage: bool) -> str:
     eligibility = state.cve_eligibility_result.eligibility
     dup_key = state.cve_eligibility_result.duplicate_of
@@ -1141,9 +1131,7 @@ def apply_cve_eligibility(state: TriageState, force_cve_triage: bool) -> str:
         # - Clone/dependency check failures → ERROR (retriable,
         #   maps to ymir_triage_errored)
         error_msg = state.cve_eligibility_result.error
-        is_missing_fix_version = "Fix Versions field is empty" in error_msg
-
-        if is_missing_fix_version:
+        if cve_eligibility_needs_input(error_msg):
             # Non-retriable: requires human intervention (e.g., setting Fix Versions field)
             # Use CLARIFICATION_NEEDED to skip retry loop and post comment only once
             # Maps to ymir_needs_attention label (issue data incomplete, needs human attention)
@@ -1978,664 +1966,3 @@ async def label_postponed_issues(jira_issue: str, output: OutputSchema, dry_run:
             e,
         )
         raise
-
-
-async def main() -> None:
-    init_sentry()
-
-    configure_logging(level=logging.INFO, buffer_size=int(os.getenv("LOG_BUFFER_SIZE", 0)))
-    resolve_chat_model_override("triage")
-
-    span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
-
-    dry_run = os.getenv("DRY_RUN", "False").lower() == "true"
-    auto_chain = os.getenv("AUTO_CHAIN", "true").lower() == "true"
-    enqueue_reproducer = os.getenv("TRIAGE_ENQUEUE_REPRODUCER", "true").lower() == "true"
-    force_cve_triage = os.getenv("FORCE_CVE_TRIAGE", "false").lower() == "true"
-
-    if jira_issue := os.getenv("JIRA_ISSUE", None):
-        user_triggered = os.getenv("USER_TRIGGERED", "false").lower() == "true"
-        logger.info("Running in direct mode with environment variable")
-        # Direct-mode label lifecycle (user_triggered only):
-        #   Start:   add ymir_cli_triage to prevent concurrent service runs.
-        #   Crash:   remove ymir_cli_triage so the fetcher can re-process.
-        #   Success: keep ymir_cli_triage — it doubles as a usage-tracking
-        #            marker for CLI-triggered triage runs.
-        if user_triggered and not dry_run:
-            try:
-                await tasks.set_jira_labels(
-                    jira_issue=jira_issue,
-                    labels_to_add=[JiraLabels.CLI_TRIAGE.value],
-                    user_triggered=True,
-                    dry_run=dry_run,
-                )
-            except Exception:
-                logger.error(
-                    "Failed to set manual-trigger label on %s — aborting to avoid unprotected run", jira_issue
-                )
-                raise
-        with span_processor.start_transaction(jira_issue, workflow="TriageWorkflow"):
-            agent_factory = build_agent_factory_with_mock_repos(create_triage_agent, jira_issue)
-            try:
-                state = await run_workflow(
-                    jira_issue,
-                    dry_run,
-                    agent_factory,
-                    auto_chain=auto_chain,
-                    force_cve_triage=force_cve_triage,
-                    user_triggered=user_triggered,
-                )
-            except Exception:
-                if user_triggered and not dry_run:
-                    try:
-                        await tasks.set_jira_labels(
-                            jira_issue=jira_issue,
-                            labels_to_remove=[JiraLabels.CLI_TRIAGE.value],
-                            user_triggered=True,
-                            dry_run=dry_run,
-                        )
-                    except Exception as label_err:
-                        logger.warning(
-                            "Failed to remove manual-trigger label from %s on error: %s",
-                            jira_issue,
-                            label_err,
-                        )
-                raise
-            output = state.triage_result
-            logger.info(f"Direct run completed: {output.model_dump_json(indent=4)}")
-            if state.cve_eligibility_result:
-                logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
-            if state.target_branch:
-                logger.info(f"Target branch: {state.target_branch}")
-
-            result_dir = Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / jira_issue
-            result_dir.mkdir(parents=True, exist_ok=True)
-            (result_dir / "triage_result.json").write_text(output.model_dump_json(indent=2), encoding="utf-8")
-
-            if user_triggered and not dry_run:
-                if output.resolution in POSTPONED_RESOLUTIONS:
-                    await label_postponed_issues(
-                        jira_issue=jira_issue, output=output, dry_run=dry_run, user_triggered=user_triggered
-                    )
-                else:
-                    resolution_label = _resolution_label(output.resolution, state.triage_only)
-                    if (
-                        resolution_label
-                        and output.resolution != Resolution.ERROR
-                        and not state.hold_for_manual_branch_creation
-                    ):
-                        try:
-                            await tasks.set_jira_labels(
-                                jira_issue=jira_issue,
-                                labels_to_add=[resolution_label.value],
-                                labels_to_remove=[JiraLabels.MANUAL_BRANCH_NEEDED.value],
-                                user_triggered=True,
-                                dry_run=dry_run,
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                "Failed to set resolution label on %s: %s",
-                                jira_issue,
-                                e,
-                            )
-                    if output.resolution == Resolution.REBUILD and not state.hold_for_manual_branch_creation:
-                        for consolidated in output.data.consolidated_issues:
-                            try:
-                                await tasks.set_jira_labels(
-                                    jira_issue=consolidated.issue_key,
-                                    labels_to_add=[JiraLabels.TRIAGED_REBUILD.value],
-                                    labels_to_remove=[
-                                        JiraLabels.TRIAGE_IN_PROGRESS.value,
-                                        JiraLabels.REBUILT.value,
-                                        JiraLabels.MANUAL_BRANCH_NEEDED.value,
-                                    ],
-                                    dry_run=dry_run,
-                                    user_triggered=True,
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    "Failed to set labels on consolidated issue %s: %s",
-                                    consolidated.issue_key,
-                                    e,
-                                )
-
-            return
-
-    logger.info(
-        "Starting triage agent in queue mode (AUTO_CHAIN=%s, TRIAGE_ENQUEUE_REPRODUCER=%s)",
-        "enabled" if auto_chain else "disabled",
-        "enabled" if enqueue_reproducer else "disabled",
-    )
-    max_concurrent_tasks = int(os.getenv("MAX_CONCURRENT_TASKS", 1))
-    async with redis_client(os.environ["REDIS_URL"]) as redis:
-        max_retries = int(os.getenv("MAX_RETRIES", 3))
-        redis_logger.info(f"Connected to Redis, max retries set to {max_retries}")
-
-        async def process_task(payload):
-            task = Task.model_validate_json(payload)
-            input = InputSchema.model_validate(task.metadata)
-            current_jira_issue.set(input.issue)
-            requeue = None
-            async with issue_lock(redis, input.issue) as lock_token:
-                if lock_token is None:
-                    logger.info(
-                        "Issue %s is already locked by another worker; dropping duplicate",
-                        input.issue,
-                    )
-                    return
-                requeue = await _process_triage_locked(task, input)
-            if requeue is not None:
-                await fix_await(redis.lpush(requeue[0], requeue[1]))
-                if len(requeue) > 2:
-                    await asyncio.sleep(requeue[2])
-
-        async def _process_triage_locked(task, input) -> tuple[str, str] | tuple[str, str, int] | None:
-            user_triggered = task.user_triggered
-            triage_only_requested = task.triage_only
-            trigger_note = ""
-            if user_triggered:
-                trigger_note = (
-                    " (user-triggered via ymir_todo_triage)"
-                    if triage_only_requested
-                    else " (user-triggered via ymir_todo)"
-                )
-            logger.info(
-                f"Processing triage for JIRA issue: {input.issue}, attempt: {task.attempts + 1}{trigger_note}"
-            )
-            if task.attempts == 0:
-                if user_triggered:
-                    sentry_sdk.metrics.count(
-                        "ymir_todo.processed",
-                        1,
-                        attributes={"issue": input.issue, "triage_only": triage_only_requested},
-                    )
-                else:
-                    sentry_sdk.metrics.count("ymir.autoprocessed", 1)
-
-            # User-triggered runs will receive an acknowledgement comment,
-            # but only after we successfully write the in-progress label to
-            # avoid duplicate comments if the label write later fails.
-            # post_user_ack_once persists ack_posted in task.metadata so that
-            # retries do not re-post the ack after it has already been
-            # delivered.
-
-            current_labels, current_status = await tasks.get_jira_issue_metadata(input.issue)
-            terminal_ymir_labels = _terminal_ymir_labels(current_labels)
-            if (
-                terminal_ymir_labels
-                and JiraLabels.RETRY_NEEDED.value not in current_labels
-                and JiraLabels.TRIAGE_IN_PROGRESS.value not in current_labels
-                and not user_triggered
-            ):
-                logger.info(
-                    f"Skipping duplicate triage for {input.issue} — "
-                    f"already has labels: {terminal_ymir_labels}"
-                )
-                return None
-
-            if current_status in (IssueStatus.CLOSED.value, IssueStatus.DONE.value):
-                logger.info(f"Skipping triage for {input.issue} — issue is already {current_status}")
-                if user_triggered:
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_remove=[JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value],
-                        dry_run=dry_run,
-                        user_triggered=True,
-                    )
-                    await tasks.post_user_ack_once(
-                        task,
-                        input.issue,
-                        "triage",
-                        f"Issue is already **{current_status}** — skipping processing.",
-                        user_triggered=True,
-                        dry_run=dry_run,
-                    )
-                return None
-
-            async def retry(
-                task,
-                error: ErrorData,
-                comment_text=None,
-                input=input,
-                user_triggered=user_triggered,
-            ) -> tuple[str, str] | None:
-                """Handle a failed task by re-queuing or finalizing.
-
-                Returns ``(queue, payload)`` when the task should be
-                re-queued.  The caller must push the payload **after**
-                releasing the issue lock to avoid a race where another
-                worker picks up the task while the lock is still held.
-                """
-                task.attempts += 1
-                # Preserve priority on retries: ymir_todo tasks go back to
-                # the priority queue, normal tasks to the standard one.
-                # Read from `task.user_triggered` (not the closure-captured
-                # variable) so we're robust to anything that might rebind
-                # the local in a future refactor.
-                retry_queue = (
-                    RedisQueues.TRIAGE_QUEUE_TODO.value
-                    if task.user_triggered
-                    else RedisQueues.TRIAGE_QUEUE.value
-                )
-                if task.attempts < max_retries:
-                    logger.warning(
-                        f"Task failed (attempt {task.attempts}/{max_retries}), "
-                        f"re-queuing for retry: {input.issue}"
-                    )
-                    return (retry_queue, task.model_dump_json())
-                logger.error(f"Task failed after {max_retries} attempts, moving to error list: {input.issue}")
-                try:
-                    await tasks.set_jira_labels(
-                        jira_issue=input.issue,
-                        labels_to_add=[JiraLabels.TRIAGE_ERRORED.value],
-                        labels_to_remove=[
-                            JiraLabels.TRIAGE_IN_PROGRESS.value,
-                            JiraLabels.MANUAL_BRANCH_NEEDED.value,
-                        ],
-                        dry_run=dry_run,
-                        user_triggered=user_triggered,
-                    )
-                except Exception as label_error:
-                    logger.warning(f"Failed to set error labels on {input.issue}: {label_error}")
-                if comment_text and not dry_run:
-                    try:
-                        async with mcp_tools(
-                            os.environ["MCP_GATEWAY_URL"],
-                            call_meta={"jira_issue": input.issue},
-                        ) as gateway_tools:
-                            await tasks.post_terminal_error_comment(
-                                jira_issue=input.issue,
-                                agent_type="Triage",
-                                comment_text=comment_text,
-                                available_tools=gateway_tools,
-                            )
-                    except Exception as comment_error:
-                        logger.warning(
-                            "Failed to post final triage failure comment for %s: %s",
-                            input.issue,
-                            comment_error,
-                        )
-                error_id = await fix_await(redis.incr(RedisQueues.ERROR_ID_COUNTER.value))
-                entry = ErrorListEntry(error_id=error_id, queue=retry_queue, task=task, error=error)
-                await fix_await(redis.lpush(RedisQueues.ERROR_LIST.value, entry.model_dump_json()))
-                return None
-
-            # ymir_triage_in_progress is the dedup anchor for the next fetcher
-            # sweep. If we cannot write it, we must not proceed — otherwise the
-            # fetcher will re-enqueue this issue and a second triage will run in
-            # parallel. Re-queue the task as-is (task.attempts tracks triage
-            # retries, not Jira-write retries — set_jira_labels already retries
-            # the write internally) and skip processing this iteration.
-            try:
-                # Keep the waiting marker so sibling completion can release
-                # this primary while it is being re-triaged. Clean other old
-                # ymir_* labels and establish the in-progress anchor.
-                # The triage-only marker is persisted intent: keep it for
-                # triage-only runs and automatic re-entries. An explicit
-                # ymir_todo run (user-triggered, not triage-only) drops it,
-                # both here and in the fetcher's label flip.
-                preserve_triage_only = not user_triggered or triage_only_requested
-                labels_to_remove = [
-                    label
-                    for label in current_labels
-                    if label.startswith("ymir_")
-                    and label
-                    not in (JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.WAITING_FOR_SIBLINGS.value)
-                    and not (preserve_triage_only and label == JiraLabels.TRIAGE_ONLY.value)
-                ]
-                await tasks.set_jira_labels(
-                    jira_issue=input.issue,
-                    labels_to_add=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-                    labels_to_remove=labels_to_remove,
-                    dry_run=dry_run,
-                    user_triggered=user_triggered,
-                    critical=True,
-                )
-                logger.info(f"Cleaned up existing labels for {input.issue}")
-                # Post acknowledgement comment for user-triggered runs now that
-                # the in-progress label write succeeded. This prevents duplicate
-                # comments if the critical label write were to fail.
-                await tasks.post_user_ack_once(
-                    task=task,
-                    jira_issue=input.issue,
-                    agent_type="Triage",
-                    comment_text=(
-                        "Ymir picked up your request and started processing. "
-                        "Results will be posted here when triage completes."
-                    ),
-                    user_triggered=user_triggered,
-                    dry_run=dry_run,
-                )
-            except Exception as e:
-                # Route through retry() so a permanently failing issue (deleted
-                # ticket, per-issue permission error) is bounded by max_retries
-                # instead of looping forever and blocking the queue. On
-                # exhaustion the task lands in ERROR_LIST; the best-effort
-                # ymir_triage_errored label write may also fail if Jira itself
-                # is down — that's accepted (ERROR_LIST is the durable record).
-                logger.error(
-                    f"Could not set {JiraLabels.TRIAGE_IN_PROGRESS.value} on "
-                    f"{input.issue} after retries: {e}; re-queuing to avoid duplicate triage."
-                )
-                error_msg = f"Failed to set in-progress label: {e}"
-                requeue = await retry(task, ErrorData(details=error_msg, jira_issue=input.issue))
-                if requeue is None:
-                    return None
-                # Long sleep on purpose: critical-write retries already burned
-                # ~7s, so we're past transient blips. Typical Jira outages last
-                # minutes; cycling faster just spams the API.  The actual sleep
-                # happens in process_task after the lock is released and the
-                # retry payload is safely in Redis.
-                return (requeue[0], requeue[1], 60)
-
-            try:
-                logger.info(f"Starting triage processing for {input.issue}")
-                with span_processor.start_transaction(input.issue, workflow="TriageWorkflow"):
-                    state = await run_workflow(
-                        input.issue,
-                        dry_run,
-                        create_triage_agent,
-                        auto_chain=auto_chain,
-                        force_cve_triage=input.force_cve_triage,
-                        user_triggered=user_triggered,
-                        triage_only_requested=triage_only_requested,
-                    )
-                    output = state.triage_result
-                    logger.info(
-                        f"Triage processing completed for {input.issue}, "
-                        f"resolution: {output.resolution.value}"
-                    )
-                    if state.cve_eligibility_result:
-                        logger.info(f"CVE eligibility result: {state.cve_eligibility_result}")
-                    if state.target_branch:
-                        logger.info(f"Target branch: {state.target_branch}")
-
-            except Exception as e:
-                error = "".join(traceback.format_exception(e))
-                logger.error(f"Exception during triage processing for {input.issue}: {error}")
-                reason = e.explain() if isinstance(e, FrameworkError) else e
-                return await retry(
-                    task,
-                    ErrorData(details=error, jira_issue=input.issue),
-                    comment_text=f"Agent failed to perform triage: {reason}",
-                )
-            else:
-                logger.info(f"Triage resolved as {output.resolution.value} for {input.issue}")
-
-                is_sibling = state.is_rebase_sibling
-                hold_for_manual_branch_creation = state.hold_for_manual_branch_creation
-
-                if output.resolution in POSTPONED_RESOLUTIONS:
-                    await label_postponed_issues(
-                        jira_issue=input.issue, output=output, dry_run=dry_run, user_triggered=user_triggered
-                    )
-                else:
-                    resolution_label = _resolution_label(output.resolution, state.triage_only)
-                    if (
-                        resolution_label
-                        and output.resolution != Resolution.ERROR
-                        and not hold_for_manual_branch_creation
-                    ):
-                        # Terminal resolution label is the dedup anchor that replaces
-                        # ymir_triage_in_progress — must be written unconditionally so
-                        # the next fetcher sweep skips this issue.
-                        # Exception: skip terminal label if waiting for siblings (will be set on re-triage)
-                        # Also remove ymir_rebase_sibling if present (sibling finished triaging)
-                        labels_to_remove = [JiraLabels.TRIAGE_IN_PROGRESS.value]
-                        labels_to_add = []
-
-                        if is_sibling:
-                            labels_to_remove.append(JiraLabels.REBASE_SIBLING.value)
-                            logger.info(
-                                f"{input.issue} is a sibling, will check if primary is ready to queue"
-                            )
-
-                        # A full run waiting for siblings is re-triaged when they
-                        # finish, so its terminal label is added then. A triage-only
-                        # run ends the wait here instead of leaving it dangling.
-                        waiting_for_siblings = state.rebase_waiting_for_siblings or (
-                            JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
-                            and not state.waiting_marker_cleared
-                        )
-                        if _should_defer_terminal_label(
-                            output.resolution, state.triage_only, waiting_for_siblings
-                        ):
-                            logger.info(
-                                f"{input.issue} is waiting for siblings, skipping terminal label "
-                                "(will be added on re-triage after siblings finish)"
-                            )
-                        else:
-                            labels_to_add.append(resolution_label.value)
-                            labels_to_remove.append(JiraLabels.WAITING_FOR_SIBLINGS.value)
-
-                        await tasks.set_jira_labels(
-                            jira_issue=input.issue,
-                            labels_to_add=labels_to_add,
-                            labels_to_remove=labels_to_remove,
-                            dry_run=dry_run,
-                            user_triggered=user_triggered,
-                            critical=True,  # Terminal label is dedup anchor; must succeed
-                        )
-
-                        # Update current_labels to reflect the changes we just made
-                        if is_sibling and JiraLabels.REBASE_SIBLING.value in current_labels:
-                            current_labels.remove(JiraLabels.REBASE_SIBLING.value)
-                    if output.resolution == Resolution.REBUILD and not hold_for_manual_branch_creation:
-                        for consolidated in output.data.consolidated_issues:
-                            try:
-                                await tasks.set_jira_labels(
-                                    jira_issue=consolidated.issue_key,
-                                    labels_to_add=[JiraLabels.TRIAGED_REBUILD.value],
-                                    labels_to_remove=[
-                                        JiraLabels.TRIAGE_IN_PROGRESS.value,
-                                        JiraLabels.REBUILT.value,
-                                        JiraLabels.MANUAL_BRANCH_NEEDED.value,
-                                    ],
-                                    dry_run=dry_run,
-                                    user_triggered=user_triggered,
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to set labels on consolidated issue "
-                                    f"{consolidated.issue_key}: {e}"
-                                )
-                    elif output.resolution == Resolution.REBASE and not hold_for_manual_branch_creation:
-                        # Label and link consolidated siblings so they skip re-triage
-                        for consolidated in output.data.consolidated_issues:
-                            try:
-                                await tasks.set_jira_labels(
-                                    jira_issue=consolidated.issue_key,
-                                    labels_to_add=[JiraLabels.TRIAGED_REBASE.value],
-                                    labels_to_remove=[
-                                        JiraLabels.TRIAGE_IN_PROGRESS.value,
-                                        JiraLabels.REBASED.value,
-                                        JiraLabels.MANUAL_BRANCH_NEEDED.value,
-                                    ],
-                                    dry_run=dry_run,
-                                    user_triggered=user_triggered,
-                                )
-                                logger.info(
-                                    f"Labeled consolidated sibling {consolidated.issue_key} "
-                                    f"for group rebase with {input.issue}"
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to set labels on consolidated issue "
-                                    f"{consolidated.issue_key}: {e}"
-                                )
-                        # Post consolidation link comments after all labels are set
-                        if not dry_run and output.data.consolidated_issues:
-                            try:
-                                async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-                                    for consolidated in output.data.consolidated_issues:
-                                        await tasks.comment_in_jira(
-                                            jira_issue=consolidated.issue_key,
-                                            agent_type="Triage",
-                                            comment_text=(
-                                                f"Consolidated for rebase with {input.issue}. "
-                                                f"See {input.issue} for rebase status and results."
-                                            ),
-                                            available_tools=gateway_tools,
-                                            user_triggered=user_triggered,
-                                        )
-                                    logger.info(
-                                        f"Linked {len(output.data.consolidated_issues)} "
-                                        f"consolidated siblings to primary issue {input.issue}"
-                                    )
-                            except Exception as e:
-                                logger.warning(f"Failed to post consolidation link comments: {e}")
-
-                # If this was a sibling issue, check if primary is ready to be queued
-                if is_sibling:
-                    logger.info(f"Sibling {input.issue} finished triaging, checking if primary is ready")
-                    try:
-                        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-                            await check_and_queue_primary_if_ready(
-                                sibling_issue=input.issue,
-                                available_tools=gateway_tools,
-                                dry_run=dry_run,
-                                user_triggered=user_triggered,
-                            )
-                    except Exception as e:
-                        logger.warning(f"Failed to check/queue primary for sibling {input.issue}: {e}")
-
-                # Dispatch to downstream queues
-                if output.resolution == Resolution.ERROR:
-                    # `data` is a plain union independent of `resolution` — nothing
-                    # guarantees the model actually returned ErrorData here. Fall
-                    # back to a synthesized ErrorData rather than let a mismatched
-                    # type blow up ErrorListEntry validation inside retry() and
-                    # lose the task without persisting it to error_list.
-                    error_data = (
-                        output.data
-                        if isinstance(output.data, ErrorData)
-                        else ErrorData(
-                            details=(
-                                f"Triage returned resolution=error with unexpected data type "
-                                f"{type(output.data).__name__}: {output.data!r}"
-                            ),
-                            jira_issue=input.issue,
-                        )
-                    )
-                    return await retry(
-                        task,
-                        error_data,
-                        comment_text=f"Agent failed to perform triage: {error_data.details}",
-                    )
-                if output.resolution in POSTPONED_RESOLUTIONS:
-                    await fix_await(
-                        redis.lpush(
-                            RedisQueues.POSTPONED_LIST.value,
-                            output.data.model_dump_json(),
-                        )
-                    )
-                    logger.info(f"Pushed {input.issue} to {RedisQueues.POSTPONED_LIST.value}")
-                elif output.resolution in (
-                    Resolution.REBASE,
-                    Resolution.BACKPORT,
-                    Resolution.REBUILD,
-                    Resolution.CLARIFICATION_NEEDED,
-                    Resolution.OPEN_ENDED_ANALYSIS,
-                ):
-                    if auto_chain and not state.triage_only:
-                        if output.resolution == Resolution.OPEN_ENDED_ANALYSIS:
-                            queue = RedisQueues.OPEN_ENDED_ANALYSIS_LIST.value
-                            downstream_payload = output.data.model_dump_json()
-                        elif output.resolution == Resolution.CLARIFICATION_NEEDED:
-                            # Clarification does not require a target branch.
-                            task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
-                            queue = RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
-                            downstream_payload = task.model_dump_json()
-                        elif not state.target_branch:
-                            logger.info(f"No target branch for {input.issue} — skipping downstream dispatch")
-                            queue = None
-                        else:
-                            task = Task(metadata=state.model_dump(), user_triggered=user_triggered)
-                            downstream_payload = task.model_dump_json()
-                            if hold_for_manual_branch_creation:
-                                logger.info(
-                                    "Skipping downstream dispatch for %s until branch %s is created manually",
-                                    input.issue,
-                                    state.target_branch,
-                                )
-                                queue = None
-                            elif output.resolution == Resolution.REBASE:
-                                # Skip queueing if this is a sibling (will be consolidated with primary)
-                                if is_sibling:
-                                    logger.info(
-                                        f"Issue {input.issue} is a sibling, skipping rebase queue "
-                                        "(will be consolidated with primary)"
-                                    )
-                                    queue = None
-                                # Skip queueing if issue is waiting for siblings to finish triaging.
-                                # Check both state flag (set mid-workflow) and
-                                # Jira label (persisted across restarts).
-                                elif state.rebase_waiting_for_siblings or (
-                                    JiraLabels.WAITING_FOR_SIBLINGS.value in current_labels
-                                    and not state.waiting_marker_cleared
-                                ):
-                                    logger.info(
-                                        f"Issue {input.issue} is waiting for siblings to finish triaging, "
-                                        "skipping rebase queue (will be queued when siblings are done)"
-                                    )
-                                    queue = None
-                                else:
-                                    queue = RedisQueues.get_rebase_queue_for_branch(
-                                        state.target_branch, task.user_triggered
-                                    )
-                            elif output.resolution == Resolution.BACKPORT:
-                                queue = RedisQueues.get_backport_queue_for_branch(
-                                    state.target_branch, task.user_triggered
-                                )
-                            else:
-                                queue = RedisQueues.get_rebuild_queue_for_branch(
-                                    state.target_branch, task.user_triggered
-                                )
-                        if queue is not None:
-                            await fix_await(redis.lpush(queue, downstream_payload))
-                            logger.info(f"Pushed {input.issue} to {queue}")
-                    else:
-                        if state.triage_only:
-                            logger.info(
-                                "Triage-only mode for %s — skipping downstream queue "
-                                "(add ymir_todo to run the fix pipeline)",
-                                input.issue,
-                            )
-                        else:
-                            logger.info(f"AUTO_CHAIN disabled, skipping downstream queue for {input.issue}")
-
-                if output.resolution in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
-                    _modular_component = detect_modular_issue(
-                        jira_summary=state.jira_summary,
-                        raw_downstream_component=state.raw_downstream_component,
-                        downstream_component=state.downstream_component,
-                    )
-                    if _modular_component:
-                        logger.info("Modular issue %s — skipping reproducer queue", input.issue)
-                    elif enqueue_reproducer:
-                        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-                            await _enqueue_reproducer(redis, state, user_triggered, gateway_tools)
-                    else:
-                        logger.info(
-                            "TRIAGE_ENQUEUE_REPRODUCER disabled, skipping reproducer queue for %s",
-                            input.issue,
-                        )
-
-                if output.resolution != Resolution.ERROR:
-                    await clear_resolved_errors(
-                        redis, input.issue, RedisQueues.TRIAGE_QUEUE.value, dry_run=dry_run
-                    )
-
-        shutdown_event = asyncio.Event()
-        install_shutdown_handler(asyncio.get_running_loop(), shutdown_event)
-        await run_task_loop(
-            redis,
-            [RedisQueues.TRIAGE_QUEUE_TODO.value, RedisQueues.TRIAGE_QUEUE.value],
-            process_task,
-            max_concurrent=max_concurrent_tasks,
-            shutdown_event=shutdown_event,
-        )
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

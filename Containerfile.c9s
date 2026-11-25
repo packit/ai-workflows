@@ -78,6 +78,7 @@ COPY openinference-streaming.patch /tmp
 RUN python3.11 -m venv --system-site-packages /opt/beeai-venv \
     && /opt/beeai-venv/bin/pip install --upgrade pip \
     && /opt/beeai-venv/bin/pip install --no-cache-dir \
+         "temporalio==1.32.0" \
          "litellm<1.106.0,!=1.82.7,!=1.82.8,!=1.92.0" \
          beeai-framework[vertexai,mcp,duckduckgo]==0.1.85 \
          "pydantic-ai-slim[anthropic,google,openai]==2.30.0" \

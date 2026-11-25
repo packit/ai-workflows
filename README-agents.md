@@ -1,6 +1,6 @@
 # Package Maintenance Workflows as AI agents
 
-A set of AI agents interconnected via Redis and observed by Phoenix. Triage and
+A set of AI agents interconnected via Redis and observed by Phoenix. Triage runs in Temporal. Triage and
 its CVE applicability check use Pydantic AI. The other agents use BeeAI.
 Every agent can run individually or pick up tasks from a Redis queue.
 
@@ -48,7 +48,7 @@ to BeeAI agents. Triage uses Pydantic AI's request limit and retry handling.
 Phoenix receives Pydantic AI OpenTelemetry spans through the existing collector.
 The triage E2E report reads usage from the Pydantic AI result.
 
-Three agents process tasks through Redis queues:
+The packaging workflows use these agents:
 - **Triage Agent**: Analyzes JIRA issues and determines resolution path. It uses title, description, fields, and comments to find out root cause of the issue. It can ask for clarification, create tasks for other agents or may take no action if not needed.
 - **Rebase Agent**: Updates packages to newer upstream versions. A Rebase is only to be chosen when the issue explicitly instructs you to "rebase" or "update". It looks for upstream references that are linked, attached and present in the description or comments in the issue.
 - **Backport Agent**: Applies specific fixes/patches to packages. It looks for patches that are linked, attached and present in the description or comments in the issue. It tries to apply the patch and resolve any conflicts that may arise during the backport process.
@@ -563,7 +563,7 @@ gateway, and writable workspace. Each worker prepares its own mock repositories.
 The local limit is three active triage pods, shared across test invocations.
 The controller removes each pod and workspace when its case finishes. Set up
 the existing Jira and repository fixtures, then run the Make target. The metrics
-table reports `TemporalTriagePublication` for the cases it ran.
+table reports `TemporalTriageIngress` for the cases it ran.
 [E2E fixture setup](CONTRIBUTING.md)
 
 ```bash
@@ -656,19 +656,134 @@ TEMPORAL_TEST_ADDRESS=127.0.0.1:7233 TEMPORAL_TEST_REDIS_URL=redis://127.0.0.1:6
   ymir/agents/tests/integration/test_temporal_triage_publication.py
 ```
 
+#### Run triage through Temporal
+
+Jira discovery, sweeps, the CLI, and retries submit directly to the issue
+workflow `triage/<JIRA-KEY>`. The shared worker runs Temporal task queues.
+OpenShift provisions a dedicated worker and gateway pod for each execution.
+Local Compose provides an inline worker for the development pipeline and
+standalone Make target.
+The mock Jira E2E target uses its own Temporal server and up to three Podman
+execution pods.
+
+```bash
+make run-triage-agent-standalone JIRA_ISSUE=RHEL-15216 DRY_RUN=true MOCK_JIRA=true
+```
+
+The target starts the Compose triage controller and its dependencies, including
+Temporal, then submits a triage-only request and waits for its result. Compose
+keeps the services running for subsequent requests and for inspecting history
+at `http://localhost:8235`. `MOCK_JIRA` and the dry-run environment variables
+configure the local controller and gateway when Compose brings them up.
+
+Use `TEMPORAL_ADDRESS` to send the CLI to an existing controller. The CLI
+prints the result of its own request. Use `--detach` to return after admission
+and `--full` to request downstream processing.
+
+```bash
+TEMPORAL_ADDRESS=127.0.0.1:7235 uv run --extra temporal ymir RHEL-287570 \
+  --dry-run --request-id triage-1
+```
+
+With no `TEMPORAL_ADDRESS`, the CLI submits to the Compose Temporal server
+in the `ymir-cli` namespace and prints the same JSON result. The local Jira
+fixtures and output directory options apply in this mode. Use the
+OpenShift guide to transfer an existing installation's pending or parked
+Redis triage work. [OpenShift cutover](openshift/README.md#cut-over-triage-to-temporal)
+
+#### Coordinate a package stream in Temporal
+
+Set `TEMPORAL_TRIAGE_COORDINATION=true` on the shared controller. Start with a package and stream whose participating
+tickets can be triaged by Temporal or whose existing triage results can be
+read. Reconcile old rebase sibling markers and outstanding downstream work
+before handing ownership to the new workflow.
+
+A completed triage run writes its finding and
+`ymir_triage_waiting_for_coordination`, releases its execution pod, and signals
+the shared `PackageStreamWorkflow`. The workflow exposes its finite sibling
+snapshot, pending issues, and blockers in the `status` query. Jira discovery
+walks every page within a bounded search. The coordinator requests missing
+triage for owned siblings. It waits on a Temporal timer between reads and wakes
+early when another triage result arrives. The existing rebuild buildroot check
+runs on the shared control worker for coordinated rebuilds.
+
+Eligible sibling rebases with the same target version and rebuilds with the same
+dependency and side tag share one existing downstream handoff. Known issue
+blockers remain visible while independent fixes proceed after the sibling triage
+barrier. The bridge still dispatches individual backport tasks and uses the
+existing downstream MR consolidation path.
+
+Higher-stream matching uses CVE IDs and package identity, or Jira clone links
+for non-CVE work. The gate takes the nearest applicable stream per family,
+including across RHEL majors. The default order is descending major and minor
+version. Set `TEMPORAL_TRIAGE_STREAM_ORDER` from highest to lowest when the
+package policy requires a different order. Existing CVE eligibility checks
+continue to apply. Configure a scoped read-only `GITLAB_TOKEN` on
+the controller and approved Jira account IDs in
+`TEMPORAL_TRIAGE_VALIDATION_AUTHORS`. The controller consumes private Jira
+validation records authored by one of those IDs. The validation producer or
+maintainer records the passed checks against the exact source revision.
+Use Jira's `{code:json}` block for the record.
+
+```json
+{
+  "schema": 1,
+  "kind": "triage-fix-validation",
+  "issue": "RHEL-12345",
+  "stream": "rhel-10.2",
+  "target_branch": "c10s",
+  "cves": ["CVE-2025-12345"],
+  "merge_request": "https://gitlab.com/redhat/centos-stream/rpms/example/-/merge_requests/42",
+  "source_sha": "1111111111111111111111111111111111111111",
+  "resolution": "backport",
+  "patch_urls": ["https://github.com/example/example/commit/1111111111111111111111111111111111111111.patch"],
+  "reproducer_required": false,
+  "checks": {
+    "build": "https://build.example/result/1",
+    "test": "https://tests.example/result/1",
+    "coverage": "https://tests.example/result/1#RHEL-12345"
+  }
+}
+```
+
+For a rebase, the record carries `version`. For a rebuild it carries
+`dependency_component` and a `checks.rebuild` result. When paired reproducer
+validation is required, set `reproducer_required` to true and include
+`checks.paired_reproducer`. A signer attests per-issue coverage and supplies
+revision-specific result links. The coordinator verifies that the published
+MR is open or merged and still has the recorded head and target branch. A
+missing record, a changed MR head, or an incompatible approach keeps the
+issue pending. The legacy workers and pipelines need a signer to publish these
+records when they validate a higher-stream fix.
+
+After recreating the cluster, start the shared controller and run the recovery
+command with the Temporal settings and Jira credentials. Recovery reads Jira
+findings and resubmits waiting issues that lack an active owner. For a partly
+delivered handoff, inspect the existing Jira state and GitLab MR before retrying.
+
+```bash
+uv run --extra temporal python scripts/temporal-triage.py --recover-coordination
+```
+
+For rollback, pause admissions, reconcile all open package-stream workflows
+and their downstream handoffs, then stop those workflows before transferring
+ownership. [OpenShift cutover](openshift/README.md#cut-over-triage-to-temporal)
+
 ### CLI
 
-The `ymir` CLI runs the triage workflow inside a container, orchestrated via
-`compose.yaml`. Three infrastructure containers are started automatically
-before the triage agent runs:
+The `ymir` CLI starts a triage controller and its infrastructure through
+`compose.yaml` when you run it without `TEMPORAL_ADDRESS`.
 
+- **temporal** runs the development server and exposes the UI at `http://localhost:8235`.
+- **triage-cli** runs the shared triage worker in the `ymir-cli` namespace so
+  CLI requests use the gateway and workspace selected by the CLI.
 - **mcp-gateway-cli** (port 8000) — provides Jira, GitLab, and dist-git tools via
   MCP over SSE. Uses `keep-id` UID mapping for host filesystem access.
 - **trace-server** (port 8082) — collects OpenTelemetry spans and serves a
   trace viewer UI.
+- **valkey** — stores temporary delivery receipts for local publication.
 
-Both are defined in `compose.yaml` under the `cli` profile. The compose
-file exposes their ports on `127.0.0.1`.
+These services are defined in `compose.yaml` under the `cli` profile.
 
 #### First-time setup
 
@@ -698,18 +813,18 @@ file exposes their ports on `127.0.0.1`.
 
 ```bash
 # Run triage (always start with --dry-run)
-ymir triage RHEL-12345 --dry-run
+ymir RHEL-12345 --dry-run
 ```
 
-Infrastructure containers are started automatically before the triage workflow.
-When it finishes, mcp-gateway-cli is stopped but the trace-server is left
-running so you can inspect collected traces.
+The CLI stops its worker and `mcp-gateway-cli` when the request finishes.
+Temporal, the trace server, and Valkey stay up. Select `ymir-cli` in the
+Temporal UI to see the CLI workflow history.
 
 The `--compose-file` option defaults to `compose.yaml` in the current
 directory. Pass a different path if running from elsewhere:
 
 ```bash
-ymir triage RHEL-12345 --dry-run --compose-file /path/to/compose.yaml
+ymir RHEL-12345 --dry-run --compose-file /path/to/compose.yaml
 ```
 
 ##### Triage options
@@ -718,7 +833,6 @@ ymir triage RHEL-12345 --dry-run --compose-file /path/to/compose.yaml
 |------|-------------|
 | `--dry-run` | Skip Jira writes and downstream queues. **Always use for initial testing.** |
 | `--force-cve-triage` | Force triage even when CVE eligibility check says to skip. |
-| `--no-auto-chain` | Do not push results to downstream agent queues. |
 | `--secrets PATH` | Path to secrets directory (default: `.secrets`). |
 | `--compose-file PATH` | Path to compose.yaml for infrastructure containers (default: `compose.yaml`). |
 | `--work-dir PATH` | Directory for working files (git clones, triage results). A temporary directory is created if not specified. |
@@ -731,10 +845,8 @@ ymir triage RHEL-12345 --dry-run --compose-file /path/to/compose.yaml
 `anthropic:` or `gemini:` models, the API key from `beeai-agent.env` is
 sufficient.
 
-Issues processed through the CLI are tagged with the `ymir_cli_triage` Jira
-label at the start of the run. The label persists on success as a
-usage-tracking marker and is removed on failure so the service fetcher
-can re-process the issue. In `--dry-run` mode no labels are written.
+The CLI requests triage only by default. When connected to an existing
+controller, use `--full` to request downstream processing.
 
 #### Testing with mock Jiras
 
@@ -743,7 +855,7 @@ To test against mock Jira data from the
 the `--mock-jira` flag with the path to the mock data directory:
 
 ```bash
-ymir triage RHEL-112546 --dry-run --mock-jira ../testing-jiras/jiras
+ymir RHEL-112546 --dry-run --mock-jira ../testing-jiras/jiras
 ```
 
 This sets `MOCK_JIRA=true` and `JIRA_MOCK_FILES_HOST` automatically for the

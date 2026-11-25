@@ -15,6 +15,7 @@ from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from ymir.agents.pydantic_agent import configured_model, pydantic_model_settings
+from ymir.agents.temporal_package_coordination import recover_package_coordination
 from ymir.agents.temporal_triage_analysis import (
     TriageAnalysisRequest,
     TriageAnalysisWorkflow,
@@ -28,13 +29,32 @@ from ymir.agents.temporal_triage_publication import (
     run_triage_request,
 )
 from ymir.agents.utils import get_agent_execution_config, resolve_chat_model_override
+from ymir.common.temporal_triage import CONTROL_QUEUE
 
 
 async def main(args: argparse.Namespace) -> None:
-    resolve_chat_model_override("triage")
     client = await Client.connect(
         args.address, namespace=args.temporal_namespace, plugins=[PydanticAIPlugin()]
     )
+    if args.recover_coordination:
+        queue = os.getenv("TEMPORAL_TRIAGE_CONTROL_QUEUE", CONTROL_QUEUE)
+        result = await recover_package_coordination(client, queue)
+        print(json.dumps(result, indent=2))
+        return
+
+    if args.serve:
+        provisioner = OpenShiftTriageProvisioner(
+            args.openshift_namespace,
+            args.pod_template,
+            args.pod_temporal_address or args.address,
+            client.namespace,
+        )
+        queue = os.getenv("TEMPORAL_TRIAGE_CONTROL_QUEUE", CONTROL_QUEUE)
+        print(f"Serving Temporal triage on {queue}", flush=True)
+        await create_triage_control_worker(client, queue, provisioner).run()
+        return
+
+    resolve_chat_model_override("triage")
     request = TriageAnalysisRequest(
         jira_issue=args.issue.strip().upper(),
         model_settings=dict(pydantic_model_settings(os.environ["CHAT_MODEL"])),
@@ -112,9 +132,12 @@ def _report(result, publication: bool) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("issue")
-    parser.add_argument("--address", default="localhost:7233")
-    parser.add_argument("--temporal-namespace", default="default")
+    parser.add_argument("issue", nargs="?")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--serve", action="store_true", help="Run the shared triage control worker")
+    mode.add_argument("--recover-coordination", action="store_true", help="Resubmit waiting issues from Jira")
+    parser.add_argument("--address", default=os.getenv("TEMPORAL_ADDRESS", "localhost:7233"))
+    parser.add_argument("--temporal-namespace", default=os.getenv("TEMPORAL_NAMESPACE", "default"))
     parser.add_argument(
         "--openshift-namespace", help="Provision a worker and gateway pod using the current oc context"
     )
@@ -134,6 +157,14 @@ if __name__ == "__main__":
         "--enqueue-reproducer", action="store_true", help="Include eligible reproducer handoffs"
     )
     args = parser.parse_args()
-    if args.request_id is None and (args.publish or args.enqueue_reproducer or args.openshift_namespace):
+    if args.recover_coordination:
+        if args.issue:
+            parser.error("--recover-coordination runs without an issue argument")
+    elif args.serve:
+        if args.issue or not args.openshift_namespace:
+            parser.error("--serve requires --openshift-namespace and runs without an issue argument")
+    elif not args.issue:
+        parser.error("an issue is required unless --serve or --recover-coordination is set")
+    elif args.request_id is None and (args.publish or args.enqueue_reproducer or args.openshift_namespace):
         parser.error("--publish, --enqueue-reproducer, and --openshift-namespace require --request-id")
     asyncio.run(main(args))

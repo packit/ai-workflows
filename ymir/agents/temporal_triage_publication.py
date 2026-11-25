@@ -13,7 +13,7 @@ from uuid import NAMESPACE_URL, uuid5
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.common import RetryPolicy, WorkflowIDConflictPolicy, WorkflowIDReusePolicy
-from temporalio.exceptions import ApplicationError, WorkflowAlreadyStartedError
+from temporalio.exceptions import ApplicationError, FailureError, WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from ymir.agents import tasks
@@ -37,6 +37,7 @@ RECEIPT_TTL = int(timedelta(days=7).total_seconds())
 WRITE_RETRY = RetryPolicy(maximum_attempts=8, maximum_interval=timedelta(seconds=60))
 FIX_RESOLUTIONS = (Resolution.BACKPORT, Resolution.REBASE, Resolution.REBUILD)
 REQUEST_ALREADY_STARTED = "TriageRequestAlreadyStarted"
+POD_CLEANUP_FAILED = "TriagePodCleanupFailed"
 
 # A consumer can pop an item before the client gets the response. Check the
 # receipt instead of inspecting the queue. Both keys live on Ymir's Valkey.
@@ -59,6 +60,7 @@ class TriagePublicationRequest:
     dry_run: bool = True
     enqueue_reproducer: bool = False
     provision_pod: bool = False
+    coordinate: bool = False
 
     def operation_id(self, step: str) -> str:
         identity = ["ymir-triage-v1", self.analysis.jira_issue.upper(), self.request_id, step]
@@ -97,6 +99,7 @@ class TriagePublicationResult:
     destinations: list[str]
     dry_run: bool
     skipped_reason: str | None = None
+    coordinated_handoffs: list[RedisHandoff] | None = None
 
 
 @workflow.defn
@@ -269,6 +272,8 @@ async def publish_triage_finding(
         auto_chain=result.follow_up_requested,
         triage_only=triage._defers_fix(output.resolution, state.triage_only),
     )
+    if coordination_workflow_id := result.coordination_workflow_id:
+        body += f"\n\nFollow-up is waiting on package-stream coordination ({coordination_workflow_id})."
     if state.applicability_check_skipped:
         body += "\n\n_Note: The CVE applicability check could not be performed._"
     if state.hold_for_manual_branch_creation:
@@ -289,6 +294,15 @@ async def publish_triage_finding(
             "applicability_check_skipped": state.applicability_check_skipped,
             "finding": output.model_dump(mode="json", exclude={"data": {"triage_summary"}}),
             "planned_follow_up": [item.purpose for item in handoffs],
+            **(
+                {
+                    "coordination_workflow_id": coordination_workflow_id,
+                    "user_triggered": request.analysis.user_triggered,
+                    "force_cve_triage": request.analysis.force_cve_triage,
+                }
+                if coordination_workflow_id
+                else {}
+            ),
         }
     )
     await _post_comment(request, "finding", f"{body}\n\n{record}")
@@ -455,10 +469,14 @@ class TriagePublicationWorkflow:
         if not request.request_id.strip() or len(request.request_id) > 200:
             raise ApplicationError("Expected a request ID of 1 to 200 characters", non_retryable=True)
 
+        await self.claim(request)
+        return await self.execute(request)
+
+    async def claim(self, request: TriagePublicationRequest) -> None:
         try:
             await workflow.execute_child_workflow(
                 TriageRequestReceiptWorkflow.run,
-                info.first_execution_run_id,
+                workflow.info().first_execution_run_id,
                 id=request.receipt_workflow_id(),
                 id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
             )
@@ -467,11 +485,16 @@ class TriagePublicationWorkflow:
                 "Triage request already has an owning run", type=REQUEST_ALREADY_STARTED, non_retryable=True
             ) from error
 
+    async def execute(
+        self, request: TriagePublicationRequest, *, ingress_execution_id: str | None = None
+    ) -> TriagePublicationResult:
         if not request.provision_pod:
-            return await self._run_request(request)
+            return await self._run_request(request, ingress_execution_id=ingress_execution_id)
 
         pod = TriagePod(
-            f"ymir-triage-{info.first_execution_run_id}", request.analysis.jira_issue, request.dry_run
+            f"ymir-triage-{ingress_execution_id or workflow.info().first_execution_run_id}",
+            request.analysis.jira_issue,
+            request.dry_run,
         )
         try:
             await workflow.execute_activity_method(
@@ -490,7 +513,7 @@ class TriagePublicationWorkflow:
                 heartbeat_timeout=timedelta(seconds=75),
                 retry_policy=RetryPolicy(maximum_attempts=1),
             )
-            run = asyncio.create_task(self._run_request(request, pod.task_queue))
+            run = asyncio.create_task(self._run_request(request, pod.task_queue, ingress_execution_id))
             try:
                 done, _ = await workflow.wait([run, watch], return_when=asyncio.FIRST_COMPLETED)
                 if run in done:
@@ -502,10 +525,20 @@ class TriagePublicationWorkflow:
                 watch.cancel()
                 await asyncio.gather(run, watch, return_exceptions=True)
         finally:
-            await _run_activity(TriagePodActivities.delete_triage_pod, pod)
+            try:
+                await _run_activity(TriagePodActivities.delete_triage_pod, pod)
+            except FailureError as error:
+                if ingress_execution_id is None:
+                    raise
+                raise ApplicationError(
+                    f"Could not confirm deletion of {pod.name}", type=POD_CLEANUP_FAILED, non_retryable=True
+                ) from error
 
     async def _run_request(
-        self, request: TriagePublicationRequest, task_queue: str | None = None
+        self,
+        request: TriagePublicationRequest,
+        task_queue: str | None = None,
+        ingress_execution_id: str | None = None,
     ) -> TriagePublicationResult:
         info = workflow.info()
         execute = partial(_run_activity, task_queue=task_queue)
@@ -514,7 +547,7 @@ class TriagePublicationWorkflow:
         skipped = None
         if inputs.status in (IssueStatus.CLOSED.value, IssueStatus.DONE.value):
             skipped = f"Issue is already {inputs.status}. Skipping processing."
-        if analysis.user_triggered and not inputs.dry_run:
+        if analysis.user_triggered and not inputs.dry_run and ingress_execution_id is None:
             await execute(
                 acknowledge_triage_request,
                 request,
@@ -524,9 +557,9 @@ class TriagePublicationWorkflow:
         if skipped:
             return TriagePublicationResult(None, [], inputs.dry_run, skipped)
 
-        # Persist a manual override in Jira while leaving one-shot trigger
-        # consumption with the current ingress.
-        if analysis.user_triggered and not inputs.dry_run:
+        # Ingress writes the override when consuming the trigger. The direct
+        # runner owns its own override and leaves triggers to discovery.
+        if analysis.user_triggered and not inputs.dry_run and ingress_execution_id is None:
             marker = [JiraLabels.TRIAGE_ONLY.value]
             add, remove = (marker, []) if analysis.triage_only_requested else ([], marker)
             await execute(
@@ -538,19 +571,30 @@ class TriagePublicationWorkflow:
             replace(
                 analysis,
                 collect_jira_fields=True,
+                defer_rebuild_check=request.coordinate
+                and not inputs.dry_run
+                and not analysis.triage_only_requested
+                and (analysis.user_triggered or analysis.follow_up_requested)
+                and (analysis.user_triggered or JiraLabels.TRIAGE_ONLY.value not in inputs.labels),
                 follow_up_requested=not analysis.triage_only_requested
                 if analysis.user_triggered
                 else analysis.follow_up_requested,
                 triage_only_requested=analysis.triage_only_requested
                 or (not analysis.user_triggered and JiraLabels.TRIAGE_ONLY.value in inputs.labels),
             ),
-            id=f"{info.workflow_id}/analysis/{info.first_execution_run_id}",
+            id=f"{info.workflow_id}/analysis/{ingress_execution_id or info.first_execution_run_id}",
             task_queue=task_queue,
             cancellation_type=workflow.ChildWorkflowCancellationType.TRY_CANCEL,
         )
         state = result.state
         if state.triage_result is None:
             raise ApplicationError(f"Triage returned no finding for {state.jira_issue}", non_retryable=True)
+        if ingress_execution_id and state.triage_result.resolution == Resolution.ERROR:
+            raise ApplicationError(
+                f"Triage returned an error finding for {state.jira_issue}",
+                type="TriageErrorFinding",
+                non_retryable=True,
+            )
 
         handoffs = []
         if handoff := _downstream_handoff(request, result, inputs.labels):
@@ -576,6 +620,13 @@ class TriagePublicationWorkflow:
                 )
             )
 
+        held = bool(
+            request.coordinate
+            and not inputs.dry_run
+            and any(item.purpose == state.triage_result.resolution.value for item in handoffs)
+            and state.triage_result.resolution in FIX_RESOLUTIONS
+        )
+
         if not inputs.dry_run:
             if state.triage_result.resolution in FIX_RESOLUTIONS:
                 seen = set()
@@ -589,6 +640,12 @@ class TriagePublicationWorkflow:
                             operation_id=request.operation_id(f"fields:{key}"),
                         )
                         seen.add(key)
+            if held:
+                from ymir.agents.temporal_package_coordination import package_stream
+
+                if (key := package_stream(state)) is None:
+                    raise ApplicationError("Cannot identify the Jira package-stream", non_retryable=True)
+                result = replace(result, coordination_workflow_id=key.workflow_id)
             await execute(
                 publish_triage_finding,
                 request,
@@ -597,13 +654,27 @@ class TriagePublicationWorkflow:
                 operation_id=request.operation_id("finding"),
             )
             add, remove = _terminal_labels(result, inputs.labels)
+            if request.coordinate:
+                waiting = JiraLabels.TRIAGE_COORDINATION_WAITING.value
+                if held:
+                    label = triage._resolution_label(state.triage_result.resolution, state.triage_only)
+                    if label is not None:
+                        remove.append(label.value)
+                        add = [value for value in add if value != label.value]
+                    add.append(waiting)
+                else:
+                    remove.append(waiting)
             await execute(
                 apply_triage_labels, request, add, remove, operation_id=request.operation_id("labels")
             )
-            for item in handoffs:
-                await execute(enqueue_triage_handoff, item, operation_id=item.operation_id)
+            if not held:
+                for item in handoffs:
+                    await execute(enqueue_triage_handoff, item, operation_id=item.operation_id)
 
-        return TriagePublicationResult(result, [item.destination for item in handoffs], inputs.dry_run)
+        destinations = [] if held else [item.destination for item in handoffs]
+        return TriagePublicationResult(
+            result, destinations, inputs.dry_run, coordinated_handoffs=handoffs if held else None
+        )
 
 
 PUBLICATION_ACTIVITIES = [

@@ -63,13 +63,11 @@ def _patch_context_managers(monkeypatch):
 
     mock_redis = flexmock()
 
-    @asynccontextmanager
-    async def _noop_redis_client(url):
-        yield mock_redis
+    async def connect():
+        return mock_redis
 
     monkeypatch.setattr("ymir.sweep.__main__.with_requests_session", _noop_requests_session)
-    monkeypatch.setattr("ymir.sweep.__main__.redis_client", _noop_redis_client)
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379")
+    monkeypatch.setattr("ymir.sweep.__main__.connect_triage_ingress", connect)
 
     return mock_redis
 

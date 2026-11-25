@@ -12,6 +12,10 @@ RUN dnf -y install \
       python3-pydantic \
     && dnf clean all
 
+RUN python3 -m venv --system-site-packages /opt/jira-issue-fetcher-venv
+ENV PATH=/opt/jira-issue-fetcher-venv/bin:$PATH
+RUN python3 -m pip install --no-cache-dir "temporalio==1.32.0"
+
 # Create user
 RUN useradd -m -G wheel issuebot
 

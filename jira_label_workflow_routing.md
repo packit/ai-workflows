@@ -1,5 +1,12 @@
 # Jira Label-Based Workflow Routing
 
+Triage submits directly to Temporal. The issue workflow records authorized
+manual intent before consuming its trigger label and owns retry exhaustion.
+The downstream Redis queues still carry fix and reproducer work. References
+below to the triage queues describe legacy entries that can be transferred
+during cutover. [Temporal cutover](openshift/README.md#cut-over-triage-to-temporal)
+
+
 This document describes how Jira labels control workflow routing through the processing pipeline.
 
 ## Label State Machine
@@ -73,6 +80,7 @@ flowchart TD
 | `ymir_triaged_rebase` | Triage resolves as rebase | On retry (all labels cleared) | `ymir_rebased` or `ymir_rebase_failed` |
 | `ymir_triaged_backport` | Triage resolves as backport | On retry (all labels cleared) | `ymir_backported` or `ymir_backport_failed` |
 | `ymir_triaged_rebuild` | Triage resolves as rebuild | On retry (all labels cleared) | `ymir_rebuilt` or `ymir_rebuild_failed` |
+| `ymir_triage_waiting_for_coordination` | Temporal triage has written a finding and handed off follow-up decisions to the package-stream workflow | After the coordinator delivers the follow-up or a later triage supersedes the finding | Inspect the coordinator's `status` query for sibling, buildroot, or higher-stream blockers. |
 | `ymir_triaged_deferred_backport` | Triage resolves as backport while the package sets `auto_processing.mode: triage_only` | On retry (all labels cleared) | Terminal; no fix task queued. Add `ymir_todo` to run the full pipeline. |
 | `ymir_triaged_deferred_rebase` | Triage resolves as rebase while the package sets `auto_processing.mode: triage_only` | On retry (all labels cleared) | Terminal; no fix task queued. Add `ymir_todo` to run the full pipeline. |
 | `ymir_triaged_deferred_rebuild` | Triage resolves as rebuild while the package sets `auto_processing.mode: triage_only` | On retry (all labels cleared) | Terminal; no fix task queued. Add `ymir_todo` to run the full pipeline. |

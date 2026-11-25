@@ -1,9 +1,6 @@
 apiVersion: v1
 data:
-  # Only caps jira-issue-fetcher-todo's per-cycle push now — it ignores
-  # QUEUE_DEPTH_THRESHOLD (set in jira-issue-fetcher-filter-env), so this is
-  # its only throttle. jira-issue-fetcher instead derives its per-cycle cap
-  # from QUEUE_DEPTH_THRESHOLD minus current queue depth.
+  # Default admission cap per fetcher run, overridden by the saved-filter job.
   MAX_ISSUES: "20"
   LOGLEVEL: "INFO"
   # Conservative default pending real task duration data from Phoenix traces;
@@ -14,8 +11,7 @@ data:
   STALE_LABEL_THRESHOLD_HOURS: "24"
   # Controls the fetcher-level filter for modular issues (Downstream Component
   # matching module:stream/pkg, e.g. postgresql:16/postgresql). When "true"
-  # (default), the fetcher skips these issues before they reach the triage
-  # queue. When "false", modular issues pass through and are enqueued for
+  # (default), the fetcher skips these issues before submission to Temporal. When "false", modular issues pass through and are submitted for
   # triage like any other issue.
   SKIP_MODULAR: "true"
 immutable: false

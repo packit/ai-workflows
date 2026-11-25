@@ -13,8 +13,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-STOPPABLE_SERVICES = ["mcp-gateway-cli"]
-INFRASTRUCTURE_SERVICES = [*STOPPABLE_SERVICES, "trace-server"]
+STOPPABLE_SERVICES = ["triage-cli", "mcp-gateway-cli"]
 
 
 def detect_compose_cmd() -> list[str]:
@@ -54,42 +53,36 @@ def _compose_base_cmd(compose_file: Path) -> list[str]:
 
 
 def start_services(compose_file: Path) -> None:
-    """Start infrastructure containers required by the CLI.
-
-    Uses the ``cli`` compose profile which starts ``mcp-gateway-cli``
-    (with ``keep-id`` UID mapping) instead of ``mcp-gateway``.
-    """
-    cmd = [
-        *_compose_base_cmd(compose_file),
-        "up",
-        "-d",
-        "--force-recreate",
-        *INFRASTRUCTURE_SERVICES,
-    ]
-    logger.info("Starting infrastructure services: %s", ", ".join(INFRASTRUCTURE_SERVICES))
+    """Start the CLI worker and its Compose dependencies."""
+    cmd = [*_compose_base_cmd(compose_file), "up", "-d", "triage-cli"]
     subprocess.run(cmd, check=True, cwd=compose_file.parent)  # noqa: S603
 
 
 def stop_services(compose_file: Path) -> None:
-    """Stop infrastructure containers."""
+    """Stop the CLI worker and its gateway."""
     cmd = [*_compose_base_cmd(compose_file), "stop", *STOPPABLE_SERVICES]
     logger.info("Stopping infrastructure services: %s", ", ".join(STOPPABLE_SERVICES))
-    logger.warning("The trace-server container is still running, so you can inspect collected traces.")
     subprocess.run(cmd, check=True, cwd=compose_file.parent)  # noqa: S603
 
 
-def run_agent(
-    compose_file: Path,
-    env: dict[str, str],
-) -> subprocess.CompletedProcess:
-    """Run the triage agent as a one-shot container via ``compose run --rm``.
-
-    Environment variables in *env* are forwarded to the container with
-    ``-e`` flags.  Output streams directly to the terminal.
-    """
-    cmd = [*_compose_base_cmd(compose_file), "run", "--rm"]
-    for key, value in env.items():
-        cmd += ["-e", f"{key}={value}"]
-    cmd.append("triage-cli")
-    logger.info("Running agent container: triage-cli")
-    return subprocess.run(cmd, check=True, cwd=compose_file.parent)  # noqa: S603
+def submit_triage(compose_file: Path, issue: str, *, dry_run: bool, force_cve_triage: bool) -> str:
+    """Submit a triage-only request to the Compose Temporal server and return its JSON."""
+    cmd = [
+        *_compose_base_cmd(compose_file),
+        "exec",
+        "-T",
+        "triage-cli",
+        "python3",
+        "-m",
+        "ymir.agents.temporal_triage_admin",
+        "submit",
+        issue,
+        "--wait",
+        "--user-triggered",
+        "--triage-only",
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+    if force_cve_triage:
+        cmd.append("--force-cve-triage")
+    return subprocess.run(cmd, check=True, cwd=compose_file.parent, stdout=subprocess.PIPE, text=True).stdout  # noqa: S603

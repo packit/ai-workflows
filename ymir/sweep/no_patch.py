@@ -16,12 +16,8 @@ Guardrails:
 
 import os
 
-import redis
-
-from ymir.common.base_utils import fix_await
-from ymir.common.constants import JiraLabels, RedisQueues
-from ymir.common.jira_api import add_issue_label, remove_issue_label
-from ymir.common.models import FullIssue, Task
+from ymir.common.constants import JiraLabels
+from ymir.common.models import FullIssue
 from ymir.sweep.base import SweepResult, SweepStrategy
 from ymir.sweep.comment_parser import CommentData
 
@@ -44,15 +40,12 @@ class NoPatchSweep(SweepStrategy):
         # Not used — run() is overridden.
         raise NotImplementedError("NoPatchSweep overrides run() directly")
 
-    async def run(self, redis_conn: redis.Redis) -> dict[str, int]:
+    async def run(self, temporal_client) -> dict[str, int]:
         """Re-queue eligible no-patch issues for fresh triage.
 
         Issues already in triage (``ymir_triage_in_progress`` label) are
         skipped.  At most ``MAX_ISSUES_PER_RUN`` issues are pushed in a
         single run; the rest wait for the next scheduled sweep.
-
-        ``redis.RedisError`` is re-raised to abort the run (the CronJob's
-        ``backoffLimit`` handles retries).
 
         Returns:
             A summary dict with counts compatible with the base class's
@@ -80,14 +73,8 @@ class NoPatchSweep(SweepStrategy):
         for issue in to_process:
             issue_key = issue.key
             try:
-                task = Task.from_issue(issue_key, triage_only=JiraLabels.TRIAGE_ONLY.value in issue.labels)
-                await fix_await(redis_conn.lpush(RedisQueues.TRIAGE_QUEUE.value, task.to_json()))
-                await fix_await(add_issue_label(issue_key, JiraLabels.TRIAGE_IN_PROGRESS.value))
-                await fix_await(remove_issue_label(issue_key, self.label.value))
-                self.logger.info("Re-queued %s for fresh triage", issue_key)
+                await self.on_unblock(issue, temporal_client)
                 unblocked += 1
-            except redis.RedisError:
-                raise
             except Exception:
                 self.logger.exception("Error re-queuing %s", issue_key)
                 errors += 1

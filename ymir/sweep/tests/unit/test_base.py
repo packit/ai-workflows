@@ -1,11 +1,10 @@
 """Unit tests for ymir.sweep.base (SweepStrategy orchestration)."""
 
 import pytest
-import redis
 from flexmock import flexmock
 
 from ymir.common.constants import JiraLabels
-from ymir.common.models import FullIssue, Task
+from ymir.common.models import FullIssue
 from ymir.sweep.base import SweepResult, SweepStrategy
 from ymir.sweep.comment_parser import CommentData
 from ymir.sweep.tests.unit.conftest import make_issue, make_ymir_comment
@@ -64,12 +63,6 @@ class _RaisingStrategy(SweepStrategy):
 # ---------------------------------------------------------------------------
 
 
-def _mock_redis():
-    r = flexmock()
-    r.should_receive("lpush").and_return(1)
-    return r
-
-
 def _mock_remove_label(monkeypatch):
     monkeypatch.setattr("ymir.sweep.base.remove_issue_label", lambda *a, **kw: None)
 
@@ -114,119 +107,6 @@ def test_get_blocked_issues_uses_correct_jql(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_on_unblock_pushes_to_redis_before_adding_label(monkeypatch):
-    """Redis push must precede TRIAGE_IN_PROGRESS so a Jira failure leaves the
-    issue queued (processed by triage) rather than silently dropped."""
-    call_order = []
-    issue_key = "RHEL-12345"
-    mock_redis = flexmock()
-    mock_redis.should_receive("lpush").replace_with(lambda *a: call_order.append("redis"))
-
-    monkeypatch.setattr(
-        "ymir.sweep.base.add_issue_label",
-        lambda *a, **kw: call_order.append("add"),
-    )
-    monkeypatch.setattr(
-        "ymir.sweep.base.remove_issue_label",
-        lambda *a, **kw: call_order.append("remove"),
-    )
-
-    strategy = _UnblockedStrategy()
-    await strategy.on_unblock(issue_key, mock_redis, comment="Fixed!")
-
-    assert call_order == ["redis", "add", "remove"]
-
-
-@pytest.mark.asyncio
-async def test_on_unblock_sets_triage_in_progress_before_removing_postponement(monkeypatch):
-    """TRIAGE_IN_PROGRESS must be added before the postponement label is removed
-    so there is no window where the issue has no Ymir tracking label."""
-    call_order = []
-
-    mock_redis = flexmock()
-    mock_redis.should_receive("lpush").and_return(1)
-
-    monkeypatch.setattr(
-        "ymir.sweep.base.add_issue_label",
-        lambda key, label, **kw: call_order.append(("add", label)),
-    )
-    monkeypatch.setattr(
-        "ymir.sweep.base.remove_issue_label",
-        lambda key, label, **kw: call_order.append(("remove", label)),
-    )
-
-    strategy = _UnblockedStrategy()
-    await strategy.on_unblock("RHEL-12345", mock_redis)
-
-    add_idx = next(i for i, op in enumerate(call_order) if op == ("add", JiraLabels.TRIAGE_IN_PROGRESS.value))
-    remove_idx = next(i for i, op in enumerate(call_order) if op[0] == "remove")
-    assert add_idx < remove_idx, (
-        f"TRIAGE_IN_PROGRESS must be added before postponement removed; got {call_order}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_on_unblock_passes_comment_to_remove_label(monkeypatch):
-    captured = {}
-
-    mock_redis = flexmock()
-    mock_redis.should_receive("lpush").and_return(1)
-
-    _mock_add_label(monkeypatch)
-    monkeypatch.setattr(
-        "ymir.sweep.base.remove_issue_label",
-        lambda key, label, comment=None: captured.update({"comment": comment}),
-    )
-
-    strategy = _UnblockedStrategy()
-    await strategy.on_unblock("RHEL-12345", mock_redis, comment="Resolved.")
-
-    assert captured["comment"] == "Resolved."
-
-
-@pytest.mark.asyncio
-async def test_on_unblock_carries_triage_only(monkeypatch):
-    """A per-issue triage-only request must survive the postponement sweep."""
-    captured = {}
-    mock_redis = flexmock()
-    mock_redis.should_receive("lpush").replace_with(
-        lambda queue, payload: captured.update({"payload": payload})
-    )
-
-    _mock_add_label(monkeypatch)
-    _mock_remove_label(monkeypatch)
-
-    strategy = _UnblockedStrategy()
-    await strategy.on_unblock("RHEL-12345", mock_redis, triage_only=True)
-
-    assert Task.model_validate_json(captured["payload"]).triage_only is True
-
-
-@pytest.mark.asyncio
-async def test_run_reads_triage_only_marker_from_issue_labels(monkeypatch):
-    comment = make_ymir_comment(pending_issues=["RHEL-99"], blocker_reference="RHEL-99")
-    issue = make_issue(
-        labels=[JiraLabels.YMIR_POSTPONED_DEPENDENCY.value, JiraLabels.TRIAGE_ONLY.value],
-        comments=[comment],
-    )
-    monkeypatch.setattr("ymir.sweep.base.get_current_issues", lambda jql, full=False: iter([issue]))
-    _mock_add_label(monkeypatch)
-    _mock_remove_label(monkeypatch)
-
-    captured = {}
-    mock_redis = flexmock()
-    mock_redis.should_receive("lpush").replace_with(
-        lambda queue, payload: captured.update({"payload": payload})
-    )
-
-    strategy = _UnblockedStrategy()
-    summary = await strategy.run(mock_redis)
-
-    assert summary["unblocked"] == 1
-    assert Task.model_validate_json(captured["payload"]).triage_only is True
-
-
 # ---------------------------------------------------------------------------
 # Tests: on_transition
 # ---------------------------------------------------------------------------
@@ -264,12 +144,15 @@ def test_on_transition_adds_new_label_before_removing_old(monkeypatch):
 async def test_run_counts_unblocked(monkeypatch):
     issue = _issue_with_comment()
     monkeypatch.setattr("ymir.sweep.base.get_current_issues", lambda jql, full=False: iter([issue]))
-    _mock_remove_label(monkeypatch)
-    _mock_add_label(monkeypatch)
-    mock_redis = _mock_redis()
+
+    async def submit(_client, intent):
+        assert intent.retry_label == JiraLabels.YMIR_POSTPONED_DEPENDENCY.value
+
+    monkeypatch.setattr("ymir.sweep.base.submit_triage_intent", submit)
+    client = flexmock()
 
     strategy = _UnblockedStrategy()
-    summary = await strategy.run(mock_redis)
+    summary = await strategy.run(client)
 
     assert summary["total"] == 1
     assert summary["unblocked"] == 1
@@ -325,20 +208,6 @@ async def test_run_catches_unexpected_exceptions(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_reraises_redis_error(monkeypatch):
-    issue = _issue_with_comment()
-    monkeypatch.setattr("ymir.sweep.base.get_current_issues", lambda jql, full=False: iter([issue]))
-    monkeypatch.setattr("ymir.sweep.base.remove_issue_label", lambda *a, **kw: None)
-
-    bad_redis = flexmock()
-    bad_redis.should_receive("lpush").and_raise(redis.RedisError("connection lost"))
-
-    strategy = _UnblockedStrategy()
-    with pytest.raises(redis.RedisError):
-        await strategy.run(bad_redis)
-
-
-@pytest.mark.asyncio
 async def test_run_counts_transitioned(monkeypatch):
     issue = _issue_with_comment()
     monkeypatch.setattr("ymir.sweep.base.get_current_issues", lambda jql, full=False: iter([issue]))
@@ -356,12 +225,15 @@ async def test_run_counts_transitioned(monkeypatch):
 async def test_run_processes_multiple_issues(monkeypatch):
     issues = [_issue_with_comment(summary=f"reason {i}") for i in range(3)]
     monkeypatch.setattr("ymir.sweep.base.get_current_issues", lambda jql, full=False: iter(issues))
-    _mock_remove_label(monkeypatch)
-    _mock_add_label(monkeypatch)
-    mock_redis = _mock_redis()
+
+    async def submit(_client, intent):
+        assert intent.retry_label == JiraLabels.YMIR_POSTPONED_DEPENDENCY.value
+
+    monkeypatch.setattr("ymir.sweep.base.submit_triage_intent", submit)
+    client = flexmock()
 
     strategy = _UnblockedStrategy()
-    summary = await strategy.run(mock_redis)
+    summary = await strategy.run(client)
 
     assert summary["total"] == 3
     assert summary["unblocked"] == 3

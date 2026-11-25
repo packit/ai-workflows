@@ -77,6 +77,7 @@ COPY openinference-reasoning.patch /tmp
 COPY openinference-streaming.patch /tmp
 
 RUN pip3 install --no-cache-dir \
+      "temporalio==1.32.0" \
       "litellm<1.106.0,!=1.82.7,!=1.82.8,!=1.92.0" \
       beeai-framework[vertexai,mcp,duckduckgo]==0.1.85 \
       "pydantic-ai-slim[anthropic,google,openai]==2.30.0" \
@@ -122,6 +123,8 @@ RUN dnf -y install catatonit \
 COPY ymir/agents/ /home/beeai/ymir/agents/
 COPY ymir/tools/ /home/beeai/ymir/tools/
 COPY ymir/common/ /home/beeai/ymir/common/
+COPY ymir/jira_issue_fetcher/ /home/beeai/ymir/jira_issue_fetcher/
+COPY openshift/templates/temporal-triage-pod.yml /home/beeai/temporal-triage-pod.yml
 RUN chgrp -R root /home/beeai && chmod -R g+rwX /home/beeai
 
 # Set up GitLab SSH host keys
@@ -153,14 +156,11 @@ ENTRYPOINT ["/usr/libexec/catatonit/catatonit", "--"]
 CMD ["/bin/bash"]
 
 FROM agent AS temporal-worker
-USER root
-RUN pip3 install --no-cache-dir "temporalio==1.32.0"
-USER beeai
 
 FROM temporal-worker AS triage-e2e
+COPY --from=temporal-cli /usr/local/bin/temporal /usr/local/bin/temporal
 USER root
 RUN dnf -y install podman-remote && dnf clean all
-COPY --from=temporal-cli /usr/local/bin/temporal /usr/local/bin/temporal
 USER beeai
 
 FROM agent AS runtime

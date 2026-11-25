@@ -1,7 +1,6 @@
 """Shared fixtures and helpers for sweep integration tests."""
 
 import pytest
-from flexmock import flexmock
 
 from ymir.sweep.tests.unit.conftest import (  # noqa: F401
     _DEFAULT_RHEL_CONFIG,
@@ -69,19 +68,14 @@ def captured_label_ops(monkeypatch):
 
     monkeypatch.setattr("ymir.sweep.base.remove_issue_label", capture_remove)
     monkeypatch.setattr("ymir.sweep.base.add_issue_label", capture_add)
-    monkeypatch.setattr("ymir.sweep.no_patch.remove_issue_label", capture_remove)
-    monkeypatch.setattr("ymir.sweep.no_patch.add_issue_label", capture_add)
     return ops
 
 
-def make_redis() -> tuple:
-    """Return a (redis_mock, pushed_list) pair for asserting Redis side effects.
+def make_temporal(monkeypatch) -> tuple:
+    submitted = []
 
-    ``pushed_list`` accumulates the queue name on each ``lpush`` call so tests
-    can assert both call count and the target queue without flexmock expectation
-    matching.
-    """
-    pushed: list[str] = []
-    r = flexmock()
-    r.should_receive("lpush").replace_with(lambda queue, payload: pushed.append(queue))
-    return r, pushed
+    async def submit(_client, intent):
+        submitted.append(intent)
+
+    monkeypatch.setattr("ymir.sweep.base.submit_triage_intent", submit)
+    return object(), submitted

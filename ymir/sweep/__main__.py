@@ -12,11 +12,10 @@ ContextVar (required by ``jira_utils``) and async buildroot checks
 import argparse
 import asyncio
 import logging
-import os
 import sys
 
-from ymir.common.base_utils import redis_client
 from ymir.common.http_utils import with_aiohttp_session, with_requests_session
+from ymir.common.temporal_triage import connect_triage_ingress, temporal_triage_accepts_requests
 from ymir.common.utils import init_sentry
 from ymir.sweep.dependency import DependencySweep
 from ymir.sweep.no_patch import NoPatchSweep
@@ -36,19 +35,19 @@ STRATEGIES: dict = {
 async def run_sweep(strategy_names: list[str]) -> None:
     """Run the specified sweep strategies in sequence.
 
-    Sets up shared HTTP sessions and a single Redis connection for all
+    Sets up shared HTTP sessions and a single Temporal client for all
     strategies. Strategies run sequentially to avoid concurrent Jira API
     pressure.
     """
-    async with (
-        with_aiohttp_session(),
-        with_requests_session(),
-        redis_client(os.environ["REDIS_URL"]) as redis,
-    ):
+    if not temporal_triage_accepts_requests():
+        logger.info("Triage admissions are paused")
+        return
+    client = await connect_triage_ingress()
+    async with with_aiohttp_session(), with_requests_session():
         for name in strategy_names:
             strategy = STRATEGIES[name]()
             logger.info("Starting %s sweep", name)
-            summary = await strategy.run(redis)
+            summary = await strategy.run(client)
             logger.info(
                 "%s sweep result: %s",
                 name,

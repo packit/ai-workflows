@@ -417,19 +417,14 @@ async def run_temporal_cases(cases: list[TriageAgentTestCase], address: str) -> 
     from temporalio.contrib.opentelemetry import TracingInterceptor
     from temporalio.testing import WorkflowEnvironment
 
-    from ymir.agents.pydantic_agent import pydantic_model_settings
-    from ymir.agents.temporal_triage_analysis import TriageAnalysisRequest
+    from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow
     from ymir.agents.temporal_triage_provisioning import (
         PODMAN_LIMIT,
         PodmanTriageProvisioner,
         create_triage_control_worker,
     )
-    from ymir.agents.temporal_triage_publication import TriagePublicationRequest, run_triage_request
-    from ymir.agents.utils import get_agent_execution_config, resolve_chat_model_override
+    from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
 
-    resolve_chat_model_override("triage")
-    settings = dict(pydantic_model_settings(os.environ["CHAT_MODEL"]))
-    request_limit = get_agent_execution_config()["max_iterations"]
     queue = f"triage-e2e-{uuid4().hex}"
     slots = asyncio.Semaphore(PODMAN_LIMIT)
     tracer = trace.get_tracer(__name__)
@@ -445,30 +440,24 @@ async def run_temporal_cases(cases: list[TriageAgentTestCase], address: str) -> 
         if case.zstream_override:
             override["current_z_streams"] = override.get("current_z_streams", {}) | case.zstream_override
         start = monotonic()
-        case.metrics = {"agent_name": "TemporalTriagePublication"}
+        case.metrics = {"agent_name": "TemporalTriageIngress"}
         trace_context = baggage.set_baggage("jira.issue", case.input)
         trace_context = baggage.set_baggage("workflow.name", "TriageWorkflow", context=trace_context)
         trace_token = context.attach(trace_context)
         try:
-            request = TriagePublicationRequest(
-                analysis=TriageAnalysisRequest(
-                    case.input,
-                    settings,
-                    request_limit,
-                    follow_up_requested=True,
-                    config_override=override or None,
-                ),
-                request_id=queue,
-                dry_run=True,
-                provision_pod=True,
-            )
-            workflow_id = request.workflow_id()
+            intent = TriageIntent(case.input, queue, "cli", dry_run=True, config_override=override or None)
+            workflow_id = triage_issue_workflow_id(case.input)
             with tracer.start_as_current_span(
                 "TriageWorkflow",
                 attributes={"openinference.span.kind": "CHAIN", "temporal.workflow.id": workflow_id},
             ):
                 async with slots:
-                    result = await run_triage_request(client, request, queue)
+                    await submit_triage_intent(client, intent, task_queue=queue)
+                    handle = client.get_workflow_handle_for(TriageIngressWorkflow.run, workflow_id)
+                    outcomes = await handle.result()
+                outcome = next(item for item in outcomes if item.request_id == intent.request_id)
+                result = outcome.preview
+                assert result is not None, outcome.detail
                 assert result.dry_run
                 assert result.analysis is not None, result.skipped_reason
             case.finished_state = result.analysis.state

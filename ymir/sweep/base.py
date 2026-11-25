@@ -14,14 +14,14 @@ import inspect
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Literal
 
-import redis
-
 from ymir.common.base_utils import fix_await
-from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.constants import JiraLabels
 from ymir.common.jira_api import add_issue_label, get_current_issues, remove_issue_label
-from ymir.common.models import FullIssue, Task
+from ymir.common.models import FullIssue
+from ymir.common.temporal_triage import TriageIntent, submit_triage_intent
 from ymir.sweep.comment_parser import CommentData, parse_ymir_comment
 
 
@@ -105,33 +105,23 @@ class SweepStrategy(ABC):
                 comment.
         """
 
-    async def on_unblock(
-        self,
-        issue_key: str,
-        redis_conn: redis.Redis,
-        comment: str | None = None,
-        triage_only: bool = False,
-    ) -> None:
-        """Push issue to triage queue, then remove the postponement label.
-
-        ``triage_only`` preserves a per-issue ``ymir_todo_triage`` request:
-        the re-triage must not start the fix pipeline just because the issue
-        was unblocked.
-
-        Redis is written first so that a subsequent Jira API failure leaves
-        the issue labelled (retried on the next sweep) rather than
-        unlabelled but missing from the queue.  The comment is posted
-        atomically with the label removal when provided.
-        """
-        task = Task.from_issue(issue_key, triage_only=triage_only)
-        await fix_await(redis_conn.lpush(RedisQueues.TRIAGE_QUEUE.value, task.to_json()))
-        await fix_await(add_issue_label(issue_key, JiraLabels.TRIAGE_IN_PROGRESS.value))
-        await fix_await(remove_issue_label(issue_key, self.label.value, comment=comment))
-        self.logger.info(
-            "Unblocked %s — removed %s, pushed to triage queue",
-            issue_key,
-            self.label.value,
+    async def on_unblock(self, issue: FullIssue, temporal_client, comment: str | None = None) -> None:
+        """Submit the retry and let the workflow consume the postponement label."""
+        revision = ":".join(sorted(item.id for item in issue.comments))
+        event = sha256(f"{self.label.value}:{revision}".encode()).hexdigest()
+        await submit_triage_intent(
+            temporal_client,
+            TriageIntent(
+                issue.key,
+                f"sweep:{event}",
+                "retry",
+                dry_run=False,
+                triage_only=JiraLabels.TRIAGE_ONLY.value in issue.labels,
+                retry_label=self.label.value,
+                retry_comment=comment,
+            ),
         )
+        self.logger.info("Submitted %s for Temporal re-triage", issue.key)
 
     def on_transition(
         self,
@@ -163,18 +153,15 @@ class SweepStrategy(ABC):
             return None
         return transition()
 
-    async def run(self, redis_conn: redis.Redis) -> dict[str, int]:
+    async def run(self, temporal_client) -> dict[str, int]:
         """Execute a full sweep: fetch issues, check each, handle results.
 
         This is the shared orchestration logic.  It handles comment
         parsing, error handling per issue, and summary logging.  Subclasses
         do not override this — they only implement ``is_unblocked()``.
 
-        ``redis.RedisError`` and ``OSError`` exceptions are re-raised to abort
-        the sweep (the CronJob's ``backoffLimit`` handles retries).
-        ``OSError`` surfaces configuration errors such as missing environment
-        variables.  All other per-issue exceptions are caught, logged, and
-        counted as errors.
+        Request failures leave the issue's postponement label in place so
+        the next sweep can retry the same request.
 
         Returns:
             A summary dict with counts: ``total``, ``unblocked``,
@@ -198,20 +185,13 @@ class SweepStrategy(ABC):
                 result = await self.is_unblocked(issue, comment_data)
 
                 if result.action == "unblocked":
-                    await self.on_unblock(
-                        issue_key,
-                        redis_conn,
-                        comment=result.detail,
-                        triage_only=JiraLabels.TRIAGE_ONLY.value in issue.labels,
-                    )
+                    await self.on_unblock(issue, temporal_client, comment=result.detail)
                     unblocked += 1
                 elif result.action == "transitioned":
                     transitioned += 1
                 elif result.action == "error":
                     self.logger.warning("Check error on %s: %s", issue_key, result.detail)
                     errors += 1
-            except (redis.RedisError, OSError):
-                raise
             except Exception:
                 self.logger.exception("Unhandled error checking %s", issue_key)
                 errors += 1

@@ -39,7 +39,6 @@ from ymir.agents.triage_agent import (
     _terminal_ymir_labels,
     determine_target_branch,
     label_applicability_confidence,
-    main,
     render_prompt,
     run_workflow,
     validate_triage_output,
@@ -58,7 +57,6 @@ from ymir.common.models import (
     RebaseData,
     RebuildData,
     Resolution,
-    Task,
     TriageEligibility,
     TriageInputSchema,
     TriageOutputSchema,
@@ -425,24 +423,6 @@ async def test_auto_processing_user_triggered_run_does_not_need_rules_repo(monke
     assert state.triage_only is False
 
 
-def _make_payload(issue: str = "RHEL-99999", user_triggered: bool = False) -> bytes:
-    task = Task.from_issue(issue, user_triggered=user_triggered)
-    return task.model_dump_json().encode()
-
-
-@asynccontextmanager
-async def _always_acquired_lock(*_args, **_kwargs):
-    yield "test-lock-token"
-
-
-@pytest.fixture
-def _mock_env_vars_redis(monkeypatch):
-    monkeypatch.setenv("COLLECTOR_ENDPOINT", "http://localhost:6006")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost")
-    monkeypatch.setenv("MCP_GATEWAY_URL", "http://mcp-gateway:8000/sse")
-    monkeypatch.setenv("DRY_RUN", "true")
-
-
 @pytest.fixture
 def _mock_env_vars(monkeypatch):
     monkeypatch.setenv("MCP_GATEWAY_URL", "http://localhost")
@@ -456,148 +436,6 @@ def _mock_env_vars(monkeypatch):
 
 async def _async_noop(*_args, **_kwargs):
     pass
-
-
-async def _capture_process_task(main_fn, redis_mock=None):
-    """Run main() in queue mode, capture the process_task closure it registers."""
-    captured = {}
-
-    async def _mock_run_task_loop(_redis, _queues, process_fn, **_kw):
-        captured["process_task"] = process_fn
-
-    @asynccontextmanager
-    async def _mock_redis_client(*_args, **_kwargs):
-        client = redis_mock or flexmock()
-        if redis_mock is None:
-            client.should_receive("lpush").replace_with(_async_noop)
-            client.should_receive("incr").replace_with(_async_noop)
-        yield client
-
-    transaction = flexmock()
-    transaction.should_receive("__enter__").and_return(None)
-    transaction.should_receive("__exit__").and_return(False)
-
-    span_processor = flexmock()
-    span_processor.should_receive("start_transaction").and_return(transaction)
-
-    flexmock(t_agent).should_receive("init_sentry")
-    flexmock(t_agent).should_receive("configure_logging")
-    flexmock(t_agent).should_receive("resolve_chat_model_override")
-    flexmock(t_agent).should_receive("setup_observability").and_return(span_processor)
-    flexmock(t_agent).should_receive("run_task_loop").replace_with(_mock_run_task_loop)
-    flexmock(t_agent).should_receive("redis_client").replace_with(_mock_redis_client)
-
-    await main_fn()
-
-    return captured["process_task"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["Closed", "Done"])
-async def test_process_task_skips_closed_issues(status, _mock_env_vars_redis):
-    """Closed/Done issues are skipped without calling run_workflow."""
-
-    async def _mock_jira_metadata(*_args, **_kwargs):
-        return [], status
-
-    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
-    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
-    flexmock(t_agent).should_receive("run_workflow").never()
-
-    process_task = await _capture_process_task(main)
-    await process_task(_make_payload())
-
-
-@pytest.mark.asyncio
-async def test_process_task_skips_closed_user_triggered_with_cleanup(_mock_env_vars_redis):
-    """User-triggered run on a closed issue removes both trigger labels and posts ack."""
-
-    async def _mock_jira_metadata(*_args, **_kwargs):
-        return ["ymir_todo"], "Closed"
-
-    calls = []
-
-    async def _mock_jira_labels(*_args, **_kwargs):
-        calls.append((_args, _kwargs))
-
-    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
-    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
-    flexmock(t_agent).should_receive("run_workflow").never()
-    flexmock(agent_tasks).should_receive("set_jira_labels").once().replace_with(_mock_jira_labels)
-    flexmock(agent_tasks).should_receive("post_user_ack_once").once().replace_with(_async_noop)
-
-    process_task = await _capture_process_task(main)
-    await process_task(_make_payload(user_triggered=True))
-
-    _, kwargs = calls[0]
-    assert kwargs["labels_to_remove"] == [JiraLabels.TODO.value, JiraLabels.TODO_TRIAGE.value]
-    assert kwargs["dry_run"] is True
-
-
-@pytest.mark.asyncio
-async def test_process_task_preserves_triage_only_marker_on_automatic_run(_mock_env_vars_redis):
-    """The marker is persisted intent and must survive an automatic re-entry."""
-
-    async def _mock_jira_metadata(*_args, **_kwargs):
-        return [JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.TRIAGE_ONLY.value], "New"
-
-    calls = []
-
-    async def _mock_jira_labels(*_args, **kwargs):
-        calls.append(kwargs)
-
-    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
-    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
-    flexmock(t_agent).should_receive("run_workflow").replace_with(_async_noop)
-    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_mock_jira_labels)
-    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
-
-    process_task = await _capture_process_task(main)
-    await process_task(_make_payload())
-
-    assert calls[0]["labels_to_add"] == [JiraLabels.TRIAGE_IN_PROGRESS.value]
-    assert JiraLabels.TRIAGE_ONLY.value not in calls[0]["labels_to_remove"]
-
-
-@pytest.mark.asyncio
-async def test_process_task_drops_triage_only_marker_on_ymir_todo_run(_mock_env_vars_redis):
-    """A user-triggered full run clears the persisted triage-only marker."""
-
-    async def _mock_jira_metadata(*_args, **_kwargs):
-        return [JiraLabels.TODO.value, JiraLabels.TRIAGE_ONLY.value], "New"
-
-    calls = []
-
-    async def _mock_jira_labels(*_args, **kwargs):
-        calls.append(kwargs)
-
-    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
-    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
-    flexmock(t_agent).should_receive("run_workflow").replace_with(_async_noop)
-    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_mock_jira_labels)
-    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
-
-    process_task = await _capture_process_task(main)
-    await process_task(_make_payload(user_triggered=True))
-
-    assert JiraLabels.TRIAGE_ONLY.value in calls[0]["labels_to_remove"]
-
-
-@pytest.mark.asyncio
-async def test_process_task_proceeds_for_open_issues(_mock_env_vars_redis):
-    """An open issue (e.g. New) is not blocked by the closed-issue check."""
-
-    async def _mock_jira_metadata(*_args, **_kwargs):
-        return [], "New"
-
-    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
-    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
-    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_async_noop)
-    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
-    flexmock(t_agent).should_receive("run_workflow").once().replace_with(_async_noop)
-
-    process_task = await _capture_process_task(main)
-    await process_task(_make_payload())
 
 
 # --- Modular detection tests ---
@@ -947,147 +785,6 @@ async def test_record_target_branch_existence_only_checks_internal_zstreams(
 
 
 # --- Per-issue lock tests ---
-
-
-@asynccontextmanager
-async def _lock_already_held(*_args, **_kwargs):
-    yield None
-
-
-@pytest.mark.asyncio
-async def test_process_task_drops_duplicate_when_locked(_mock_env_vars_redis):
-    """When the per-issue lock is already held, process_task silently drops the task."""
-    flexmock(t_agent).should_receive("issue_lock").replace_with(_lock_already_held)
-    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").never()
-    flexmock(t_agent).should_receive("run_workflow").never()
-
-    process_task = await _capture_process_task(main)
-    await process_task(_make_payload())
-
-
-@pytest.mark.asyncio
-async def test_process_task_acquires_lock_and_proceeds(_mock_env_vars_redis):
-    """When the lock is available, process_task proceeds to call run_workflow."""
-
-    async def _mock_jira_metadata(*_args, **_kwargs):
-        return [], "New"
-
-    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
-    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
-    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_async_noop)
-    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
-    flexmock(t_agent).should_receive("run_workflow").once().replace_with(_async_noop)
-
-    process_task = await _capture_process_task(main)
-    await process_task(_make_payload())
-
-
-@pytest.mark.asyncio
-async def test_triage_retry_is_queued_after_issue_lock_release(_mock_env_vars_redis):
-    events = []
-    client = flexmock()
-
-    async def _record_push(queue, payload):
-        events.append(("push", queue, Task.model_validate_json(payload).attempts))
-
-    @asynccontextmanager
-    async def _record_lock(*_args, **_kwargs):
-        events.append("lock_acquired")
-        try:
-            yield "test-lock-token"
-        finally:
-            events.append("lock_released")
-
-    async def _mock_jira_metadata(*_args, **_kwargs):
-        return [], "New"
-
-    async def _failed_workflow(*_args, **_kwargs):
-        raise RuntimeError("triage failed")
-
-    client.should_receive("lpush").replace_with(_record_push)
-    flexmock(t_agent).should_receive("issue_lock").replace_with(_record_lock)
-    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
-    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_async_noop)
-    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
-    flexmock(t_agent).should_receive("run_workflow").replace_with(_failed_workflow)
-
-    process_task = await _capture_process_task(main, client)
-    await process_task(_make_payload())
-
-    assert events == ["lock_acquired", "lock_released", ("push", "triage_queue", 1)]
-
-
-@pytest.mark.asyncio
-async def test_triage_terminal_error_clears_manual_branch_hold(_mock_env_vars_redis, monkeypatch):
-    monkeypatch.setenv("MAX_RETRIES", "1")
-    labels = []
-    client = flexmock()
-
-    async def _mock_jira_metadata(*_args, **_kwargs):
-        return [], "New"
-
-    async def _record_labels(**kwargs):
-        labels.append(kwargs)
-
-    async def _failed_workflow(*_args, **_kwargs):
-        raise RuntimeError("triage failed")
-
-    async def _next_error_id(*_args, **_kwargs):
-        return 1
-
-    client.should_receive("incr").replace_with(_next_error_id)
-    client.should_receive("lpush").replace_with(_async_noop)
-    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
-    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
-    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_record_labels)
-    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
-    flexmock(t_agent).should_receive("run_workflow").replace_with(_failed_workflow)
-
-    process_task = await _capture_process_task(main, client)
-    await process_task(_make_payload())
-
-    assert labels[-1]["labels_to_add"] == [JiraLabels.TRIAGE_ERRORED.value]
-    assert JiraLabels.MANUAL_BRANCH_NEEDED.value in labels[-1]["labels_to_remove"]
-
-
-@pytest.mark.asyncio
-async def test_held_primary_is_not_labeled_twice(_mock_env_vars_redis, monkeypatch):
-    monkeypatch.setenv("DRY_RUN", "false")
-    monkeypatch.setenv("TRIAGE_ENQUEUE_REPRODUCER", "false")
-    state = TriageState(
-        jira_issue="RHEL-99999",
-        target_branch="rhel-10.3",
-        target_branch_exists=False,
-        automatic_branch_creation_disabled=True,
-        triage_result=TriageOutputSchema(
-            resolution=Resolution.BACKPORT,
-            data=BackportData(
-                package="bash", jira_issue="RHEL-99999", patch_urls=[], justification="Test hold"
-            ),
-        ),
-    )
-    labels = []
-
-    async def _record_labels(**kwargs):
-        labels.append(kwargs)
-
-    async def _mock_jira_metadata(*_args, **_kwargs):
-        return [], "New"
-
-    async def _mock_workflow(*_args, **_kwargs):
-        return state
-
-    flexmock(t_agent).should_receive("issue_lock").replace_with(_always_acquired_lock)
-    flexmock(agent_tasks).should_receive("get_jira_issue_metadata").replace_with(_mock_jira_metadata)
-    flexmock(agent_tasks).should_receive("set_jira_labels").replace_with(_record_labels)
-    flexmock(agent_tasks).should_receive("post_user_ack_once").replace_with(_async_noop)
-    flexmock(t_agent).should_receive("run_workflow").replace_with(_mock_workflow)
-
-    process_task = await _capture_process_task(main)
-    await process_task(_make_payload())
-
-    assert len(labels) == 1
-    assert labels[0]["labels_to_add"] == [JiraLabels.TRIAGE_IN_PROGRESS.value]
 
 
 def test_build_reproducer_input_from_backport():

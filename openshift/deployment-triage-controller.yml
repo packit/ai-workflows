@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: triage-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: triage-controller
+  template:
+    metadata:
+      labels:
+        app: triage-controller
+    spec:
+      serviceAccountName: triage-controller
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: beeai-agent:c10s
+          imagePullPolicy: Always
+          args: ["/usr/bin/python3", "-m", "ymir.agents.temporal_triage_service"]
+          envFrom:
+            - configMapRef:
+                name: agents-env
+            - configMapRef:
+                name: chat-env
+            - configMapRef:
+                name: endpoints-env
+            - configMapRef:
+                name: jira-env
+            - secretRef:
+                name: jira-env
+            - configMapRef:
+                name: temporal-triage-env
+            - secretRef:
+                name: temporal-triage-gitlab
+                optional: true
+          env:
+            - name: REQUESTS_CA_BUNDLE
+              value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/home/beeai/.ymir-triage-controller-ready"]
+            periodSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 60m
+              memory: 256Mi
+            limits:
+              cpu: 600m
+              memory: 1Gi
+          volumeMounts:
+            - name: rhel-config
+              mountPath: /home/beeai/rhel-config.json
+              subPath: rhel-config.json
+              readOnly: true
+            - name: service-ca
+              mountPath: /etc/pki/service-ca
+              readOnly: true
+      volumes:
+        - name: rhel-config
+          configMap:
+            name: rhel-config
+        - name: service-ca
+          configMap:
+            name: service-ca-bundle

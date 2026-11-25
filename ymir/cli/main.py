@@ -1,15 +1,26 @@
 """CLI for the Ymir triage workflow."""
 
+import asyncio
+import json
 import logging
 import os
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Annotated
+from uuid import uuid4
 
 import typer
 from dotenv import load_dotenv
 
-from ymir.cli.compose import run_agent, start_services, stop_services
+from ymir.cli.compose import start_services, stop_services, submit_triage
+from ymir.common.temporal_triage import (
+    TriageIntent,
+    connect_triage_ingress,
+    submit_triage_intent,
+    temporal_triage_accepts_requests,
+    triage_issue_workflow_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +81,11 @@ def check_credentials(mock_jira: bool = False) -> None:
         raise typer.Exit(1)
 
 
+async def _submit_triage(intent: TriageIntent, *, wait: bool) -> str | dict:
+    client = await connect_triage_ingress()
+    return await submit_triage_intent(client, intent, wait=wait)
+
+
 @app.command()
 def triage(
     issue: str = typer.Argument(help="Jira issue key (e.g. RHEL-12345)"),
@@ -97,8 +113,56 @@ def triage(
         "--work-dir",
         help="Directory for working files (git clones). Created as a temp dir if not specified.",
     ),
+    request_id: Annotated[
+        str | None,
+        typer.Option(
+            "--request-id", help="Reuse an ID to retry a Temporal submission without starting a new run."
+        ),
+    ] = None,
+    full: Annotated[bool, typer.Option("--full", help="Run the downstream fix pipeline")] = False,
+    detach: Annotated[
+        bool, typer.Option("--detach", help="Return after Temporal accepts the request")
+    ] = False,
 ) -> None:
-    """Run triage analysis on a single Jira issue."""
+    """Run triage on a single Jira issue."""
+    if os.getenv("TEMPORAL_ADDRESS"):
+        if not temporal_triage_accepts_requests():
+            typer.echo("Temporal triage admissions are paused for this issue.", err=True)
+            raise typer.Exit(1)
+        if mock_jira:
+            raise typer.BadParameter("--mock-jira requires the local Compose worker")
+        intent = TriageIntent(
+            issue.strip().upper(),
+            f"cli:{request_id or uuid4()}",
+            "cli",
+            dry_run=dry_run,
+            user_triggered=True,
+            triage_only=not full,
+            force_cve_triage=force_cve_triage,
+        )
+        try:
+            result = asyncio.run(_submit_triage(intent, wait=not detach))
+        except Exception as error:
+            typer.echo(f"Temporal submission failed for {intent.request_id}: {error}", err=True)
+            raise typer.Exit(1) from error
+        if isinstance(result, str):
+            typer.echo(f"{result} {intent.request_id} in {triage_issue_workflow_id(issue)}")
+            return
+        if result["output"] is not None:
+            output = json.dumps(result["output"], indent=2)
+            if work_dir:
+                result_file = Path(work_dir) / intent.issue / "triage_result.json"
+                result_file.parent.mkdir(parents=True, exist_ok=True)
+                result_file.write_text(output, encoding="utf-8")
+            typer.echo(output)
+        else:
+            typer.echo(result.get("detail") or result["status"], err=True)
+        if result["status"] in {"failed", "unstarted"}:
+            raise typer.Exit(1)
+        return
+    if request_id or detach or full:
+        raise typer.BadParameter("--request-id, --detach and --full require TEMPORAL_ADDRESS")
+
     secrets_dir = Path(secrets).resolve()
 
     saved_env = os.environ.copy()
@@ -122,7 +186,7 @@ def triage(
             os.environ["MOCK_JIRA"] = "true"
             os.environ["JIRA_MOCK_FILES_HOST"] = str(Path(mock_jira).resolve())
 
-        check_credentials(mock_jira=bool(mock_jira))
+        check_credentials(mock_jira=os.getenv("MOCK_JIRA", "").lower() == "true")
 
         if work_dir:
             work_dir_path = Path(work_dir).resolve()
@@ -131,24 +195,22 @@ def triage(
             work_dir_path = Path(tempfile.mkdtemp(prefix="ymir-"))
 
         compose_path = Path(compose_file).resolve()
-        issue_upper = issue.upper()
-
-        agent_env = {
-            "JIRA_ISSUE": issue_upper,
-            "DRY_RUN": "true" if dry_run else "false",
-            "FORCE_CVE_TRIAGE": "true" if force_cve_triage else "false",
-            "AUTO_CHAIN": "false",
-            "USER_TRIGGERED": "true",
-        }
-        if mock_jira:
-            agent_env["MOCK_JIRA"] = "true"
-
+        issue_upper = issue.strip().upper()
+        dry_run = dry_run or os.getenv("JIRA_DRY_RUN", "").lower() == "true"
+        os.environ["DRY_RUN"] = "true" if dry_run else "false"
         os.environ["GIT_REPOS_HOST"] = str(work_dir_path)
 
         agent_failed = False
         try:
             start_services(compose_path)
-            run_agent(compose_path, agent_env)
+            output = submit_triage(
+                compose_path, issue_upper, dry_run=dry_run, force_cve_triage=force_cve_triage
+            )
+            if output:
+                result_file = work_dir_path / issue_upper / "triage_result.json"
+                result_file.parent.mkdir(parents=True, exist_ok=True)
+                result_file.write_text(output, encoding="utf-8")
+                typer.echo(output, nl=False)
         except subprocess.CalledProcessError:
             agent_failed = True
             typer.echo("Error: container exited with non-zero status.", err=True)
@@ -156,12 +218,6 @@ def triage(
             agent_failed = True
             typer.echo(f"Error: {exc}", err=True)
         finally:
-            result_file = work_dir_path / issue_upper / "triage_result.json"
-            if result_file.is_file():
-                typer.echo(result_file.read_text(encoding="utf-8"))
-            else:
-                typer.echo("Warning: no triage result file found.", err=True)
-
             try:
                 stop_services(compose_path)
             except Exception:

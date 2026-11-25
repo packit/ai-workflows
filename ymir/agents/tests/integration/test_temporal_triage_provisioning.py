@@ -106,3 +106,35 @@ async def test_provisioning_cleans_up_after_failure(failure):
         assert activity_queues["read_publication_inputs"] == removed[0].task_queue
     else:
         assert set(activity_queues) == {"provision_triage_pod", "delete_triage_pod"}
+
+
+@pytest.mark.asyncio
+async def test_in_cluster_provisioner_deletes_only_the_observed_pod_uid():
+    calls = []
+    pod = TriagePod("ymir-triage-fixture", "RHEL-987654", True)
+
+    class API:
+        state = None
+
+        async def request(self, method, name="", body=None):
+            calls.append((method, name, body))
+            if method == "POST":
+                self.state = body
+                self.state["metadata"]["uid"] = "fixture-uid"
+                self.state["status"] = {"conditions": [{"type": "Ready", "status": "True"}]}
+            elif method == "DELETE":
+                self.state = None
+            return self.state
+
+    backend = OpenShiftTriageProvisioner(
+        "testing",
+        Path("openshift/templates/temporal-triage-pod.yml"),
+        "temporal.testing:7233",
+        "testing",
+        api=API(),
+    )
+    await backend.create(pod)
+    assert await backend.ready(pod)
+    await backend.delete(pod)
+    assert [method for method, _, _ in calls] == ["GET", "POST", "GET", "GET", "DELETE", "GET"]
+    assert calls[-2] == ("DELETE", pod.name, {"preconditions": {"uid": "fixture-uid"}})

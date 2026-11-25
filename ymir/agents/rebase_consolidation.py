@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import re
 from pathlib import Path
 
@@ -12,16 +11,15 @@ import ymir.agents.tasks as tasks
 from ymir.agents.utils import (
     run_tool,
 )
-from ymir.common.base_utils import fix_await, redis_client
-from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.constants import JiraLabels
 from ymir.common.cve import extract_cve_ids
 from ymir.common.models import (
     ConsolidatedIssue,
     CVEEligibilityResult,
     RebaseData,
-    Task,
     TriageEligibility,
 )
+from ymir.common.temporal_triage import TriageIntent, connect_triage_ingress, submit_triage_intent
 from ymir.common.utils import extract_text_from_adf
 from ymir.common.version_utils import get_fix_version_variants
 
@@ -564,7 +562,7 @@ async def queue_siblings_for_triage(
             "search_jira_issues",
             available_tools=available_tools,
             jql=jql,
-            fields=["key", "summary"],
+            fields=["key", "summary", "updated"],
             max_results=50,
         )
     except Exception as e:
@@ -731,19 +729,19 @@ async def queue_siblings_for_triage(
                 # Inherit user_triggered from primary to preserve priority. Keep the
                 # sibling's own triage-only marker, which must not be overridden by
                 # the trigger flag it inherited.
-                task = Task.from_issue(
-                    candidate_key,
-                    user_triggered=user_triggered,
-                    triage_only=JiraLabels.TRIAGE_ONLY.value in candidate_labels,
+                revision = (candidate.get("fields") or {}).get("updated", "initial")
+                await submit_triage_intent(
+                    await connect_triage_ingress(),
+                    TriageIntent(
+                        candidate_key,
+                        f"rebase-sibling:{primary_issue}:{revision}",
+                        "retry",
+                        dry_run=False,
+                        user_triggered=user_triggered,
+                        triage_only=JiraLabels.TRIAGE_ONLY.value in candidate_labels,
+                    ),
                 )
-                # Use priority queue for user-triggered tasks
-                queue = (
-                    RedisQueues.TRIAGE_QUEUE_TODO.value if user_triggered else RedisQueues.TRIAGE_QUEUE.value
-                )
-                async with redis_client(os.environ["REDIS_URL"]) as redis:
-                    await fix_await(redis.lpush(queue, task.model_dump_json()))
 
-            # Increment count immediately after Redis push (or would-push in dry-run)
             queued_count += 1
             queued_siblings.append(candidate_key)
             logger.info(
@@ -879,30 +877,19 @@ async def check_and_queue_primary_if_ready(
         logger.info(f"All siblings done for {primary_issue}, {action} for rebase")
 
         if not dry_run:
-            # Remove ymir_rebase_waiting_for_siblings label now that all siblings are done
-            # This is CRITICAL - if we can't remove it, the primary will never queue for rebase
-            await tasks.set_jira_labels(
-                jira_issue=primary_issue,
-                labels_to_remove=[JiraLabels.WAITING_FOR_SIBLINGS.value],
-                dry_run=False,
-                user_triggered=user_triggered,
-                critical=True,  # Must succeed; retries 3 times with backoff
+            # Temporal consumes the waiting marker after receiving the request.
+            await submit_triage_intent(
+                await connect_triage_ingress(),
+                TriageIntent(
+                    primary_issue,
+                    f"rebase-primary:{sibling_issue}:{fields.get('updated', 'initial')}",
+                    "retry",
+                    dry_run=False,
+                    user_triggered=user_triggered,
+                    triage_only=JiraLabels.TRIAGE_ONLY.value in labels,
+                    retry_label=JiraLabels.WAITING_FOR_SIBLINGS.value,
+                ),
             )
-
-            # Re-queue primary to triage queue
-            # Triage will re-process the issue (full LLM triage + eligibility check), then
-            # queue for rebase with proper full state (Task.metadata = state.model_dump()).
-            # The ymir_triaged_rebase label will be removed by triage when it sees
-            # ymir_rebase_waiting_for_siblings was present (non-terminal state for re-triaging).
-            # Carry the primary's own intent: a per-issue triage-only request must
-            # survive the trigger flag the siblings inherited from it.
-            task = Task.from_issue(
-                primary_issue,
-                user_triggered=user_triggered,
-                triage_only=JiraLabels.TRIAGE_ONLY.value in labels,
-            )
-            async with redis_client(os.environ["REDIS_URL"]) as redis:
-                await fix_await(redis.lpush(RedisQueues.TRIAGE_QUEUE.value, task.model_dump_json()))
             logger.info(f"Re-queued {primary_issue} to triage (will re-triage and queue to rebase)")
 
         # Post comment

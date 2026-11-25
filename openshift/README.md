@@ -463,7 +463,7 @@ Two CronJobs run the fetcher with different JQL queries:
 
 | CronJob | Schedule | QUERY | ConfigMap |
 |---|---|---|---|
-| `jira-issue-fetcher` | `*/15 * * * *` | Main CVE batch — tops the triage queue up towards `QUEUE_DEPTH_THRESHOLD` from the filter in `jira-issue-fetcher-filter-env` | `jira-issue-fetcher-filter-env` |
+| `jira-issue-fetcher` | `*/15 * * * *` | Main CVE batch — submits up to `MAX_ISSUES` eligible requests to Temporal each run | `jira-issue-fetcher-filter-env` |
 | `jira-issue-fetcher-todo` | `*/5 * * * *` | `labels = "ymir_todo"` OR `labels = "ymir_todo_triage"` OR consolidation labels (`ymir_consolidate_base`, `ymir_consolidate_next`) | `jira-issue-fetcher-todo-env` |
 
 Both share the common knobs (`MAX_ISSUES`, `LOGLEVEL`, `SKIP_MODULAR`) from `jira-issue-fetcher-env`. `SKIP_MODULAR` controls whether modular issues (Downstream Component matching `module:stream/pkg`) are enqueued for triage (`false`) or silently dropped (`true`; code default). Components excluded from scope are part of the Jira filter itself, maintained (with rationale per component) in the separate [`cve-scope`](https://gitlab.cee.redhat.com/jotnar-project/cve-scope) repo — not in a configmap or env var.
@@ -511,23 +511,50 @@ To enable production status transitions:
 
 ```bash
 oc patch configmap agents-env --type merge -p '{"data":{"JIRA_ALLOW_STATUS_CHANGES":"true"}}'
-oc rollout restart deployment -l app=triage-agent  # plus any other agent deployments
+oc rollout restart deployment/triage-controller  # plus any other affected deployments
 ```
+
+## Cut over triage to Temporal
+
+Create `temporal-triage-env` in the Ymir namespace before deployment. Set
+`TEMPORAL_ADDRESS` to the existing Temporal service and
+`TEMPORAL_NAMESPACE` to its Ymir namespace. Set
+`TEMPORAL_POD_ADDRESS` if the execution pods reach Temporal at a different
+address. The controller uses its own service account to provision pods.
+The execution pods use the existing worker and gateway images.
+
+1. Publish the updated C10S agent, fetcher, and sweep images. Set
+   `TEMPORAL_TRIAGE_ADMISSIONS=false` in `temporal-triage-env` while staging
+   the new configuration.
+2. For an existing Redis installation, suspend the old fetcher and sweep
+   CronJobs and let outstanding Jobs finish. Scale `deployment/triage-agent`
+   to zero and let it finish shutting down. Stop any other processes still
+   submitting legacy triage queue entries.
+3. Apply the updated manifests and verify that `deployment/triage-controller`
+   is ready. Reconcile Jira labels, GitLab MRs, and any incomplete legacy rebase
+   sibling groups before resubmitting ambiguous work.
+4. Enable `TEMPORAL_TRIAGE_ADMISSIONS=true` and restart the controller so
+   that it receives the change. Run `make drain-legacy-triage` once while the
+   legacy queues are quiescent. It transfers the two triage lists and their
+   parked lists. An entry is removed after its Temporal Update is accepted.
+   Re-running the drain submits the same request ID for any retained entry.
+5. Verify a Jira discovery request, a postponed-issue retry, and a manual
+   submission in Temporal. Resume the updated CronJobs and retire the scaled-down
+   deployment. The downstream fix and reproducer queues remain in Valkey.
+
+To roll back, pause Temporal submissions, reconcile accepted workflows and
+their downstream effects, then redeploy the previous release and restore
+only unfinished work using Jira and GitLab. Entries already transferred by
+the drain are owned by Temporal.
 
 ## Triggering the Pipeline Manually
 
-To push a Jira issue into the triage queue (e.g. to force CVE triage):
+Submit a Jira issue to Temporal using the controller:
 
 ```bash
 make process ISSUE=RHEL-XXXX
-# or:
-oc rsh deployment/valkey valkey-cli --tls \
-  --cert /tls/tls.crt --key /tls/tls.key \
-  --cacert /etc/pki/service-ca/service-ca.crt \
-  LPUSH triage_queue '{"metadata": {"issue": "RHEL-XXXXXX", "force_cve_triage": true}}'
+make process ISSUE=RHEL-XXXX FORCE_CVE_TRIAGE=true
 ```
-
-Set `force_cve_triage` to `false` for a normal triage run. This mirrors the `make trigger-pipeline` target used locally.
 
 ### Triggering a reproducer job
 
@@ -561,7 +588,7 @@ Run these from the `openshift/` directory (they shell into the `valkey` pod via 
 Each `show-*-queue` target lists the Jira issue keys currently waiting in a queue, oldest-first (next to be popped). Every input queue has a priority twin (`<queue>_todo`) that the agents drain first for `ymir_todo`-triggered tasks, so those targets print the `_todo` queue before the normal one.
 
 ```bash
-make show-triage-queue          # triage_queue_todo + triage_queue
+make show-triage-queue          # legacy queues during cutover
 make show-rebase-queue-c9s      # rebase_queue_c9s_todo + rebase_queue_c9s
 make show-rebase-queue-c10s     # rebase_queue_c10s_todo + rebase_queue_c10s
 make show-backport-queue-c9s    # backport_queue_c9s_todo + backport_queue_c9s
@@ -578,7 +605,7 @@ make show-error-list            # per-issue / per-tool-error breakdown via scrip
 Each `logs-*` target follows (`oc logs -f`) the corresponding deployment's pod:
 
 ```bash
-make logs-triage           # triage-agent
+make logs-triage           # triage-controller
 make logs-backport-c9s     # backport-agent-c9s
 make logs-backport-c10s    # backport-agent-c10s
 make logs-rebase-c9s       # rebase-agent-c9s

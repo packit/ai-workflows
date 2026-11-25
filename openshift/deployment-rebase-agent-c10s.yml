@@ -39,6 +39,8 @@ spec:
             name: chat-env
         - configMapRef:
             name: endpoints-env
+        - configMapRef:
+            name: temporal-triage-env
         - secretRef:
             name: sentry-env
         image: 'beeai-agent:c10s'

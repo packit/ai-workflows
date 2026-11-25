@@ -3,12 +3,14 @@
 import asyncio
 import json
 import os
+import ssl
 import tempfile
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Protocol
 
+import aiohttp
 import yaml
 from temporalio import activity
 from temporalio.client import Client
@@ -312,10 +314,48 @@ class PodmanTriageProvisioner:
                 raise ContainerCommandError(f"Could not remove triage workspace {name}")
 
 
+class InClusterPodAPI:
+    """Use the controller's projected credentials for Kubernetes Pod operations."""
+
+    def __init__(self, namespace: str):
+        directory = Path("/var/run/secrets/kubernetes.io/serviceaccount")
+        self.token = directory / "token"
+        self.ssl_context = ssl.create_default_context(cafile=str(directory / "ca.crt"))
+        host = os.environ["KUBERNETES_SERVICE_HOST"]
+        port = os.environ["KUBERNETES_SERVICE_PORT_HTTPS"]
+        if ":" in host:
+            host = f"[{host}]"
+        self.url = f"https://{host}:{port}/api/v1/namespaces/{namespace}/pods"
+
+    async def request(self, method: str, name: str = "", body: dict | None = None) -> dict | None:
+        url = f"{self.url}/{name}" if name else self.url
+        headers = {"Authorization": f"Bearer {self.token.read_text().strip()}"}
+        async with (
+            aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12)) as session,
+            session.request(
+                method, url, json=body, headers=headers, ssl=self.ssl_context, allow_redirects=False
+            ) as response,
+        ):
+            if response.status == 404 and name:
+                return None
+            if not 200 <= response.status < 300:
+                raise ContainerCommandError(f"Kubernetes Pod {method} returned {response.status}")
+            return await response.json()
+
+
 class OpenShiftTriageProvisioner:
     """Run the same worker and gateway in a namespaced OpenShift pod."""
 
-    def __init__(self, namespace: str, template: Path, address: str, temporal_namespace: str):
+    def __init__(
+        self,
+        namespace: str,
+        template: Path,
+        address: str,
+        temporal_namespace: str,
+        *,
+        api: InClusterPodAPI | None = None,
+    ):
+        self.api = api
         self.namespace = namespace
         self.template = template
         self.address = address
@@ -347,10 +387,15 @@ class OpenShiftTriageProvisioner:
         return manifest
 
     async def _inspect(self, pod: TriagePod) -> dict | None:
-        _, raw = await self._run("get", "pod", pod.name, "-o", "json", "--ignore-not-found")
-        if not raw.strip():
-            return None
-        state = json.loads(raw)
+        if self.api:
+            state = await self.api.request("GET", pod.name)
+            if state is None:
+                return None
+        else:
+            _, raw = await self._run("get", "pod", pod.name, "-o", "json", "--ignore-not-found")
+            if not raw.strip():
+                return None
+            state = json.loads(raw)
         if state["metadata"].get("labels", {}).get(EXECUTION_LABEL) != pod.name:
             raise ApplicationError(f"Pod name {pod.name} belongs to another execution", non_retryable=True)
         return state
@@ -358,7 +403,11 @@ class OpenShiftTriageProvisioner:
     async def create(self, pod: TriagePod) -> None:
         if not await self._inspect(pod):
             try:
-                await self._run("create", "-f", "-", data=json.dumps(self.manifest(pod)))
+                manifest = self.manifest(pod)
+                if self.api:
+                    await self.api.request("POST", body=manifest)
+                else:
+                    await self._run("create", "-f", "-", data=json.dumps(manifest))
             except ContainerCommandError:
                 if not await self._inspect(pod):
                     raise
@@ -373,8 +422,15 @@ class OpenShiftTriageProvisioner:
         return any(c["type"] == "Ready" and c["status"] == "True" for c in status.get("conditions", []))
 
     async def delete(self, pod: TriagePod) -> None:
-        if await self._inspect(pod):
+        if not (state := await self._inspect(pod)):
+            return
+        if not self.api:
             await self._run("delete", "pod", pod.name, "--ignore-not-found", "--timeout=35s")
+            return
+        await self.api.request("DELETE", pod.name, {"preconditions": {"uid": state["metadata"]["uid"]}})
+        async with asyncio.timeout(40):
+            while await self._inspect(pod):
+                await asyncio.sleep(POLL_SECONDS)
 
 
 class TriagePodActivities:
@@ -412,17 +468,35 @@ class TriagePodActivities:
 def create_triage_control_worker(client: Client, queue: str, provisioner: PodProvisioner) -> Worker:
     from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
 
+    from ymir.agents.temporal_package_coordination import (
+        PackageStreamActivities,
+        PackageStreamWorkflow,
+        plan_package_stream,
+        release_coordinated_triage,
+    )
+    from ymir.agents.temporal_triage_ingress import INGRESS_ACTIVITIES, TriageIngressWorkflow
     from ymir.agents.temporal_triage_publication import (
         TriagePublicationWorkflow,
         TriageRequestReceiptWorkflow,
     )
 
     activities = TriagePodActivities(provisioner)
+    coordination = PackageStreamActivities(client, queue)
     return Worker(
         client,
         task_queue=queue,
-        workflows=[TriagePublicationWorkflow, TriageRequestReceiptWorkflow],
+        workflows=[
+            TriagePublicationWorkflow,
+            TriageRequestReceiptWorkflow,
+            TriageIngressWorkflow,
+            PackageStreamWorkflow,
+        ],
         activities=[
+            *INGRESS_ACTIVITIES,
+            plan_package_stream,
+            release_coordinated_triage,
+            coordination.submit_package_coordination,
+            coordination.submit_sibling_triage,
             activities.provision_triage_pod,
             activities.watch_triage_pod,
             activities.delete_triage_pod,
@@ -430,7 +504,9 @@ def create_triage_control_worker(client: Client, queue: str, provisioner: PodPro
         max_heartbeat_throttle_interval=timedelta(seconds=6),
         workflow_runner=SandboxedWorkflowRunner(
             restrictions=SandboxRestrictions.default.with_passthrough_modules(
-                TriagePublicationWorkflow.__module__
+                TriagePublicationWorkflow.__module__,
+                TriageIngressWorkflow.__module__,
+                PackageStreamWorkflow.__module__,
             )
         ),
     )

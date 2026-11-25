@@ -1,6 +1,3 @@
-import json
-from contextlib import asynccontextmanager
-
 import pytest
 from flexmock import flexmock
 
@@ -16,7 +13,7 @@ from ymir.agents.rebase_consolidation import (
     sibling_link_is_stale,
     uses_autochangelog,
 )
-from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.constants import JiraLabels
 from ymir.common.models import ConsolidatedIssue, RebaseData
 from ymir.common.utils import extract_text_from_adf
 
@@ -765,32 +762,26 @@ async def test_primary_requeue_preserves_triage_only_intent(monkeypatch):
     async def record(*_args, **_kwargs):
         return None
 
-    class FakeRedis:
-        async def lpush(self, queue, payload):
-            pushed.append((queue, payload))
+    async def connect():
+        return object()
 
-    @asynccontextmanager
-    async def fake_redis_client(_url):
-        yield FakeRedis()
+    async def submit(client, intent):
+        pushed.append(intent)
 
-    async def fake_fix_await(value):
-        return await value
-
-    monkeypatch.setenv("REDIS_URL", "redis://localhost")
     monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
     monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
     monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
-    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
-    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+    monkeypatch.setattr(rebase_consolidation, "connect_triage_ingress", connect)
+    monkeypatch.setattr(rebase_consolidation, "submit_triage_intent", submit)
 
     await check_and_queue_primary_if_ready(
         sibling_issue="RHEL-200", available_tools=[], dry_run=False, user_triggered=True
     )
 
     assert len(pushed) == 1
-    queue, payload = pushed[0]
-    assert queue == RedisQueues.TRIAGE_QUEUE.value
-    assert json.loads(payload)["triage_only"] is True
+    [intent] = pushed
+    assert intent.retry_label == JiraLabels.WAITING_FOR_SIBLINGS.value
+    assert intent.triage_only is True
 
 
 @pytest.mark.asyncio
@@ -815,24 +806,18 @@ async def test_queued_sibling_keeps_its_triage_only_marker(monkeypatch):
     async def record(*_args, **_kwargs):
         return None
 
-    class FakeRedis:
-        async def lpush(self, queue, payload):
-            pushed.append((queue, payload))
+    async def connect():
+        return object()
 
-    @asynccontextmanager
-    async def fake_redis_client(_url):
-        yield FakeRedis()
+    async def submit(client, intent):
+        pushed.append(intent)
 
-    async def fake_fix_await(value):
-        return await value
-
-    monkeypatch.setenv("REDIS_URL", "redis://localhost")
     monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
     monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
     monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
     monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
-    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
-    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+    monkeypatch.setattr(rebase_consolidation, "connect_triage_ingress", connect)
+    monkeypatch.setattr(rebase_consolidation, "submit_triage_intent", submit)
 
     queued = await rebase_consolidation.queue_siblings_for_triage(
         primary_issue="RHEL-100",
@@ -844,11 +829,8 @@ async def test_queued_sibling_keeps_its_triage_only_marker(monkeypatch):
     )
 
     assert queued == 1
-    queue, payload = pushed[0]
-    assert queue == RedisQueues.TRIAGE_QUEUE_TODO.value
-    task = json.loads(payload)
-    assert task["triage_only"] is True
-    assert task["user_triggered"] is True
+    [intent] = pushed
+    assert intent.triage_only and intent.user_triggered
 
 
 @pytest.mark.asyncio
@@ -878,24 +860,18 @@ async def test_queued_sibling_loses_stale_waiting_label(monkeypatch):
             label_writes.append(kwargs)
         return
 
-    class FakeRedis:
-        async def lpush(self, queue, payload):
-            pushed.append((queue, payload))
+    async def connect():
+        return object()
 
-    @asynccontextmanager
-    async def fake_redis_client(_url):
-        yield FakeRedis()
+    async def submit(client, intent):
+        pushed.append(intent)
 
-    async def fake_fix_await(value):
-        return await value
-
-    monkeypatch.setenv("REDIS_URL", "redis://localhost")
     monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
     monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
     monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
     monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
-    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
-    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+    monkeypatch.setattr(rebase_consolidation, "connect_triage_ingress", connect)
+    monkeypatch.setattr(rebase_consolidation, "submit_triage_intent", submit)
 
     queued = await rebase_consolidation.queue_siblings_for_triage(
         primary_issue="RHEL-100",
@@ -950,24 +926,18 @@ async def test_active_waiting_group_is_not_queued_as_sibling(monkeypatch):
             label_writes.append(kwargs)
         return
 
-    class FakeRedis:
-        async def lpush(self, queue, payload):
-            pushed.append((queue, payload))
+    async def connect():
+        return object()
 
-    @asynccontextmanager
-    async def fake_redis_client(_url):
-        yield FakeRedis()
+    async def submit(client, intent):
+        pushed.append(intent)
 
-    async def fake_fix_await(value):
-        return await value
-
-    monkeypatch.setenv("REDIS_URL", "redis://localhost")
     monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
     monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
     monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
     monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
-    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
-    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+    monkeypatch.setattr(rebase_consolidation, "connect_triage_ingress", connect)
+    monkeypatch.setattr(rebase_consolidation, "submit_triage_intent", submit)
 
     queued = await rebase_consolidation.queue_siblings_for_triage(
         primary_issue="RHEL-100",
@@ -1022,24 +992,18 @@ async def test_reappeared_active_marker_rolls_back_sibling_queueing(monkeypatch)
                 label_writes.append(kwargs)
         return
 
-    class FakeRedis:
-        async def lpush(self, queue, payload):
-            pushed.append((queue, payload))
+    async def connect():
+        return object()
 
-    @asynccontextmanager
-    async def fake_redis_client(_url):
-        yield FakeRedis()
+    async def submit(client, intent):
+        pushed.append(intent)
 
-    async def fake_fix_await(value):
-        return await value
-
-    monkeypatch.setenv("REDIS_URL", "redis://localhost")
     monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
     monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
     monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
     monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
-    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
-    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+    monkeypatch.setattr(rebase_consolidation, "connect_triage_ingress", connect)
+    monkeypatch.setattr(rebase_consolidation, "submit_triage_intent", submit)
 
     queued = await rebase_consolidation.queue_siblings_for_triage(
         primary_issue="RHEL-100",
@@ -1086,23 +1050,17 @@ async def test_sibling_marker_write_failure_fails_the_run(monkeypatch):
     async def failing_set_jira_labels(*_args, **_kwargs):
         raise RuntimeError("Jira unavailable")
 
-    class FakeRedis:
-        async def lpush(self, queue, payload):
-            pushed.append((queue, payload))
+    async def connect():
+        return object()
 
-    @asynccontextmanager
-    async def fake_redis_client(_url):
-        yield FakeRedis()
+    async def submit(client, intent):
+        pushed.append(intent)
 
-    async def fake_fix_await(value):
-        return await value
-
-    monkeypatch.setenv("REDIS_URL", "redis://localhost")
     monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
     monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
     monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", failing_set_jira_labels)
-    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
-    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+    monkeypatch.setattr(rebase_consolidation, "connect_triage_ingress", connect)
+    monkeypatch.setattr(rebase_consolidation, "submit_triage_intent", submit)
 
     with pytest.raises(rebase_consolidation.SiblingLabelsUnreadableError):
         await rebase_consolidation.queue_siblings_for_triage(
@@ -1148,24 +1106,18 @@ async def test_waiting_marker_readded_after_write_is_cleaned_up(monkeypatch):
             label_writes.append(kwargs)
         return
 
-    class FakeRedis:
-        async def lpush(self, queue, payload):
-            pushed.append((queue, payload))
+    async def connect():
+        return object()
 
-    @asynccontextmanager
-    async def fake_redis_client(_url):
-        yield FakeRedis()
+    async def submit(client, intent):
+        pushed.append(intent)
 
-    async def fake_fix_await(value):
-        return await value
-
-    monkeypatch.setenv("REDIS_URL", "redis://localhost")
     monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
     monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
     monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
     monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
-    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
-    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+    monkeypatch.setattr(rebase_consolidation, "connect_triage_ingress", connect)
+    monkeypatch.setattr(rebase_consolidation, "submit_triage_intent", submit)
 
     queued = await rebase_consolidation.queue_siblings_for_triage(
         primary_issue="RHEL-100",
@@ -1214,22 +1166,16 @@ async def test_unreadable_sibling_labels_retry_instead_of_splitting_the_rebase(m
         read_kwargs.append(kwargs)
         raise RuntimeError("Jira unavailable")
 
-    class FakeRedis:
-        async def lpush(self, queue, payload):
-            pushed.append((queue, payload))
+    async def connect():
+        return object()
 
-    @asynccontextmanager
-    async def fake_redis_client(_url):
-        yield FakeRedis()
+    async def submit(client, intent):
+        pushed.append(intent)
 
-    async def fake_fix_await(value):
-        return await value
-
-    monkeypatch.setenv("REDIS_URL", "redis://localhost")
     monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
     monkeypatch.setattr(rebase_consolidation.tasks, "get_jira_issue_metadata", get_metadata)
-    monkeypatch.setattr(rebase_consolidation, "redis_client", fake_redis_client)
-    monkeypatch.setattr(rebase_consolidation, "fix_await", fake_fix_await)
+    monkeypatch.setattr(rebase_consolidation, "connect_triage_ingress", connect)
+    monkeypatch.setattr(rebase_consolidation, "submit_triage_intent", submit)
 
     with pytest.raises(rebase_consolidation.SiblingLabelsUnreadableError):
         await rebase_consolidation.queue_siblings_for_triage(

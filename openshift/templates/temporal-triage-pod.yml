@@ -14,7 +14,7 @@ spec:
       type: RuntimeDefault
   containers:
     - name: worker
-      image: beeai-agent:temporal-c10s
+      image: beeai-agent:c10s
       args: ["/usr/bin/python3", "-m", "ymir.agents.temporal_triage_worker"]
       envFrom:
         - configMapRef:

@@ -6,6 +6,10 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"
 
 oc project jotnar-ymir--jotnar-ymir
+if ! oc get configmap temporal-triage-env >/dev/null; then
+    echo "Configure the Temporal endpoint as described in openshift/README.md before deploying." >&2
+    exit 1
+fi
 
 apply() {
     echo "Applying $1 ..."
@@ -135,7 +139,10 @@ apply deployment-api.yml
 # BeeAI Agents
 apply imagestream-beeai-agent.yml
 import_image beeai-agent
-apply deployment-triage-agent.yml
+apply serviceaccount-triage-controller.yml
+apply role-triage-controller.yml
+apply rolebinding-triage-controller.yml
+apply deployment-triage-controller.yml
 apply deployment-backport-agent-c9s.yml
 apply deployment-backport-agent-c10s.yml
 apply deployment-rebase-agent-c9s.yml

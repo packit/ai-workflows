@@ -148,7 +148,7 @@ class TestRhelConfigCheck:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent")
+        flexmock(cli_main).should_receive("submit_triage")
 
         triage(
             issue="RHEL-99999",
@@ -161,75 +161,29 @@ class TestRhelConfigCheck:
         )
 
 
-class TestAgentEnvVars:
-    """Verify the env dict forwarded to run_agent for each CLI flag."""
+def test_compose_submission_receives_normalized_issue_and_run_options(tmp_path, monkeypatch):
+    secrets_dir = _make_secrets(tmp_path)
+    monkeypatch.setenv("JIRA_DRY_RUN", "true")
 
-    def _run(self, tmp_path, **overrides):
-        secrets_dir = _make_secrets(tmp_path)
-        defaults = {
-            "issue": "RHEL-99999",
-            "dry_run": False,
-            "force_cve_triage": False,
-            "secrets": str(secrets_dir),
-            "compose_file": "compose.yaml",
-            "mock_jira": None,
-            "work_dir": str(tmp_path / "work"),
-        }
-        defaults.update(overrides)
+    def submit(_compose_file, issue, *, dry_run, force_cve_triage):
+        assert issue == "RHEL-12345"
+        assert dry_run and force_cve_triage
+        assert os.environ["DRY_RUN"] == "true"
 
-        saved_env = {}
+    flexmock(cli_main).should_receive("check_credentials")
+    flexmock(cli_main).should_receive("start_services")
+    flexmock(cli_main).should_receive("stop_services")
+    flexmock(cli_main).should_receive("submit_triage").replace_with(submit).once()
 
-        def _spy_agent_call_env(*_args, **_kwargs):
-            nonlocal saved_env
-            # last_call = _kwargs.copy()
-            _, saved_env = _args
-
-        flexmock(cli_main).should_receive("check_credentials")
-        flexmock(cli_main).should_receive("start_services")
-        flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent").replace_with(_spy_agent_call_env)
-
-        triage(**defaults)
-
-        return saved_env
-
-    def test_jira_issue_uppercased(self, tmp_path):
-        call_env = self._run(tmp_path, issue="rhel-12345")
-        assert call_env["JIRA_ISSUE"] == "RHEL-12345"
-
-    def test_dry_run_true(self, tmp_path):
-        call_env = self._run(tmp_path, dry_run=True)
-        assert call_env["DRY_RUN"] == "true"
-
-    def test_dry_run_false(self, tmp_path):
-        call_env = self._run(tmp_path, dry_run=False)
-        assert call_env["DRY_RUN"] == "false"
-
-    def test_force_cve_triage_true(self, tmp_path):
-        call_env = self._run(tmp_path, force_cve_triage=True)
-        assert call_env["FORCE_CVE_TRIAGE"] == "true"
-
-    def test_force_cve_triage_false(self, tmp_path):
-        call_env = self._run(tmp_path, force_cve_triage=False)
-        assert call_env["FORCE_CVE_TRIAGE"] == "false"
-
-    def test_auto_chain_always_false(self, tmp_path):
-        call_env = self._run(tmp_path)
-        assert call_env["AUTO_CHAIN"] == "false"
-
-    def test_user_triggered_always_true(self, tmp_path):
-        call_env = self._run(tmp_path)
-        assert call_env["USER_TRIGGERED"] == "true"
-
-    def test_mock_jira_included_when_set(self, tmp_path):
-        mock_dir = tmp_path / "jiras"
-        mock_dir.mkdir()
-        call_env = self._run(tmp_path, mock_jira=str(mock_dir))
-        assert call_env["MOCK_JIRA"] == "true"
-
-    def test_mock_jira_absent_when_none(self, tmp_path):
-        call_env = self._run(tmp_path, mock_jira=None)
-        assert "MOCK_JIRA" not in call_env
+    triage(
+        issue="rhel-12345",
+        dry_run=False,
+        force_cve_triage=True,
+        secrets=str(secrets_dir),
+        compose_file="compose.yaml",
+        mock_jira=None,
+        work_dir=str(tmp_path / "work"),
+    )
 
 
 class TestTriageContainerLifecycle:
@@ -239,7 +193,7 @@ class TestTriageContainerLifecycle:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services").once()
         flexmock(cli_main).should_receive("stop_services").once()
-        flexmock(cli_main).should_receive("run_agent")
+        flexmock(cli_main).should_receive("submit_triage")
 
         triage(
             issue="RHEL-99999",
@@ -257,7 +211,9 @@ class TestTriageContainerLifecycle:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services").once()
-        flexmock(cli_main).should_receive("run_agent").and_raise(subprocess.CalledProcessError(1, "podman"))
+        flexmock(cli_main).should_receive("submit_triage").and_raise(
+            subprocess.CalledProcessError(1, "podman")
+        )
         with pytest.raises((SystemExit, typer.Exit)):
             triage(
                 issue="RHEL-99999",
@@ -281,7 +237,7 @@ class TestTriageContainerLifecycle:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services").replace_with(_mock_start)
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent")
+        flexmock(cli_main).should_receive("submit_triage")
 
         triage(
             issue="RHEL-99999",
@@ -298,13 +254,13 @@ class TestTriageContainerLifecycle:
         assert str(passed_path).endswith("custom/compose.yaml")
 
     def test_stop_failure_does_not_mask_agent_error(self, tmp_path, capsys):
-        """When both run_agent and stop_services fail, the agent error reaches the user."""
+        """When both submit_triage and stop_services fail, the agent error reaches the user."""
         secrets_dir = _make_secrets(tmp_path)
 
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services").and_raise(RuntimeError("podman down"))
-        flexmock(cli_main).should_receive("run_agent").and_raise(RuntimeError("workflow failed"))
+        flexmock(cli_main).should_receive("submit_triage").and_raise(RuntimeError("workflow failed"))
 
         with pytest.raises((SystemExit, typer.Exit)):
             triage(
@@ -328,7 +284,7 @@ class TestTriageContainerLifecycle:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services").and_raise(RuntimeError("podman down"))
-        flexmock(cli_main).should_receive("run_agent")
+        flexmock(cli_main).should_receive("submit_triage")
         flexmock(os, environ=os.environ.copy())
 
         triage(
@@ -358,7 +314,7 @@ class TestWorkDirEnv:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent").replace_with(_capture_env)
+        flexmock(cli_main).should_receive("submit_triage").replace_with(_capture_env)
         flexmock(os, environ={})
 
         os.environ.pop("GIT_REPOS_HOST", None)
@@ -388,7 +344,7 @@ class TestWorkDirEnv:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent").replace_with(_capture_env)
+        flexmock(cli_main).should_receive("submit_triage").replace_with(_capture_env)
         flexmock(os, environ={})
 
         os.environ.pop("GIT_REPOS_HOST", None)
@@ -416,7 +372,7 @@ class TestWorkDirEnv:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent").replace_with(_capture_env)
+        flexmock(cli_main).should_receive("submit_triage").replace_with(_capture_env)
         flexmock(os, environ={"GIT_REPOS_HOST": "/custom-mount"})
 
         triage(
@@ -440,7 +396,7 @@ class TestWorkDirEnv:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent")
+        flexmock(cli_main).should_receive("submit_triage")
 
         triage(
             issue="RHEL-99999",
@@ -470,7 +426,7 @@ class TestMockJira:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent").replace_with(_capture_env)
+        flexmock(cli_main).should_receive("submit_triage").replace_with(_capture_env)
         flexmock(os, environ={})
 
         triage(
@@ -493,7 +449,7 @@ class TestMockJira:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent")
+        flexmock(cli_main).should_receive("submit_triage")
         flexmock(os, environ=os.environ.copy())
 
         triage(
@@ -529,7 +485,7 @@ class TestEnvFileLoading:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent").replace_with(_capture_env)
+        flexmock(cli_main).should_receive("submit_triage").replace_with(_capture_env)
         flexmock(os, environ={})
 
         triage(
@@ -548,23 +504,19 @@ class TestEnvFileLoading:
         assert captured_env.get("GITLAB_TOKEN") == "gl"
 
 
-class TestResultReading:
-    """Verify triage result file is read and echoed."""
-
-    def test_result_file_echoed(self, tmp_path, capsys):
+class TestTriageResult:
+    def test_result_from_temporal_is_printed_and_written(self, tmp_path, capsys):
         secrets_dir = _make_secrets(tmp_path)
         work_dir = tmp_path / "work"
-        result_dir = work_dir / "RHEL-99999"
-        result_dir.mkdir(parents=True)
-        (result_dir / "triage_result.json").write_text('{"resolution": "backport"}')
+        result_file = work_dir / "RHEL-99999" / "triage_result.json"
+        output = '{"resolution": "backport"}\n'
 
         flexmock(os, environ={})
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent")
+        flexmock(cli_main).should_receive("submit_triage").and_return(output)
 
-        os.environ.pop("GIT_REPOS_HOST", None)
         triage(
             issue="RHEL-99999",
             dry_run=True,
@@ -575,20 +527,22 @@ class TestResultReading:
             work_dir=str(work_dir),
         )
 
-        captured = capsys.readouterr()
-        assert '{"resolution": "backport"}' in captured.out
+        assert result_file.read_text() == output
+        assert output in capsys.readouterr().out
 
-    def test_no_result_file_warning(self, tmp_path, capsys):
+    def test_skipped_request_does_not_print_stale_result(self, tmp_path, capsys):
         secrets_dir = _make_secrets(tmp_path)
         work_dir = tmp_path / "work"
+        result_file = work_dir / "RHEL-99999" / "triage_result.json"
+        result_file.parent.mkdir(parents=True)
+        result_file.write_text('{"resolution": "backport"}')
 
+        flexmock(os, environ={})
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent")
-        flexmock(os, environ={})
+        flexmock(cli_main).should_receive("submit_triage").and_return("")
 
-        os.environ.pop("GIT_REPOS_HOST", None)
         triage(
             issue="RHEL-99999",
             dry_run=True,
@@ -599,8 +553,7 @@ class TestResultReading:
             work_dir=str(work_dir),
         )
 
-        captured = capsys.readouterr()
-        assert "no triage result file found" in captured.err
+        assert '"resolution"' not in capsys.readouterr().out
 
     def test_agent_error_raises_exit(self, tmp_path, capsys):
         secrets_dir = _make_secrets(tmp_path)
@@ -609,7 +562,9 @@ class TestResultReading:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent").and_raise(subprocess.CalledProcessError(1, "podman"))
+        flexmock(cli_main).should_receive("submit_triage").and_raise(
+            subprocess.CalledProcessError(1, "podman")
+        )
         with pytest.raises((SystemExit, typer.Exit)):
             os.environ.pop("GIT_REPOS_HOST", None)
             triage(
@@ -627,7 +582,7 @@ class TestResultReading:
 
 
 class TestNonCalledProcessError:
-    """Non-CalledProcessError exceptions from run_agent produce typer.Exit(1)."""
+    """Non-CalledProcessError exceptions from submit_triage produce typer.Exit(1)."""
 
     def test_runtime_error_produces_exit(self, tmp_path, capsys):
         secrets_dir = _make_secrets(tmp_path)
@@ -635,7 +590,7 @@ class TestNonCalledProcessError:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent").and_raise(RuntimeError("compose crashed"))
+        flexmock(cli_main).should_receive("submit_triage").and_raise(RuntimeError("compose crashed"))
 
         with pytest.raises((SystemExit, typer.Exit)):
             triage(
@@ -657,7 +612,7 @@ class TestNonCalledProcessError:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent").and_raise(OSError("permission denied"))
+        flexmock(cli_main).should_receive("submit_triage").and_raise(OSError("permission denied"))
 
         with pytest.raises((SystemExit, typer.Exit)):
             triage(
@@ -692,7 +647,7 @@ class TestEnvVarRestoration:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent")
+        flexmock(cli_main).should_receive("submit_triage")
 
         triage(
             issue="RHEL-99999",
@@ -722,7 +677,9 @@ class TestEnvVarRestoration:
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("run_agent").and_raise(subprocess.CalledProcessError(1, "podman"))
+        flexmock(cli_main).should_receive("submit_triage").and_raise(
+            subprocess.CalledProcessError(1, "podman")
+        )
 
         with pytest.raises((SystemExit, typer.Exit)):
             triage(
@@ -737,3 +694,34 @@ class TestEnvVarRestoration:
 
         env_after = {k: os.environ.get(k) for k in env_before}
         assert env_after == env_before
+
+
+def test_cli_waits_for_the_temporal_request_and_prints_json(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    monkeypatch.setenv("TEMPORAL_ADDRESS", "localhost:7233")
+    monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
+
+    async def submit(intent, *, wait):
+        assert intent.issue == "RHEL-99999" and intent.request_id == "cli:test-retry"
+        assert intent.user_triggered and intent.triage_only
+        assert intent.dry_run and intent.force_cve_triage and wait
+        return {"status": "completed", "detail": None, "output": {"resolution": "backport"}}
+
+    flexmock(cli_main).should_receive("_submit_triage").replace_with(submit).once()
+    flexmock(cli_main).should_receive("start_services").never()
+    result = CliRunner().invoke(
+        cli_main.app,
+        [
+            "rhel-99999",
+            "--dry-run",
+            "--force-cve-triage",
+            "--request-id",
+            "test-retry",
+            "--work-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert '"resolution": "backport"' in result.output
+    assert (tmp_path / "RHEL-99999" / "triage_result.json").read_text().strip() == result.output.strip()

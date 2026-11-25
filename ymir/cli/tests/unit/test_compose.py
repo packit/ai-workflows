@@ -6,11 +6,10 @@ from flexmock import flexmock
 
 from ymir.cli import compose as cli_compose
 from ymir.cli.compose import (
-    INFRASTRUCTURE_SERVICES,
     detect_compose_cmd,
-    run_agent,
     start_services,
     stop_services,
+    submit_triage,
 )
 
 
@@ -90,6 +89,7 @@ def _spy_subprocess_calls():
 
     def _spy(*_args, **_kwargs):
         sp_calls.append((_args[0] if _args else [], _kwargs))
+        return subprocess.CompletedProcess(_args[0], 0, stdout="result")
 
     flexmock(subprocess).should_receive("run").replace_with(_spy)
 
@@ -107,9 +107,8 @@ class TestStartServices:
         args, _ = _spy_subprocess_calls[0]
         assert "up" in args
         assert "-d" in args
-        assert "--force-recreate" in args
-        for svc in INFRASTRUCTURE_SERVICES:
-            assert svc in args
+        assert "--force-recreate" not in args
+        assert "triage-cli" in args
 
     def test_uses_cli_profile(self, tmp_path, _spy_subprocess_calls):
         compose_file = tmp_path / "compose.yaml"
@@ -129,8 +128,9 @@ class TestStopServices:
         stop_services(compose_file)
         args, _ = _spy_subprocess_calls[0]
         assert "stop" in args
+        assert "triage-cli" in args
         assert "mcp-gateway-cli" in args
-        # We don't want to shut down trace-server
+        assert "temporal" not in args
         assert "trace-server" not in args
 
     def test_uses_cli_profile(self, tmp_path, _spy_subprocess_calls):
@@ -143,65 +143,33 @@ class TestStopServices:
         assert "--profile=cli" in args
 
 
-class TestRunAgent:
-    def test_calls_compose_run_rm(self, tmp_path, _spy_subprocess_calls):
-        compose_file = tmp_path / "compose.yaml"
-        env = {"JIRA_ISSUE": "RHEL-12345", "DRY_RUN": "true"}
-        flexmock(cli_compose).should_receive("detect_compose_cmd").and_return(["podman", "compose"])
-
-        run_agent(compose_file, env)
-
-        args, _ = _spy_subprocess_calls[0]
-        assert "run" in args
-        assert "--rm" in args
-        assert "triage-cli" in args
-
-    def test_env_vars_forwarded(self, tmp_path, _spy_subprocess_calls):
-        compose_file = tmp_path / "compose.yaml"
-        env = {"JIRA_ISSUE": "RHEL-12345", "DRY_RUN": "true"}
-
-        flexmock(cli_compose).should_receive("detect_compose_cmd").and_return(["podman", "compose"])
-
-        run_agent(compose_file, env)
-
-        args, _ = _spy_subprocess_calls[0]
-        assert "-e" in args
-        assert "JIRA_ISSUE=RHEL-12345" in args
-        assert "DRY_RUN=true" in args
-
-    def test_uses_cli_profile(self, tmp_path, _spy_subprocess_calls):
+class TestSubmitTriage:
+    def test_executes_the_temporal_submit_command(self, tmp_path, _spy_subprocess_calls):
         compose_file = tmp_path / "compose.yaml"
         flexmock(cli_compose).should_receive("detect_compose_cmd").and_return(["podman", "compose"])
 
-        run_agent(compose_file, {})
+        assert submit_triage(compose_file, "RHEL-12345", dry_run=True, force_cve_triage=True) == "result"
 
-        assert "--profile=cli" in _spy_subprocess_calls[0][0]
-
-    def test_check_true(self, tmp_path, _spy_subprocess_calls):
-        compose_file = tmp_path / "compose.yaml"
-        flexmock(cli_compose).should_receive("detect_compose_cmd").and_return(["podman", "compose"])
-
-        run_agent(compose_file, {})
-
-        _, kwargs = _spy_subprocess_calls[0]
+        args, kwargs = _spy_subprocess_calls[0]
+        assert args == [
+            "podman",
+            "compose",
+            "-f",
+            str(compose_file),
+            "--profile=cli",
+            "exec",
+            "-T",
+            "triage-cli",
+            "python3",
+            "-m",
+            "ymir.agents.temporal_triage_admin",
+            "submit",
+            "RHEL-12345",
+            "--wait",
+            "--user-triggered",
+            "--triage-only",
+            "--dry-run",
+            "--force-cve-triage",
+        ]
         assert kwargs["check"] is True
-
-    def test_cwd_set_to_compose_parent(self, tmp_path, _spy_subprocess_calls):
-        compose_file = tmp_path / "compose.yaml"
-        flexmock(cli_compose).should_receive("detect_compose_cmd").and_return(["podman", "compose"])
-
-        run_agent(compose_file, {})
-
-        _, kwargs = _spy_subprocess_calls[0]
-        assert kwargs["cwd"] == tmp_path
-
-    def test_compose_file_passed(self, tmp_path, _spy_subprocess_calls):
-        compose_file = tmp_path / "compose.yaml"
-        flexmock(cli_compose).should_receive("detect_compose_cmd").and_return(["podman", "compose"])
-
-        run_agent(compose_file, {})
-
-        args, _ = _spy_subprocess_calls[0]
-        assert "-f" in args
-        idx = args.index("-f")
-        assert args[idx + 1] == str(compose_file)
+        assert kwargs["cwd"] == compose_file.parent

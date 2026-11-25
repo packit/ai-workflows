@@ -32,6 +32,10 @@ GITHUB_AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=120, connect=10)
 AIOHTTP_RETRYABLE_STATUS_CODES = frozenset({503})
 AIOHTTP_MAX_RETRIES = 3
 AIOHTTP_RETRY_BACKOFF_BASE = 2
+# Same policy for git subprocesses (clone/fetch): transient network failures
+# (connection resets, early EOF) are retried with exponential backoff.
+GIT_SUBPROCESS_MAX_RETRIES = 3
+GIT_SUBPROCESS_RETRY_BACKOFF_BASE = 2
 
 BREWHUB_URL = "https://brewhub.engineering.redhat.com/brewhub"
 CENTOS_STREAM_KOJIHUB_URL = "https://kojihub.stream.centos.org/kojihub"

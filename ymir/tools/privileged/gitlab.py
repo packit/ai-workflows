@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import time
@@ -29,7 +30,12 @@ from ogr.services.gitlab.pull_request import GitlabPullRequest
 from pydantic import BaseModel, Field
 
 from ymir.common.base_utils import run_subprocess
-from ymir.common.constants import AIOHTTP_TIMEOUT, GITLAB_MR_PAGE_SIZE
+from ymir.common.constants import (
+    AIOHTTP_TIMEOUT,
+    GIT_SUBPROCESS_MAX_RETRIES,
+    GIT_SUBPROCESS_RETRY_BACKOFF_BASE,
+    GITLAB_MR_PAGE_SIZE,
+)
 from ymir.common.gitlab_api import gitlab_headers, is_private_gitlab, search_gitlab_project_mrs
 from ymir.common.http_utils import aiohttp_get_with_retries
 from ymir.common.models import (
@@ -50,6 +56,29 @@ logger = logging.getLogger(__name__)
 
 _STDERR_HINT_MAX = 500
 
+# Transient network failures observed in clone/fetch stderr (gateway logs):
+# "RPC failed; curl 56 Recv failure: Connection reset by peer",
+# "fetch-pack: unexpected disconnect while reading sideband packet",
+# "fatal: early EOF". Local-state failures (missing refs, pack rename
+# errors, template collisions) are not transient and must not be retried —
+# notably "fetch-pack: invalid index-pack output", which also appears as a
+# trailing symptom of non-retryable local filesystem failures.
+_TRANSIENT_GIT_ERROR_RE = re.compile(
+    r"connection reset by peer"
+    r"|connection timed out"
+    r"|could not resolve host"
+    r"|early eof"
+    r"|unexpected disconnect"
+    r"|rpc failed; curl \d+"
+    r"|recv failure",
+    re.IGNORECASE,
+)
+
+
+def _is_transient_git_failure(stderr: str | None) -> bool:
+    """Return True when git stderr indicates a transient network failure."""
+    return bool(_TRANSIENT_GIT_ERROR_RE.search(stderr or ""))
+
 
 def _git_subprocess_error(stderr: str | None, message: str) -> ToolError:
     """Log a git subprocess failure at ERROR level and return a ToolError with a stderr hint."""
@@ -66,6 +95,7 @@ async def _run_git_cmd(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     timeout: float | None = 3600,
+    retry_transient: bool = False,
 ) -> str | None:
     """Run a git subprocess with structured logging, timing, and error handling.
 
@@ -75,29 +105,51 @@ async def _run_git_cmd(
         cwd: Working directory for the subprocess.
         env: Environment variables to pass to the subprocess.
         timeout: Timeout in seconds, or None for no timeout.
+        retry_transient: Retry transient network failures (connection resets,
+            early EOF, unexpected disconnects) with exponential backoff,
+            mirroring the HTTP retry policy in aiohttp_get_with_retries.
+            Local-state failures (missing refs, pack rename errors, template
+            collisions) are never retried.
 
     Raises:
         ToolError: If the command fails or times out.
     """
-    logger.info("%s", label)
-    t0 = time.monotonic()
-    try:
-        coro = run_subprocess(command, cwd=cwd, env=env)
-        if timeout is not None:
-            returncode, stdout, stderr = await asyncio.wait_for(coro, timeout=timeout)
-        else:
-            returncode, stdout, stderr = await coro
-    except TimeoutError:
+    attempts = GIT_SUBPROCESS_MAX_RETRIES if retry_transient else 1
+    for attempt in range(attempts):
+        logger.info("%s", label)
+        t0 = time.monotonic()
+        try:
+            coro = run_subprocess(command, cwd=cwd, env=env)
+            if timeout is not None:
+                returncode, stdout, stderr = await asyncio.wait_for(coro, timeout=timeout)
+            else:
+                returncode, stdout, stderr = await coro
+        except TimeoutError:
+            elapsed = time.monotonic() - t0
+            logger.error("%s timed out after %.1fs", label, elapsed)
+            raise ToolError(f"{label} timed out after {int(timeout)}s") from None
         elapsed = time.monotonic() - t0
-        logger.error("%s timed out after %.1fs", label, elapsed)
-        raise ToolError(f"{label} timed out after {int(timeout)}s") from None
-    elapsed = time.monotonic() - t0
-    if returncode:
-        raise _git_subprocess_error(
-            stderr, f"{label} failed (exit_code={returncode}, elapsed={elapsed:.1f}s)"
-        )
-    logger.info("%s completed in %.1fs", label, elapsed)
-    return stdout
+        if returncode:
+            if retry_transient and _is_transient_git_failure(stderr) and attempt < attempts - 1:
+                delay = GIT_SUBPROCESS_RETRY_BACKOFF_BASE * (2**attempt) + random.uniform(0, 1)  # noqa: S311
+                logger.warning(
+                    "%s failed with a transient network error (exit_code=%d, elapsed=%.1fs), "
+                    "retrying in %.1fs (attempt %d/%d)",
+                    label,
+                    returncode,
+                    elapsed,
+                    delay,
+                    attempt + 1,
+                    attempts,
+                )
+                await asyncio.sleep(delay)
+                continue
+            raise _git_subprocess_error(
+                stderr, f"{label} failed (exit_code={returncode}, elapsed={elapsed:.1f}s)"
+            )
+        logger.info("%s completed in %.1fs", label, elapsed)
+        return stdout
+    return None  # unreachable: the loop always returns or raises
 
 
 # GitLab access levels: Guest (10), Reporter (20), Developer (30),
@@ -683,6 +735,7 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
                     label=f"git fetch {safe_url} branch={branch}",
                     cwd=clone_path,
                     env=git_env,
+                    retry_transient=True,
                 )
 
                 await _run_git_cmd(
@@ -698,6 +751,7 @@ class CloneRepositoryTool(Tool[CloneRepositoryToolInput, ToolRunOptions, StringT
                     ["git", *auth_args, "clone", repository, str(clone_path)],
                     label=f"git clone {safe_url}",
                     env=git_env,
+                    retry_transient=True,
                 )
 
         return StringToolOutput(result=f"Successfully cloned the specified repository to {clone_path}")
@@ -808,6 +862,7 @@ class FetchBranchTool(Tool[FetchBranchToolInput, ToolRunOptions, StringToolOutpu
                 cwd=clone_path,
                 env=git_env,
                 timeout=None,
+                retry_transient=True,
             )
 
         return StringToolOutput(result=f"Successfully fetched branch {branch} from {safe_url}")
@@ -863,6 +918,7 @@ class FetchCommitTool(Tool[FetchCommitToolInput, ToolRunOptions, StringToolOutpu
             cwd=clone_path,
             env=git_env,
             timeout=None,
+            retry_transient=True,
         )
 
         return StringToolOutput(result=destination)

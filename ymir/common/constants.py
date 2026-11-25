@@ -21,19 +21,24 @@ GITLAB_REDHAT_API_PREFIX = "/api/v4/projects/redhat%2F"
 
 YMIR_USER_AGENT = "redhat-ymir-agent"
 AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=30)
-# Generous cap used only by the privileged GitHub tools: observed egress
+# Generous cap used only by the GitHub patch-fetch tools: observed egress
 # latency to api.github.com reaches ~30s in the cluster and must not fail
 # otherwise-valid patch fetches. Connection establishment fails fast
 # (connect=10) and transient connection failures are retried by
-# aiohttp_get_with_retries. Not shared: most tools run under their own
-# overall deadline (e.g. upstream_search: 300s) that a 120s-per-request cap
-# with retries would blow through.
+# aiohttp_get_with_retries.
 GITHUB_AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=120, connect=10)
+# Tighter cap for the GitHub metadata tools (get_github_pull_request,
+# get_github_compare): ExtractUpstreamRepositoryTool calls them through the
+# MCP gateway under its own 120s overall deadline, so a 120s-per-request cap
+# would let one hung request consume the entire budget. With retries
+# (3 attempts + backoff) a 30s cap keeps the worst case under the deadline.
+GITHUB_METADATA_AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10)
 AIOHTTP_RETRYABLE_STATUS_CODES = frozenset({503})
 AIOHTTP_MAX_RETRIES = 3
 AIOHTTP_RETRY_BACKOFF_BASE = 2
-# Same policy for git subprocesses (clone/fetch): transient network failures
-# (connection resets, early EOF) are retried with exponential backoff.
+# Same policy for git subprocesses (clone/fetch): failures are retried with
+# exponential backoff regardless of the error text, accepting the cost of a
+# few extra attempts when the failure is permanent.
 GIT_SUBPROCESS_MAX_RETRIES = 3
 GIT_SUBPROCESS_RETRY_BACKOFF_BASE = 2
 

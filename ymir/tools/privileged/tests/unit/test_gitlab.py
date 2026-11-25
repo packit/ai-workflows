@@ -1451,9 +1451,16 @@ async def test_clone_repository_logs_stderr_on_failure(mock_git_repo_basepath, c
             [
                 (0, ""),  # git init succeeds
                 (128, stderr_msg),  # git fetch fails
+                (128, stderr_msg),  # retry 1
+                (128, stderr_msg),  # retry 2
             ]
         )
     )
+
+    async def _mock_sleep(_delay):
+        return None
+
+    flexmock(asyncio).should_receive("sleep").replace_with(_mock_sleep)
 
     with pytest.raises(ToolError) as exc_info:
         await CloneRepositoryTool().run(
@@ -2305,13 +2312,12 @@ async def test_clone_repository_retries_transient_network_failure(mock_git_repo_
     )
 
     assert "Successfully cloned" in result.result
-    assert "transient network error" in caplog.text
     assert "retrying" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_clone_repository_does_not_retry_missing_ref(mock_git_repo_basepath, caplog):
-    """A missing remote ref is a data problem, not transient — no retry."""
+async def test_clone_repository_retries_missing_ref(mock_git_repo_basepath, caplog):
+    """A missing remote ref is retried too — stderr is not classified."""
     clone_path = mock_git_repo_basepath / "vim"
     stderr_msg = "fatal: couldn't find remote ref refs/heads/rhel-9.9.0"
 
@@ -2320,9 +2326,16 @@ async def test_clone_repository_does_not_retry_missing_ref(mock_git_repo_basepat
             [
                 (0, ""),  # git init succeeds
                 (128, stderr_msg),  # git fetch fails
+                (128, stderr_msg),  # retry 1
+                (128, stderr_msg),  # retry 2
             ]
         )
     )
+
+    async def _mock_sleep(_delay):
+        return None
+
+    flexmock(asyncio).should_receive("sleep").replace_with(_mock_sleep)
 
     with pytest.raises(ToolError):
         await CloneRepositoryTool().run(
@@ -2333,7 +2346,7 @@ async def test_clone_repository_does_not_retry_missing_ref(mock_git_repo_basepat
             }
         )
 
-    assert "retrying" not in caplog.text
+    assert caplog.text.count("retrying") == gitlab_module.GIT_SUBPROCESS_MAX_RETRIES - 1
 
 
 @pytest.mark.asyncio
@@ -2369,26 +2382,136 @@ async def test_clone_repository_exhausted_transient_retries_raise(mock_git_repo_
     assert "Connection reset by peer" in str(exc_info.value.__cause__)
 
 
-@pytest.mark.parametrize(
-    ("stderr", "expected"),
-    [
-        ("error: RPC failed; curl 56 Recv failure: Connection reset by peer", True),
-        ("fatal: early EOF", True),
-        ("fetch-pack: unexpected disconnect while reading sideband packet", True),
-        (None, False),
-        ("", False),
-        ("fatal: couldn't find remote ref refs/heads/rhel-9.9.0", False),
-        ("fatal: refusing to fetch into branch 'refs/heads/c10s' checked out", False),
-        (
-            "error: unable to write file .git/objects/pack/pack-x.pack: No such file or directory",
-            False,
-        ),
-        ("fatal: fetch-pack: invalid index-pack output", False),
-    ],
-)
-def test_is_transient_git_failure(stderr, expected):
-    """Only network symptoms are transient; local-state failures are not."""
-    from ymir.tools.privileged.gitlab import _is_transient_git_failure
+class TestRunGitCmdRetry:
+    """Direct coverage of the _run_git_cmd retry loop."""
 
-    assert _is_transient_git_failure(stderr) is expected
+    @staticmethod
+    def _mock_run_subprocess(results):
+        """Mock run_subprocess to yield (returncode, stderr) tuples in order."""
+        calls = []
 
+        async def _fake(cmd, *, cwd=None, env=None):
+            calls.append(cmd)
+            returncode, stderr = results[len(calls) - 1]
+            return (returncode, "stdout", stderr)
+
+        flexmock(gitlab_module).should_receive("run_subprocess").replace_with(_fake)
+        return calls
+
+    @pytest.fixture(autouse=True)
+    def _no_backoff_sleep(self):
+        async def _mock_sleep(_delay):
+            return None
+
+        flexmock(asyncio).should_receive("sleep").replace_with(_mock_sleep)
+
+    @pytest.mark.asyncio
+    async def test_transient_failure_is_retried_and_can_succeed(self):
+        stderr = "error: RPC failed; curl 56 Recv failure: Connection reset by peer"
+        calls = self._mock_run_subprocess([(128, stderr), (0, "")])
+
+        stdout = await gitlab_module._run_git_cmd(
+            ["git", "fetch", "url"], label="git fetch url", retry_transient=True
+        )
+
+        assert stdout == "stdout"
+        assert len(calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_exhausted_transient_retries_raise_after_max_attempts(self):
+        stderr = "fatal: early EOF"
+        calls = self._mock_run_subprocess([(128, stderr), (128, stderr), (128, stderr)])
+
+        with pytest.raises(ToolError, match="early EOF"):
+            await gitlab_module._run_git_cmd(
+                ["git", "fetch", "url"], label="git fetch url", retry_transient=True
+            )
+
+        assert len(calls) == gitlab_module.GIT_SUBPROCESS_MAX_RETRIES
+
+    @pytest.mark.asyncio
+    async def test_any_failure_is_retried(self):
+        """Retries are not gated on stderr classification: even a local-state
+        failure gets the full attempt budget before raising."""
+        stderr = "fatal: couldn't find remote ref refs/heads/rhel-9.9.0"
+        calls = self._mock_run_subprocess([(128, stderr), (128, stderr), (128, stderr)])
+
+        with pytest.raises(ToolError, match="couldn't find remote ref"):
+            await gitlab_module._run_git_cmd(
+                ["git", "fetch", "url"], label="git fetch url", retry_transient=True
+            )
+
+        assert len(calls) == gitlab_module.GIT_SUBPROCESS_MAX_RETRIES
+
+    @pytest.mark.asyncio
+    async def test_transient_failure_is_not_retried_without_the_flag(self):
+        stderr = "error: RPC failed; curl 56 Recv failure: Connection reset by peer"
+        calls = self._mock_run_subprocess([(128, stderr)])
+
+        with pytest.raises(ToolError, match="Connection reset by peer"):
+            await gitlab_module._run_git_cmd(["git", "push", "url"], label="git push url")
+
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_clone_retry_removes_partial_destination(self, mock_git_repo_basepath):
+        """A failed clone leaves a populated destination; the retry must clean it."""
+        clone_path = mock_git_repo_basepath / "vim"
+        clone_path.mkdir(parents=True)
+        (clone_path / ".git").mkdir()  # partial clone left behind by the failed attempt
+        stderr = "error: RPC failed; curl 56 Recv failure: Connection reset by peer"
+        calls = self._mock_run_subprocess([(128, stderr), (0, "")])
+
+        cleanups = []
+        flexmock(gitlab_module).should_receive("_remove_existing_clone_path").replace_with(
+            lambda path: cleanups.append(path)
+        )
+
+        await gitlab_module._run_git_cmd(
+            ["git", "clone", "url", str(clone_path)],
+            label="git clone url",
+            retry_transient=True,
+            retry_cleanup_path=clone_path,
+        )
+
+        assert len(calls) == 2
+        assert cleanups == [clone_path]
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_retries_http_error(mock_git_repo_basepath, caplog):
+    """A denied fetch (curl 22 / HTTP 403) is still retried — the retry policy
+    accepts the cost of retrying permanent failures rather than classifying
+    unreliable stderr."""
+    clone_path = mock_git_repo_basepath / "vim"
+    stderr_msg = (
+        "error: RPC failed; curl 22 The requested URL returned error: 403\n"
+        "fetch-pack: unexpected disconnect while reading sideband packet"
+    )
+
+    flexmock(asyncio).should_receive("create_subprocess_exec").replace_with(
+        _make_subprocess_sequence(
+            [
+                (0, ""),  # git init succeeds
+                (128, stderr_msg),  # git fetch denied
+                (128, stderr_msg),  # retry 1
+                (128, stderr_msg),  # retry 2
+            ]
+        )
+    )
+
+    async def _mock_sleep(_delay):
+        return None
+
+    flexmock(asyncio).should_receive("sleep").replace_with(_mock_sleep)
+
+    with pytest.raises(ToolError):
+        await CloneRepositoryTool().run(
+            input={
+                "repository": "https://gitlab.com/redhat/rhel/rpms/vim",
+                "branch": "main",
+                "clone_path": clone_path,
+            }
+        )
+
+    assert caplog.text.count("retrying") == gitlab_module.GIT_SUBPROCESS_MAX_RETRIES - 1

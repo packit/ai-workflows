@@ -23,7 +23,7 @@ from beeai_framework.emitter import Emitter
 from beeai_framework.tools import JSONToolOutput, StringToolOutput, ToolError, ToolRunOptions
 from pydantic import BaseModel, Field
 
-from ymir.common.constants import GITHUB_AIOHTTP_TIMEOUT
+from ymir.common.constants import GITHUB_AIOHTTP_TIMEOUT, GITHUB_METADATA_AIOHTTP_TIMEOUT
 from ymir.common.github_api import github_headers as _shared_github_headers
 from ymir.common.http_utils import aiohttp_get_with_retries
 from ymir.tools.base import CloneableTool as Tool
@@ -80,6 +80,9 @@ class GetGithubPullRequestTool(
     name = "get_github_pull_request"
     description = "Fetch GitHub pull request metadata (head SHA, state, merged status)"
     input_schema = GetGithubPullRequestToolInput
+    # Tight cap: callers (e.g. extract_upstream_repository, 120s deadline)
+    # invoke this through the MCP gateway; see GITHUB_METADATA_AIOHTTP_TIMEOUT.
+    request_timeout = GITHUB_METADATA_AIOHTTP_TIMEOUT
 
     def _create_emitter(self) -> Emitter:
         return Emitter.root().child(namespace=["tool", "github", self.name], creator=self)
@@ -107,7 +110,7 @@ class GetGithubPullRequestTool(
 
         try:
             async with (
-                aiohttp.ClientSession(timeout=GITHUB_AIOHTTP_TIMEOUT) as session,
+                aiohttp.ClientSession(timeout=self.request_timeout) as session,
                 aiohttp_get_with_retries(session, api_url, headers=headers) as response,
             ):
                 response.raise_for_status()
@@ -150,6 +153,9 @@ class GetGithubCompareTool(Tool[GetGithubCompareToolInput, ToolRunOptions, GetGi
     name = "get_github_compare"
     description = "Fetch list of commits between two Git references (tags, branches, commits)"
     input_schema = GetGithubCompareToolInput
+    # Tight cap: callers (e.g. extract_upstream_repository, 120s deadline)
+    # invoke this through the MCP gateway; see GITHUB_METADATA_AIOHTTP_TIMEOUT.
+    request_timeout = GITHUB_METADATA_AIOHTTP_TIMEOUT
 
     def _create_emitter(self) -> Emitter:
         return Emitter.root().child(namespace=["tool", "github", self.name], creator=self)
@@ -183,7 +189,7 @@ class GetGithubCompareTool(Tool[GetGithubCompareToolInput, ToolRunOptions, GetGi
 
         try:
             async with (
-                aiohttp.ClientSession(timeout=GITHUB_AIOHTTP_TIMEOUT) as session,
+                aiohttp.ClientSession(timeout=self.request_timeout) as session,
                 aiohttp_get_with_retries(
                     session,
                     api_url,
@@ -225,6 +231,9 @@ class GetGithubPatchTool(Tool[GetGithubPatchToolInput, ToolRunOptions, StringToo
     description = "Fetch a preview of a GitHub-hosted patch or diff using authenticated API access"
     input_schema = GetGithubPatchToolInput
     max_content_length: int | None = MAX_GITHUB_PATCH_PREVIEW_LENGTH
+    # Generous cap: patch payloads over bursty egress can take ~30s+; see
+    # GITHUB_AIOHTTP_TIMEOUT. Shared with the GetGithubPatchFullTool subclass.
+    request_timeout = GITHUB_AIOHTTP_TIMEOUT
 
     def _create_emitter(self) -> Emitter:
         return Emitter.root().child(namespace=["tool", "github", self.name], creator=self)
@@ -261,7 +270,7 @@ class GetGithubPatchTool(Tool[GetGithubPatchToolInput, ToolRunOptions, StringToo
         github_error = None
         try:
             async with (
-                aiohttp.ClientSession(timeout=GITHUB_AIOHTTP_TIMEOUT) as session,
+                aiohttp.ClientSession(timeout=self.request_timeout) as session,
                 aiohttp_get_with_retries(
                     session,
                     request_url,

@@ -20,7 +20,9 @@ from ymir.common.logging_setup import current_jira_issue, current_workflow
 
 logger = logging.getLogger(__name__)
 
-SPAN_ATTRIBUTE_LIMIT = 1024
+# The MrTestingAnalystWorkflow root span copies the whole workflow state onto itself at every step
+# (openinference's workflow processor), which overflowed 1024 attributes on a real MR.
+SPAN_ATTRIBUTE_LIMIT = 8192
 
 
 class AgentSpanProcessor(SpanProcessor):
@@ -108,8 +110,8 @@ def _setup_tool_error_logging() -> None:
 
 def setup_observability(endpoint: str) -> AgentSpanProcessor:
     resource = Resource(attributes={})
-    # LLM spans flatten every message and tool schema into attributes; the SDK default of 128 drops the oldest
-    # ones (including jira.issue) once a long ReasoningAgent conversation is sent.
+    # LLM spans flatten every message and tool schema into attributes, and workflow root spans hold the full
+    # state per step; the SDK default of 128 drops the oldest ones (including jira.issue).
     span_limits = trace_sdk.SpanLimits(max_span_attributes=SPAN_ATTRIBUTE_LIMIT)
     tracer_provider = trace_sdk.TracerProvider(resource=resource, span_limits=span_limits)
     processor = AgentSpanProcessor()

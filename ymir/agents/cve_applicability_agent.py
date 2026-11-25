@@ -20,27 +20,38 @@ from ymir.common.models import POSTPONED_RESOLUTIONS, AssessedApplicabilityResul
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.text import SearchTextTool, ViewTool
 
+APPLICABILITY_GATEWAY_TOOLS = frozenset({"get_jira_details", "get_maintainer_rules", "get_shared_rules"})
+
 
 def _applicability_tools(gateway_tools: list[Tool], local_tool_options: dict) -> list[Tool]:
-    allowed = {"get_jira_details", "get_maintainer_rules", "get_shared_rules"}
     return [
         ViewTool(options=local_tool_options),
         SearchTextTool(options=local_tool_options),
         RunShellCommandTool(options=local_tool_options),
-        *(tool for tool in gateway_tools if tool.name in allowed),
+        *(tool for tool in gateway_tools if tool.name in APPLICABILITY_GATEWAY_TOOLS),
     ]
 
 
 def create_triage_applicability_agent(
-    gateway_tools: list[Tool], local_tool_options: dict
-) -> Agent[None, AssessedApplicabilityResult]:
+    gateway_tools: list[Tool],
+    local_tool_options: dict,
+    *,
+    model=None,
+    tools=None,
+    capabilities=(),
+    deps_type=None,
+) -> Agent:
     return Agent(
+        model,
         name="ApplicabilityAgent",
+        deps_type=deps_type,
         output_type=PromptedOutput(AssessedApplicabilityResult),
         instructions="You are a Red Hat security analyst.",
         retries=get_agent_execution_config()["max_retries_per_step"],
-        capabilities=[Instrumentation()],
-        tools=[adapt_tool(tool) for tool in _applicability_tools(gateway_tools, local_tool_options)],
+        capabilities=[Instrumentation(), *capabilities],
+        tools=tools
+        if tools is not None
+        else [adapt_tool(tool) for tool in _applicability_tools(gateway_tools, local_tool_options)],
     )
 
 

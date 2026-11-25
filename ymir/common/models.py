@@ -313,6 +313,24 @@ POSTPONED_RESOLUTIONS: frozenset[Resolution] = frozenset(
 )
 
 
+class ConsolidatedIssue(BaseModel):
+    """A sibling Jira issue consolidated into the same rebuild task."""
+
+    issue_key: str = Field(description="Jira issue key (e.g. RHEL-67890)")
+    cve_id: str | None = Field(
+        default=None,
+        description="CVE identifier(s) from the sibling triage or consolidation analysis",
+    )
+    dependency_issue: str | None = Field(
+        description="Key of the dependency Jira issue (e.g. RHEL-12345)",
+        default=None,
+    )
+    dependency_component: str | None = Field(
+        description="Component name of the dependency (e.g. 'golang')",
+        default=None,
+    )
+
+
 class RebaseData(BaseModel):
     """Data for rebase resolution."""
 
@@ -335,7 +353,7 @@ class RebaseData(BaseModel):
         default=None,
     )
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
-    consolidated_issues: list["ConsolidatedIssue"] = Field(
+    consolidated_issues: list[ConsolidatedIssue] = Field(
         default_factory=list,
         description="Sibling issues consolidated into this rebase task",
     )
@@ -382,24 +400,6 @@ class BackportData(BaseModel):
         default=None,
     )
     fix_version: str | None = Field(description="Fix version in Jira (e.g., 'rhel-9.8')", default=None)
-
-
-class ConsolidatedIssue(BaseModel):
-    """A sibling Jira issue consolidated into the same rebuild task."""
-
-    issue_key: str = Field(description="Jira issue key (e.g. RHEL-67890)")
-    cve_id: str | None = Field(
-        default=None,
-        description="CVE identifier(s) from the sibling triage or consolidation analysis",
-    )
-    dependency_issue: str | None = Field(
-        description="Key of the dependency Jira issue (e.g. RHEL-12345)",
-        default=None,
-    )
-    dependency_component: str | None = Field(
-        description="Component name of the dependency (e.g. 'golang')",
-        default=None,
-    )
 
 
 class RebuildData(BaseModel):

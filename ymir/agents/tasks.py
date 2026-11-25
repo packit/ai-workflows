@@ -1822,6 +1822,8 @@ async def clone_and_prep_sources(
     jira_issue: str,
     ref: str | None = None,
     dist_git_namespace: str | None = None,
+    *,
+    workspace: Path | None = None,
 ) -> tuple[Path, Path, bool, str | None]:
     """
     Clone dist-git repo and run centpkg/rhpkg sources + prep.
@@ -1836,10 +1838,15 @@ async def clone_and_prep_sources(
     When *ref* is provided (a commit SHA), the repo is cloned with all
     refs and that specific commit is checked out.  This is used when the
     target branch does not exist yet but we know the base commit from Koji.
+    Pass *workspace* to use an execution-owned directory for the checkout.
     """
     if not jira_issue or Path(jira_issue).is_absolute() or ".." in jira_issue:
         raise ValueError(f"Invalid jira_issue: {jira_issue}")
-    working_dir = Path(os.environ["GIT_REPO_BASEPATH"]) / APPLICABILITY_DIR / jira_issue
+    working_dir = (
+        workspace
+        if workspace is not None
+        else Path(os.environ["GIT_REPO_BASEPATH"]) / APPLICABILITY_DIR / jira_issue
+    )
     if working_dir.is_dir():
         _force_rmtree(working_dir)
     working_dir.mkdir(parents=True, exist_ok=True)

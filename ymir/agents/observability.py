@@ -9,6 +9,7 @@ import sentry_sdk
 from beeai_framework.emitter import Emitter
 from openinference.instrumentation.beeai import BeeAIInstrumentor
 from opentelemetry import trace as trace_api
+from opentelemetry.baggage import get_baggage
 from opentelemetry.context import Context
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk import trace as trace_sdk
@@ -60,10 +61,10 @@ class AgentSpanProcessor(SpanProcessor):
 
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:
         if span.is_recording():
-            jira_issue = current_jira_issue.get()
+            jira_issue = current_jira_issue.get() or get_baggage("jira.issue", context=parent_context)
             if jira_issue:
                 span.set_attribute("jira.issue", jira_issue)
-            workflow = current_workflow.get()
+            workflow = current_workflow.get() or get_baggage("workflow.name", context=parent_context)
             if workflow:
                 span.set_attribute("workflow.name", workflow)
             agent = (span.attributes or {}).get("gen_ai.agent.name")

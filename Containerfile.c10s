@@ -1,4 +1,6 @@
-FROM quay.io/centos/centos:stream10
+FROM docker.io/temporalio/admin-tools:1.32.2 AS temporal-cli
+
+FROM quay.io/centos/centos:stream10 AS agent
 
 RUN dnf -y install epel-release \
     && dnf config-manager --set-enabled crb \
@@ -149,3 +151,16 @@ RUN git config --global user.email "redhat-ymir-agent@redhat.com" \
 
 ENTRYPOINT ["/usr/libexec/catatonit/catatonit", "--"]
 CMD ["/bin/bash"]
+
+FROM agent AS temporal-worker
+USER root
+RUN pip3 install --no-cache-dir "temporalio==1.32.0"
+USER beeai
+
+FROM temporal-worker AS triage-e2e
+USER root
+RUN dnf -y install podman-remote && dnf clean all
+COPY --from=temporal-cli /usr/local/bin/temporal /usr/local/bin/temporal
+USER beeai
+
+FROM agent AS runtime

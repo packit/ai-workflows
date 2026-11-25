@@ -66,6 +66,7 @@ from ymir.tools.privileged.jira import (
     CheckCveTriageEligibilityTool,
     CreateJiraIssueTool,
     EditJiraLabelsTool,
+    FindJiraCommentOperationTool,
     GetJiraAttachmentTool,
     GetJiraDetailsTool,
     GetJiraDevStatusTool,
@@ -144,7 +145,7 @@ async def _async_main():
     config_kwargs = {"name": "Ymir Privileged MCP Gateway", "transport": transport}
     if transport == "sse":
         config_kwargs["settings"] = MCPSettings(
-            host="0.0.0.0",  # noqa: S104
+            host=os.getenv("MCP_BIND_HOST", "0.0.0.0"),  # noqa: S104
             port=int(os.getenv("SSE_PORT", "8000")),
         )
     config = MCPServerConfig(**config_kwargs)
@@ -217,6 +218,7 @@ async def _async_main():
             ChangeJiraStatusTool(options=tool_options),
             CheckCveTriageEligibilityTool(options=tool_options),
             EditJiraLabelsTool(options=tool_options),
+            FindJiraCommentOperationTool(options=tool_options),
             GetJiraAttachmentTool(options=tool_options),
             GetJiraDetailsTool(options=tool_options),
             GetJiraDevStatusTool(options=tool_options),

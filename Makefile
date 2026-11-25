@@ -72,7 +72,8 @@ run-triage-agent-e2e-tests:
 		mv $(TMT_PLAN_DATA)/.secrets .secrets; \
 		mv .secrets/.env ./; \
 	else \
-		touch .tmt/results.yaml; \
+		results_dir="$${TMT_TEST_DATA:-.tmt}"; \
+		[ -f "$$results_dir/results.yaml" ] || { mkdir -p "$$results_dir" && touch "$$results_dir/results.yaml"; }; \
 	fi
 	# TMT installs .env and .secrets above; select the backend after that setup.
 	# SAFETY: MOCK_JIRA=true and DRY_RUN=true prevent writes to production Jira.
@@ -80,7 +81,7 @@ run-triage-agent-e2e-tests:
 	# comments to production. Setting them in the environment (not just -e flags)
 	# ensures dependent services like mcp-gateway pick them up via ${VAR:-default}.
 	# The conftest.py enforces this in the test container itself.
-	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true scripts/run-compose-with-backend.py $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm \
+	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true scripts/run-compose-with-backend.py scripts/run-triage-e2e-podman.py $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm --build \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		triage-agent-e2e-tests

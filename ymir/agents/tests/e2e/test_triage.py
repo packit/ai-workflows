@@ -2,13 +2,16 @@ import asyncio
 import logging
 import os
 import shutil
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
+from opentelemetry import baggage, context, trace
 from tabulate import tabulate
 
 from ymir.agents.observability import setup_observability
@@ -373,6 +376,14 @@ def mock_centos_stream_repos(tmp_path_factory):
     fixtures_dir = os.getenv("MOCK_REPOS_DIR") or str(DEFAULT_FIXTURES_DIR)
     configs = load_all_fixture_configs(fixtures_dir)
 
+    if os.getenv("TEMPORAL_TRIAGE_ADDRESS"):
+        for case in test_cases:
+            config = configs.get(case.input, {})
+            case.zstream_override = config.get("zstream_override")
+            case.rhel_config_override = config.get("rhel_config_override")
+        yield
+        return
+
     if git_repo_basepath := os.getenv("GIT_REPO_BASEPATH"):
         repo_dir = Path(git_repo_basepath) / "e2e_mock_clones"
         shutil.rmtree(repo_dir, ignore_errors=True)
@@ -400,6 +411,103 @@ def mock_centos_stream_repos(tmp_path_factory):
         cleanup_mock_gitconfig()
 
 
+async def run_temporal_cases(cases: list[TriageAgentTestCase], address: str) -> None:
+    from pydantic_ai.durable_exec.temporal import PydanticAIPlugin
+    from temporalio.client import Client
+    from temporalio.contrib.opentelemetry import TracingInterceptor
+    from temporalio.testing import WorkflowEnvironment
+
+    from ymir.agents.pydantic_agent import pydantic_model_settings
+    from ymir.agents.temporal_triage_analysis import TriageAnalysisRequest
+    from ymir.agents.temporal_triage_provisioning import (
+        PODMAN_LIMIT,
+        PodmanTriageProvisioner,
+        create_triage_control_worker,
+    )
+    from ymir.agents.temporal_triage_publication import TriagePublicationRequest, run_triage_request
+    from ymir.agents.utils import get_agent_execution_config, resolve_chat_model_override
+
+    resolve_chat_model_override("triage")
+    settings = dict(pydantic_model_settings(os.environ["CHAT_MODEL"]))
+    request_limit = get_agent_execution_config()["max_iterations"]
+    queue = f"triage-e2e-{uuid4().hex}"
+    slots = asyncio.Semaphore(PODMAN_LIMIT)
+    tracer = trace.get_tracer(__name__)
+    client_options = {
+        "plugins": [PydanticAIPlugin()],
+        "interceptors": [TracingInterceptor()],
+    }
+
+    async def run(case: TriageAgentTestCase, client: Client):
+        if case.skip_reason:
+            return
+        override = dict(case.rhel_config_override or {})
+        if case.zstream_override:
+            override["current_z_streams"] = override.get("current_z_streams", {}) | case.zstream_override
+        start = monotonic()
+        case.metrics = {"agent_name": "TemporalTriagePublication"}
+        trace_context = baggage.set_baggage("jira.issue", case.input)
+        trace_context = baggage.set_baggage("workflow.name", "TriageWorkflow", context=trace_context)
+        trace_token = context.attach(trace_context)
+        try:
+            request = TriagePublicationRequest(
+                analysis=TriageAnalysisRequest(
+                    case.input,
+                    settings,
+                    request_limit,
+                    follow_up_requested=True,
+                    config_override=override or None,
+                ),
+                request_id=queue,
+                dry_run=True,
+                provision_pod=True,
+            )
+            workflow_id = request.workflow_id()
+            with tracer.start_as_current_span(
+                "TriageWorkflow",
+                attributes={"openinference.span.kind": "CHAIN", "temporal.workflow.id": workflow_id},
+            ):
+                async with slots:
+                    result = await run_triage_request(client, request, queue)
+                assert result.dry_run
+                assert result.analysis is not None, result.skipped_reason
+            case.finished_state = result.analysis.state
+            if usage := result.analysis.triage_usage:
+                case.metrics.update(
+                    tool_calls=usage.tool_calls,
+                    prompt_tokens=usage.input_tokens,
+                    completion_tokens=usage.output_tokens,
+                )
+        except Exception as error:
+            case.error = error
+        finally:
+            context.detach(trace_token)
+            case.metrics["duration"] = monotonic() - start
+
+    async with AsyncExitStack() as stack:
+        if address == "local":
+            if not (temporal_cli := shutil.which("temporal")):
+                raise RuntimeError("The local Temporal E2E runner requires the temporal CLI")
+            environment = await stack.enter_async_context(
+                await WorkflowEnvironment.start_local(
+                    dev_server_existing_path=temporal_cli,
+                    ip="0.0.0.0",  # noqa: S104 - the CI container uses an unpublished Podman network
+                    **client_options,
+                )
+            )
+            client = environment.client
+        else:
+            client = await Client.connect(address, **client_options)
+        provisioner = await PodmanTriageProvisioner.for_e2e(
+            os.environ["YMIR_TRIAGE_CONTROLLER"],
+            client.service_client.config.target_host,
+            client.namespace,
+            local=address == "local",
+        )
+        async with create_triage_control_worker(client, queue, provisioner):
+            await asyncio.gather(*(run(case, client) for case in cases))
+
+
 @pytest.fixture(scope="session", autouse=True)
 def run_test_cases_concurrently(request, mock_centos_stream_repos, observability_fixture):
     """Execute selected triage test cases concurrently via asyncio.gather, then collect metrics.
@@ -415,7 +523,10 @@ def run_test_cases_concurrently(request, mock_centos_stream_repos, observability
     cases_to_run = [tc for tc in test_cases if tc in selected]
 
     async def _run_all():
-        await asyncio.gather(*(tc.run() for tc in cases_to_run))
+        if address := os.getenv("TEMPORAL_TRIAGE_ADDRESS"):
+            await run_temporal_cases(cases_to_run, address)
+        else:
+            await asyncio.gather(*(tc.run() for tc in cases_to_run))
 
     asyncio.run(_run_all())
 

@@ -48,8 +48,7 @@ async def configured_model():
         yield infer_model(f"{aliases[provider]}:{name}" if provider in aliases else model_id)
 
 
-async def run_pydantic_agent(agent: Agent, prompt: str, **kwargs):
-    model_id = os.environ["CHAT_MODEL"]
+def pydantic_model_settings(model_id: str) -> ModelSettings:
     settings = ModelSettings(timeout=float(os.getenv("CHAT_MODEL_TIMEOUT", "1200")))
     unsupported = unsupported_model_params(model_id)
     effort = os.getenv("REASONING_EFFORT")
@@ -62,7 +61,11 @@ async def run_pydantic_agent(agent: Agent, prompt: str, **kwargs):
     if model_id.startswith(("vertexai:claude-", "vertex_ai:claude-")):
         settings["anthropic_cache_tool_definitions"] = True
         settings["anthropic_cache_messages"] = True
+    return settings
 
+
+async def run_pydantic_agent(agent: Agent, prompt: str, **kwargs):
+    settings = pydantic_model_settings(os.environ["CHAT_MODEL"])
     async with configured_model() as model:
         return await agent.run(
             prompt,
@@ -73,6 +76,16 @@ async def run_pydantic_agent(agent: Agent, prompt: str, **kwargs):
         )
 
 
+async def invoke_pydantic_tool(tool: str | YmirTool, **arguments: Any) -> Any:
+    try:
+        # Pydantic AI instruments model tool calls through OpenTelemetry.
+        return await run_tool(tool, trace_trajectory=False, **arguments)
+    except ToolError as error:
+        if error.fatal or not error.retryable:
+            raise
+        raise ModelRetry(str(error)) from error
+
+
 def adapt_tool(tool: YmirTool) -> Tool:
     """Expose the existing schema and delegate to the existing tool runner.
 
@@ -81,13 +94,7 @@ def adapt_tool(tool: YmirTool) -> Tool:
     """
 
     async def call(**arguments: Any) -> Any:
-        try:
-            # Pydantic AI instruments model tool calls through OpenTelemetry.
-            return await run_tool(tool, trace_trajectory=False, **arguments)
-        except ToolError as error:
-            if error.fatal or not error.retryable:
-                raise
-            raise ModelRetry(str(error)) from error
+        return await invoke_pydantic_tool(tool, **arguments)
 
     return Tool.from_schema(
         call,

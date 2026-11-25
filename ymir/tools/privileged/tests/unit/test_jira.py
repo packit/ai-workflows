@@ -16,6 +16,7 @@ from ymir.tools.privileged.jira import (
     ChangeJiraStatusTool,
     CheckCveTriageEligibilityTool,
     EditJiraLabelsTool,
+    FindJiraCommentOperationTool,
     FixApproach,
     GetJiraDetailsTool,
     SearchJiraIssuesTool,
@@ -371,6 +372,29 @@ async def test_add_jira_comment(private):
         await AddJiraCommentTool().run(input={"issue_key": issue_key, "comment": comment, "private": private})
     ).result
     assert result.startswith("Successfully")
+
+
+@pytest.mark.asyncio
+async def test_find_jira_comment_operation_checks_author_and_all_pages():
+    operation_id = "a" * 64
+    marker = f"Ymir operation: {operation_id}"
+    heading = "Output from Ymir Triage Agent: "
+    forged = {"author": {"accountId": "someone-else"}, "body": f"{heading}\n\n{marker}"}
+    quoted = {"author": {"accountId": "ymir"}, "body": f"{heading}\n\nOther text\n\n{marker}"}
+    receipt = {"author": {"accountId": "ymir"}, "body": f"{heading}\n\n{marker}\n\nWarning"}
+    mock = flexmock(jira_tools)
+    mock.should_receive("jira_api_get").with_args("myself", session=object).and_return(
+        _create_async_return({"accountId": "ymir"})
+    ).once()
+    for start, comments in [(0, [forged, quoted]), (2, [receipt])]:
+        mock.should_receive("jira_api_get").with_args(
+            "issue/RHEL-12345/comment", params={"startAt": start, "maxResults": 100}, session=object
+        ).and_return(_create_async_return({"startAt": start, "total": 3, "comments": comments})).once()
+
+    result = await FindJiraCommentOperationTool().run(
+        input={"issue_key": "RHEL-12345", "operation_id": operation_id}
+    )
+    assert result.result == {"exists": True}
 
 
 @pytest.mark.parametrize(

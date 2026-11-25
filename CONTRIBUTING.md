@@ -36,6 +36,10 @@ Both targets hardcode `MOCK_JIRA=true` and `DRY_RUN=true`. The mock Jira files a
 so without `DRY_RUN=true` the agent would write comments back to them and corrupt the fixtures
 on subsequent runs.
 
+The triage target requires rootless Podman. Its test controller starts a local
+Temporal server and provisions a separate dry-run pod per case. Up to three
+pods can run at once, each with its own worker, local gateway, and workspace.
+
 ## Merging Policy
 
 Prefer rebase-merging over creating a merge commit, unless preserving the branch's history is necessary.

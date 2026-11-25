@@ -25,7 +25,7 @@ from ymir.common import (
     load_rhel_config,
 )
 from ymir.common.base_utils import get_jira_auth_headers
-from ymir.common.constants import AIOHTTP_TIMEOUT, CENTOS_STREAM_KOJIHUB_URL
+from ymir.common.constants import AIOHTTP_TIMEOUT, CENTOS_STREAM_KOJIHUB_URL, YMIR_COMMENT_MARKER
 from ymir.common.cve import CVE_ID_PATTERN
 from ymir.common.cve import extract_cve_ids as extract_cve_ids
 from ymir.common.http_utils import aiohttp_get_with_retries
@@ -409,6 +409,56 @@ class AddJiraCommentTool(Tool[AddJiraCommentToolInput, ToolRunOptions, StringToo
                 ) as response:
                     response.raise_for_status()
         return StringToolOutput(result=f"Successfully added the specified comment to {issue_key}")
+
+
+class FindJiraCommentOperationToolInput(BaseModel):
+    issue_key: str = Field(description="Jira issue key")
+    operation_id: str = Field(pattern=r"^[a-f0-9]{64}$", description="Ymir comment operation identifier")
+
+
+class FindJiraCommentOperationTool(
+    Tool[FindJiraCommentOperationToolInput, ToolRunOptions, JSONToolOutput[dict[str, bool]]]
+):
+    name = "find_jira_comment_operation"
+    description = "Check whether the authenticated Jira account already posted a marked Ymir comment."
+    input_schema = FindJiraCommentOperationToolInput
+    timeout = 120
+
+    def _create_emitter(self) -> Emitter:
+        return Emitter.root().child(namespace=["tool", "jira", self.name], creator=self)
+
+    async def _run(
+        self,
+        tool_input: FindJiraCommentOperationToolInput,
+        options: ToolRunOptions | None,
+        context: RunContext,
+    ) -> JSONToolOutput[dict[str, bool]]:
+        issue = tool_input.issue_key
+        marker = f"Ymir operation: {tool_input.operation_id}"
+        heading = YMIR_COMMENT_MARKER.substitute(AGENT_TYPE="Triage") + ":"
+        async with aiohttpClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+            with tool_error_context(f"Failed to reconcile Jira comments for {issue}"):
+                account_id = (await jira_api_get("myself", session=session))["accountId"]
+                start = 0
+                while True:
+                    page = await jira_api_get(
+                        f"issue/{issue}/comment",
+                        params={"startAt": start, "maxResults": 100},
+                        session=session,
+                    )
+                    comments = page["comments"]
+                    if page["startAt"] != start:
+                        raise ValueError(f"Jira returned an unexpected comment offset for {issue}")
+                    for comment in comments:
+                        if comment.get("author", {}).get("accountId") == account_id:
+                            lines = [line.rstrip() for line in comment["body"].splitlines()[:3]]
+                            if lines == [heading, "", marker]:
+                                return JSONToolOutput(result={"exists": True})
+                    start += len(comments)
+                    if start >= page["total"]:
+                        return JSONToolOutput(result={"exists": False})
+                    if not comments:
+                        raise ValueError(f"Jira returned an incomplete comment page for {issue}")
 
 
 def extract_cve_id(summary: str) -> str | None:

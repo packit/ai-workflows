@@ -21,6 +21,36 @@ The Jira gateway applies its dry-run configuration to model-driven Jira writes.
 Pydantic AI spans use the existing collector and carry
 the same class of prompt and tool data as the previous triage tracing.
 
+The opt-in Temporal triage experiment uses a loopback development server and
+a read-only loopback MCP fixture. The development server records fixture inputs,
+model responses, and tool results in its local workflow history. The optional
+Vertex smoke run uses the existing model credentials to send the mock issue
+data to Vertex. The fixture gateway serves its static data without Jira or
+GitLab credentials.
+
+The Phase 2 Temporal analysis runner also accepts a configured MCP gateway.
+Its model toolsets expose the existing investigation tools and source workspace
+operations. Jira field writes, publication, and downstream dispatch are outside
+the analysis workflow. Workflow histories may contain Jira snapshots, prompts,
+model outputs, MCP results, and paths to transient worker artifacts.
+
+The opt-in Temporal publication worker uses the existing Jira gateway and Redis.
+The model can propose Jira field values through its tool, and a separate
+Activity applies the fill-only updates. Comment reconciliation checks the Jira
+author and operation marker before recognizing a write. Redis write access is
+trusted for operation claims, queue messages, and temporary delivery receipts.
+The Jira acknowledgement and finding are private comments. Restrict access to
+the Temporal namespace because its history also contains proposed writes and
+downstream payloads.
+
+The Temporal triage control worker provisions execution pods using the configured
+OpenShift identity or the local rootless Podman API. The E2E launcher creates a
+temporary Unix socket and mounts it only into the test controller. It removes the
+socket and its labelled test pods and volumes at exit. Each execution pod uses
+a private workspace and a loopback MCP gateway. Provider credentials go to the
+worker, and the gateway receives the existing Jira and packaging credentials.
+Execution pods have service account token automounting disabled in OpenShift.
+
 Security-relevant assumptions this system makes about its environment:
 
 - **The OpenShift `TenantEgress` default-deny network policy is the

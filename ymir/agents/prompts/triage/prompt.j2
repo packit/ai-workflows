@@ -492,11 +492,17 @@ needs to know*. Cover:
   agent must adapt the patch manually). Do NOT add redundant
   instructions like "apply the full patch".
 
+{% if publish_jira_fields | default(true) %}
 **Final Step: Set JIRA Fields
 (for Rebase, Backport, and Rebuild decisions only)**
 
    If your decision is rebase or backport or rebuild, use set_jira_fields
    tool to update JIRA fields (Severity, Fix Version):
+{% else %}
+**Final Step: Determine the Fix Version**
+
+   For rebase, backport, or rebuild, determine the Fix Version for the triage result:
+{% endif %}
    1. Check all of the mentioned fields in the JIRA issue and don't modify those that are already set
    2. Extract the affected RHEL major version from the JIRA issue
       (look in Affects Version/s field or issue description)
@@ -514,8 +520,10 @@ needs to know*. Cover:
        * For non-maintenance versions (Y-stream available):
          - Most critical issues (privilege escalation, RCE, data loss, regressions) should use Z-stream
          - Other issues should use Y-stream (e.g. performance, usability issues)
+{% if publish_jira_fields | default(true) %}
    5. Set non-empty JIRA fields:
        * Severity: default to 'moderate', for important issues use
          'important', for most critical use 'critical'
          (privilege escalation, RCE, data loss)
        * Fix Version: use the appropriate stream version determined from map_version tool result
+{% endif %}

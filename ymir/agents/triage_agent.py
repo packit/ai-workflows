@@ -50,6 +50,7 @@ from ymir.common.logging_setup import configure_logging, current_jira_issue
 from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     POSTPONED_RESOLUTIONS,
+    AssessedApplicabilityResult,
     AutoProcessingMode,
     BackportData,
     ClarificationNeededData,
@@ -627,6 +628,8 @@ async def render_prompt(
     cve_eligibility_result: CVEEligibilityResult | None = None,
     jira_summary: str | None = None,
     downstream_component: str | None = None,
+    *,
+    publish_jira_fields: bool = True,
 ) -> str:
     older_zstream = bool(fix_version and await is_older_zstream(fix_version))
 
@@ -660,8 +663,14 @@ async def render_prompt(
                 updates["needs_internal_fix"] = True
                 updates["internal_target_branch"] = internal_branch
 
-    input_with_flag = input.model_copy(update=updates)
+    input_with_flag = TriagePromptContext.model_validate(
+        input.model_dump() | updates | {"publish_jira_fields": publish_jira_fields}
+    )
     return render_template("triage/prompt.j2", input_with_flag)
+
+
+class TriagePromptContext(InputSchema):
+    publish_jira_fields: bool = True
 
 
 class TriageState(BaseModel):
@@ -845,6 +854,8 @@ class TriageRunContext:
     jira_issue: str
     fix_version: str | None
     jira_summary: str | None
+    rhel_config_override: dict[str, Any] | None = None
+    working_directory: str | None = None
 
 
 async def _triage_output(
@@ -865,36 +876,46 @@ async def _triage_output(
     return OutputSchema.model_validate_json(normalized)
 
 
-def create_triage_agent(gateway_tools, local_tool_options=None) -> Agent[TriageRunContext, OutputSchema]:
-    tools = [
-        adapt_tool(RunShellCommandTool(options=local_tool_options)),
-        adapt_tool(VersionMapperTool()),
-    ]
-    tools.extend(
-        adapt_tool(tool)
-        for tool in gateway_tools
-        if tool.name
-        in {
-            "get_jira_details",
-            "set_jira_fields",
-            "get_patch_from_url",
-            "get_github_patch",
-            "get_github_pull_request",
-            "get_github_compare",
-            "search_jira_issues",
-            "zstream_search",
-            "get_maintainer_rules",
-            "get_shared_rules",
-            "clone_repository",
-        }
-    )
+TRIAGE_GATEWAY_TOOLS = frozenset(
+    {
+        "get_jira_details",
+        "set_jira_fields",
+        "get_patch_from_url",
+        "get_github_patch",
+        "get_github_pull_request",
+        "get_github_compare",
+        "search_jira_issues",
+        "zstream_search",
+        "get_maintainer_rules",
+        "get_shared_rules",
+        "clone_repository",
+    }
+)
+
+
+def create_triage_agent(
+    gateway_tools,
+    local_tool_options=None,
+    *,
+    model=None,
+    tools=None,
+    capabilities=(),
+    publish_jira_fields=True,
+) -> Agent[TriageRunContext, OutputSchema]:
+    if tools is None:
+        tools = [
+            adapt_tool(RunShellCommandTool(options=local_tool_options)),
+            adapt_tool(VersionMapperTool()),
+        ]
+        tools.extend(adapt_tool(tool) for tool in gateway_tools if tool.name in TRIAGE_GATEWAY_TOOLS)
     return Agent(
+        model,
         name="TriageAgent",
         deps_type=TriageRunContext,
         # Prompted output keeps Claude thinking available with function tools.
         output_type=PromptedOutput(_triage_output),
         retries=get_agent_execution_config()["max_retries_per_step"],
-        capabilities=[Instrumentation()],
+        capabilities=[Instrumentation(), *capabilities],
         tools=tools,
         instructions=[
             "You are a Red Hat Enterprise Linux developer.",
@@ -920,9 +941,15 @@ def create_triage_agent(gateway_tools, local_tool_options=None) -> Agent[TriageR
             "For gitweb-hosted projects (URLs containing 'gitweb'), always use "
             "the 'a=patch' action (not 'a=commitdiff_plain') when constructing "
             "patch URLs. Example: ?p=project.git;a=patch;h=<commit_hash>",
-            "After completing your triage analysis, if your decision is backport "
-            "or rebase, always set appropriate JIRA fields per the instructions "
-            "using set_jira_fields tool.",
+            *(
+                [
+                    "After completing your triage analysis, if your decision is backport "
+                    "or rebase, always set appropriate JIRA fields per the instructions "
+                    "using set_jira_fields tool."
+                ]
+                if publish_jira_fields
+                else []
+            ),
             "Never use shallow clones (--depth) when cloning upstream repositories. "
             "Shallow clones hide merge-request branches and make follow-up commits "
             "invisible to git log searches.",
@@ -1036,6 +1063,606 @@ def validate_triage_output(
     return normalized
 
 
+async def read_cve_eligibility(jira_issue: str, gateway_tools) -> CVEEligibilityResult:
+    result = await run_tool(
+        "check_cve_triage_eligibility", available_tools=gateway_tools, issue_key=jira_issue
+    )
+    eligibility = CVEEligibilityResult.model_validate(result)
+    logger.info(
+        "CVE eligibility for %s: eligibility=%s, reason=%r, needs_internal_fix=%s, pending_zstream_issues=%s",
+        jira_issue,
+        eligibility.eligibility.value,
+        eligibility.reason,
+        eligibility.needs_internal_fix,
+        eligibility.pending_zstream_issues,
+    )
+    return eligibility
+
+
+def apply_cve_eligibility(state: TriageState, force_cve_triage: bool) -> str:
+    eligibility = state.cve_eligibility_result.eligibility
+    dup_key = state.cve_eligibility_result.duplicate_of
+    if eligibility == TriageEligibility.IMMEDIATELY:
+        return "run_triage_analysis"
+
+    if force_cve_triage and not state.cve_eligibility_result.error:
+        logger.info(
+            f"Issue {state.jira_issue} not eligible for immediate triage "
+            f"(eligibility={eligibility.value}, reason={state.cve_eligibility_result.reason!r}), "
+            "but force_cve_triage is set — proceeding"
+        )
+        return "run_triage_analysis"
+
+    if eligibility == TriageEligibility.PENDING_DEPENDENCIES:
+        pending = state.cve_eligibility_result.pending_zstream_issues or []
+        if not pending:
+            logger.warning(
+                f"Issue {state.jira_issue}: eligibility is PENDING_DEPENDENCIES "
+                f"but no pending Z-stream issues were returned — this is unexpected"
+            )
+            state.triage_result = OutputSchema(
+                resolution=Resolution.OPEN_ENDED_ANALYSIS,
+                data=OpenEndedAnalysisData(
+                    summary=(
+                        "Eligibility blocked on PENDING_DEPENDENCIES but no Z-stream issues were returned."
+                    ),
+                    jira_issue=state.jira_issue,
+                    recommendation="Check the eligibility tool output manually.",
+                ),
+            )
+            return "comment_in_jira"
+        logger.info(
+            f"Issue {state.jira_issue} postponed — waiting for "
+            f"{len(pending)} Z-stream issue(s): {pending}. "
+            f"Reason: {state.cve_eligibility_result.reason}"
+        )
+        # A Y-stream CVE waiting for its Z-stream clones to ship is the
+        # "y_stream" postponement category (waiting for Z-stream errata),
+        # NOT "dependency" (a rebuild waiting for another component's
+        # fixed build). PENDING_DEPENDENCIES is only ever returned by the
+        # Y-stream eligibility path, so this always maps to y_stream and
+        # is swept by YStreamSweep.
+        state.triage_result = OutputSchema(
+            resolution=Resolution.POSTPONED_Y_STREAM,
+            data=PostponedData(
+                summary=state.cve_eligibility_result.reason,
+                pending_issues=pending,
+                jira_issue=state.jira_issue,
+                blocker_references=pending,
+            ),
+        )
+        return "comment_in_jira"
+
+    logger.info(f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}")
+    if state.cve_eligibility_result.error:
+        # Distinguish human-correctable errors from transient/operational failures:
+        # - Missing Fix Versions field → CLARIFICATION_NEEDED (non-retriable,
+        #   maps to ymir_needs_attention)
+        # - Clone/dependency check failures → ERROR (retriable,
+        #   maps to ymir_triage_errored)
+        error_msg = state.cve_eligibility_result.error
+        is_missing_fix_version = "Fix Versions field is empty" in error_msg
+
+        if is_missing_fix_version:
+            # Non-retriable: requires human intervention (e.g., setting Fix Versions field)
+            # Use CLARIFICATION_NEEDED to skip retry loop and post comment only once
+            # Maps to ymir_needs_attention label (issue data incomplete, needs human attention)
+            state.triage_result = OutputSchema(
+                resolution=Resolution.CLARIFICATION_NEEDED,
+                data=ClarificationNeededData(
+                    findings=f"CVE eligibility check error: {error_msg}",
+                    additional_info_needed=(
+                        "Please fix the issue and retry manually (e.g., via ymir_todo label)."
+                    ),
+                    jira_issue=state.jira_issue,
+                ),
+            )
+        else:
+            # Retriable: operational/transient errors (network, API failures, etc.)
+            # Use ERROR resolution to trigger retry logic
+            # Maps to ymir_triage_errored label after max retries exhausted
+            state.triage_result = OutputSchema(
+                resolution=Resolution.ERROR,
+                data=ErrorData(
+                    details=f"CVE eligibility check error: {error_msg}",
+                    jira_issue=state.jira_issue,
+                ),
+            )
+    elif dup_key:
+        state.triage_result = OutputSchema(
+            resolution=Resolution.OPEN_ENDED_ANALYSIS,
+            data=OpenEndedAnalysisData(
+                summary=(
+                    f"Duplicate tracker detected. {state.jira_issue} appears to be "
+                    f"a duplicate of {dup_key} (same CVE, component, and fix version)."
+                ),
+                recommendation=(f"Consider closing this issue as a duplicate of {dup_key}."),
+                jira_issue=state.jira_issue,
+            ),
+        )
+    else:
+        state.triage_result = OutputSchema(
+            resolution=Resolution.OPEN_ENDED_ANALYSIS,
+            data=OpenEndedAnalysisData(
+                summary="CVE eligibility check decided to skip "
+                f"triaging: {state.cve_eligibility_result.reason}",
+                recommendation="No action needed — this issue is not eligible for triage processing.",
+                jira_issue=state.jira_issue,
+            ),
+        )
+    return "comment_in_jira"
+
+
+async def prepare_triage_analysis(
+    state: TriageState, gateway_tools, *, publish_jira_fields: bool = True
+) -> tuple[str, TriageRunContext]:
+    try:
+        jira_details = await run_tool(
+            "get_jira_details",
+            available_tools=gateway_tools,
+            issue_key=state.jira_issue,
+        )
+        if not isinstance(jira_details, dict) or not isinstance(jira_details.get("fields"), dict):
+            raise ValueError("Jira response did not include an issue fields object")
+    except Exception as error:
+        logger.warning("Could not prefetch Jira details for %s: %s", state.jira_issue, error)
+        jira_details = {}
+
+    fields = jira_details.get("fields", {})
+    fix_versions = fields.get("fixVersions") or []
+    fix_version_name = fix_versions[0].get("name") if fix_versions else None
+
+    input_data = InputSchema(issue=state.jira_issue)
+    state.is_rebase_sibling = state.is_rebase_sibling or get_rebase_primary_issue(jira_details) is not None
+    state.rebase_waiting_for_siblings = state.rebase_waiting_for_siblings or (
+        JiraLabels.WAITING_FOR_SIBLINGS.value in (fields.get("labels") or [])
+    )
+    state.jira_summary = fields.get("summary")
+    raw_component = fields.get(DOWNSTREAM_COMPONENT_CUSTOM_FIELD)
+    state.raw_downstream_component = raw_component or None
+    # Modular issues store "module:stream/package" (e.g. "postgresql:16/postgis");
+    # extract the package so is_modular() / parse_module_stream() match the summary.
+    state.downstream_component = extract_downstream_package(raw_component)
+    prompt = await render_prompt(
+        input_data,
+        fix_version=fix_version_name,
+        cve_eligibility_result=state.cve_eligibility_result,
+        jira_summary=state.jira_summary,
+        downstream_component=state.downstream_component,
+        **({"publish_jira_fields": False} if not publish_jira_fields else {}),
+    )
+    if jira_details:
+        prompt += f"\n\nJira issue data (JSON):\n{json.dumps(jira_details, ensure_ascii=False)}"
+
+    return prompt, TriageRunContext(state.jira_issue, fix_version_name, state.jira_summary)
+
+
+def apply_triage_output(state: TriageState, output: OutputSchema) -> None:
+    state.triage_result = output
+    # postponed_y_stream is owned by the eligibility system (PENDING_DEPENDENCIES
+    # verdict). The LLM analysis node is only reached when eligibility returned
+    # IMMEDIATELY or force_cve_triage bypassed it — in both cases the eligibility
+    # tool has already decided the issue is not waiting on Z-stream clones.
+    # An LLM-asserted postponed_y_stream would be swept away immediately anyway,
+    # so coerce it to open-ended-analysis to surface the mismatch for review.
+    if state.triage_result.resolution == Resolution.POSTPONED_Y_STREAM:
+        logger.warning(
+            "LLM emitted postponed_y_stream for %s, which is reserved for the "
+            "eligibility system. Coercing to open-ended-analysis.",
+            state.jira_issue,
+        )
+        state.triage_result = OutputSchema(
+            resolution=Resolution.OPEN_ENDED_ANALYSIS,
+            data=OpenEndedAnalysisData(
+                summary=(
+                    "Triage agent identified a Y-stream/Z-stream dependency, "
+                    "but the eligibility system did not return PENDING_DEPENDENCIES. "
+                    "Manual review required."
+                ),
+                recommendation=(
+                    "Check whether Z-stream clones exist and their shipping status. "
+                    "If the dependency is genuine, the eligibility tool may need updating."
+                ),
+                jira_issue=state.jira_issue,
+            ),
+        )
+
+    # postponed_pr_pending is only sweepable if the comment carries the
+    # PR/MR URL in blocker_references (PRPendingSweep polls that URL).
+    if (
+        state.triage_result.resolution == Resolution.POSTPONED_PR_PENDING
+        and not state.triage_result.data.blocker_references
+    ):
+        raise ValueError(
+            f"LLM emitted postponed_pr_pending for {state.jira_issue} without a "
+            "blocker MR/PR URL in blocker_references; retrying."
+        )
+
+    # Jira issue key in resolution data has been generated by LLM, make sure it's upper-case
+    state.triage_result.data.jira_issue = state.triage_result.data.jira_issue.upper()
+
+
+async def normalize_triage_version(state: TriageState) -> None:
+    # Normalize stale Y-stream fixVersion (e.g. rhel-9.8 → rhel-9.8.z after GA)
+    if hasattr(state.triage_result.data, "fix_version") and state.triage_result.data.fix_version:
+        rhel_config = await load_rhel_config()
+        state.triage_result.data.fix_version = normalize_fix_version(
+            state.triage_result.data.fix_version, rhel_config
+        )
+
+
+def next_after_triage_output(state: TriageState) -> str | None:
+    if state.triage_result.resolution == Resolution.REBASE:
+        return "verify_rebase_author"
+    if state.triage_result.resolution in [
+        Resolution.BACKPORT,
+        Resolution.REBUILD,
+    ]:
+        return "determine_target_branch"
+    if state.triage_result.resolution in [
+        Resolution.CLARIFICATION_NEEDED,
+        Resolution.OPEN_ENDED_ANALYSIS,
+        Resolution.NOT_AFFECTED,
+    ]:
+        return "comment_in_jira"
+    if state.triage_result.resolution in POSTPONED_RESOLUTIONS:
+        # Route postponed-rebuild CVEs through applicability to check
+        # if the CVE actually affects the package — if not, resolve as
+        # NOT_AFFECTED instead of waiting for the dependency to ship.
+        if (
+            state.triage_result.data.package
+            and state.cve_eligibility_result
+            and state.cve_eligibility_result.is_cve
+        ):
+            return "determine_target_branch"
+        return "comment_in_jira"
+    return None
+
+
+async def resolve_triage_target(
+    state: TriageState, gateway_tools, user_triggered: bool, triage_only_requested: bool
+) -> None:
+    state.target_branch, state.dist_git_namespace = await determine_target_branch(
+        cve_eligibility_result=state.cve_eligibility_result,
+        triage_data=state.triage_result.data,
+        jira_summary=state.jira_summary,
+        downstream_component=state.downstream_component,
+    )
+
+    if state.target_branch:
+        logger.info(
+            f"Target branch determined: {state.target_branch}"
+            + (f" (namespace={state.dist_git_namespace})" if state.dist_git_namespace else "")
+        )
+    else:
+        logger.warning(f"Could not determine target branch for {state.jira_issue}")
+
+    package = getattr(state.triage_result.data, "package", None)
+    if package:
+        try:
+            await _record_target_branch_existence(state, package, gateway_tools)
+        except Exception as e:
+            logger.warning(f"Failed to check branches for {package}: {e}")
+        await _record_branch_creation_policy(state, package, gateway_tools)
+        await _record_auto_processing_policy(
+            state, package, gateway_tools, user_triggered, triage_only_requested
+        )
+
+
+def next_after_triage_target(state: TriageState) -> str:
+    if (
+        state.cve_eligibility_result
+        and state.cve_eligibility_result.is_cve
+        and state.triage_result.resolution
+        in (Resolution.BACKPORT, Resolution.REBUILD, Resolution.REBASE, *POSTPONED_RESOLUTIONS)
+    ):
+        return "check_cve_applicability"
+
+    if state.triage_result.resolution == Resolution.REBUILD:
+        return "consolidate_rebuild_siblings"
+    if state.triage_result.resolution == Resolution.REBASE:
+        return "consolidate_rebase_siblings"
+    return "comment_in_jira"
+
+
+async def read_rebase_author(state: TriageState, gateway_tools) -> tuple[bool, str | None]:
+    is_rh_employee = await run_tool(
+        "verify_issue_author",
+        available_tools=gateway_tools,
+        issue_key=state.jira_issue,
+    )
+
+    issue_status = await run_tool(
+        "get_jira_details",
+        available_tools=gateway_tools,
+        issue_key=state.jira_issue,
+    )
+    issue_status = issue_status.get("fields", {}).get("status", {}).get("name")
+
+    return is_rh_employee, issue_status
+
+
+def apply_rebase_author(state: TriageState, is_rh_employee: bool, issue_status: str | None) -> str:
+    if not is_rh_employee and issue_status == "New":
+        logger.warning(
+            f"Issue author for {state.jira_issue} is not verified as "
+            "RH employee - ending triage with clarification needed"
+        )
+
+        # override triage result with clarification needed so that it gets reviewed by us
+        state.triage_result = OutputSchema(
+            resolution=Resolution.CLARIFICATION_NEEDED,
+            data=ClarificationNeededData(
+                findings="The rebase resolution was determined, but author verification failed.",
+                additional_info_needed="Needs human review, as the issue "
+                "author is not verified as a Red Hat employee.",
+                jira_issue=state.jira_issue,
+            ),
+        )
+
+        return "comment_in_jira"
+
+    logger.info(
+        f"Issue author for {state.jira_issue} verified as RH employee "
+        "or issue is not in new status - proceeding with rebase"
+    )
+
+    return "determine_target_branch"
+
+
+@dataclass
+class PreparedApplicability:
+    prompt: str
+    local_clone: Path
+    builddir: str | None
+
+
+async def prepare_cve_applicability(
+    state: TriageState, gateway_tools, *, workspace: Path | None = None
+) -> tuple[PreparedApplicability | None, str | None]:
+    resolution = state.triage_result.resolution
+    package = state.triage_result.data.package
+    logger.info(f"Checking CVE applicability for {state.jira_issue} ({resolution.value} of {package})")
+
+    if not state.target_branch:
+        logger.warning("No target branch — skipping applicability check")
+        return None, "comment_in_jira"
+
+    data = state.triage_result.data
+    cve_id = data.cve_id
+    dep_component = getattr(data, "dependency_component", None)
+    dep_issue_key = getattr(data, "dependency_issue", None)
+
+    patch_urls = getattr(data, "patch_urls", None) or []
+
+    # For z-stream branches, check if the branch actually exists.
+    # For older z-streams whose branch doesn't exist yet, resolve
+    # the base commit from Koji so we analyze the right source
+    # (not CentOS Stream, which may already contain the fix).
+    clone_branch = state.target_branch
+    base_ref = None
+    parsed = parse_rhel_version(state.target_branch)
+
+    # The initial branch-existence check runs while determining the
+    # target branch.  Retry it here when it was unavailable so a
+    # transient MCP failure does not suppress the fallback that the
+    # original applicability flow performed at this point.
+    if parsed and state.target_branch_exists is None:
+        try:
+            await _record_target_branch_existence(state, package, gateway_tools)
+        except Exception as e:
+            logger.warning(f"Failed to recheck branches for {package}: {e}")
+
+    if state.target_branch_exists is False and state.automatic_branch_creation_disabled is None:
+        await _record_branch_creation_policy(state, package, gateway_tools)
+
+    if parsed and state.target_branch_exists is False:
+        major_version = parsed[0]
+        try:
+            older_zstream = await is_older_zstream(state.target_branch)
+        except Exception as e:
+            logger.warning(f"Could not determine fallback branch for {state.target_branch}: {e}")
+            older_zstream = None
+
+        if older_zstream is True:
+            try:
+                _, base_ref = await get_latest_candidate_build(package, state.target_branch)
+                logger.info(
+                    f"Branch {state.target_branch} not found for {package}, "
+                    f"using base ref {base_ref} for applicability analysis"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Could not resolve base ref for {state.target_branch}: {e} — "
+                    f"skipping applicability check"
+                )
+                state.applicability_check_skipped = True
+                if state.triage_result.resolution == Resolution.REBUILD:
+                    return None, "consolidate_rebuild_siblings"
+                if state.triage_result.resolution == Resolution.REBASE:
+                    return None, "consolidate_rebase_siblings"
+                return None, "comment_in_jira"
+        elif older_zstream is False:
+            clone_branch = f"c{major_version}s"
+            logger.info(
+                f"Branch {state.target_branch} not found for {package}, "
+                f"using {clone_branch} for applicability analysis"
+            )
+
+    try:
+        local_clone, unpacked_sources, prep_ok, builddir = await tasks.clone_and_prep_sources(
+            package=package,
+            dist_git_branch=clone_branch,
+            available_tools=gateway_tools,
+            jira_issue=state.jira_issue,
+            ref=base_ref,
+            dist_git_namespace=state.dist_git_namespace,
+            **({"workspace": workspace} if workspace is not None else {}),
+        )
+    except Exception as e:
+        logger.warning(f"Could not prep sources for applicability check: {e}")
+        state.applicability_check_skipped = True
+        if state.triage_result.resolution == Resolution.REBUILD:
+            return None, "verify_rebuild_buildroot"
+        if state.triage_result.resolution == Resolution.REBASE:
+            return None, "consolidate_rebase_siblings"
+        return None, "comment_in_jira"
+
+    if not prep_ok:
+        logger.warning(f"Source prep failed for {package} — analyzing unpatched upstream source")
+
+    state.applicability_local_clone = local_clone
+    state.applicability_unpacked_sources = unpacked_sources
+    state.applicability_used_fallback = not prep_ok
+
+    patch_files = []
+    for idx, url in enumerate(patch_urls):
+        try:
+            content = await run_tool(
+                patch_fetch_tool_name(url),
+                patch_url=url,
+                available_tools=gateway_tools,
+            )
+            patch_name = f"{state.jira_issue}-{idx}.patch"
+            (local_clone / patch_name).write_text(content)
+            patch_files.append(str(local_clone / patch_name))
+        except Exception:
+            logger.warning(f"Could not fetch patch from {url}")
+
+    prompt = build_applicability_prompt(
+        jira_issue=state.jira_issue,
+        package=package,
+        target_branch=state.target_branch,
+        resolution=resolution,
+        cve_id=cve_id,
+        dep_component=dep_component,
+        dep_issue_key=dep_issue_key,
+        patch_files=patch_files,
+        unpacked_sources=unpacked_sources,
+        prep_ok=prep_ok,
+    )
+
+    return PreparedApplicability(prompt, local_clone, builddir), None
+
+
+def apply_cve_applicability(state: TriageState, applicability: AssessedApplicabilityResult) -> str:
+    state.triage_result.confidence = applicability.confidence
+
+    if not applicability.is_affected:
+        logger.info(f"CVE not applicable for {state.jira_issue}: {applicability.justification_category}")
+        explanation = applicability.explanation
+        if state.applicability_used_fallback:
+            explanation += (
+                "\n\n_Note: RPM prep failed — analysis was performed on "
+                "unpatched upstream source (Source0 only). Downstream "
+                "patches were not applied._"
+            )
+        else:
+            explanation += (
+                "\n\n_Note: Analysis was performed on fully prepared "
+                "sources (with downstream patches applied)._"
+            )
+        prior = state.triage_result.data
+        state.triage_result = OutputSchema(
+            resolution=Resolution.NOT_AFFECTED,
+            confidence=applicability.confidence,
+            data=NotAffectedData(
+                justification_category=applicability.justification_category,
+                explanation=explanation,
+                jira_issue=state.jira_issue,
+                package=getattr(prior, "package", None),
+                cve_id=getattr(prior, "cve_id", None),
+                fix_version=getattr(prior, "fix_version", None),
+                triage_summary=getattr(prior, "triage_summary", None),
+                patch_urls=getattr(prior, "patch_urls", None),
+            ),
+        )
+        return "comment_in_jira"
+
+    logger.info(f"CVE confirmed applicable for {state.jira_issue}: {applicability.explanation[:100]}")
+
+    return next_after_cve_applicability(state)
+
+
+def next_after_cve_applicability(state: TriageState) -> str:
+    if state.triage_result.resolution == Resolution.REBUILD:
+        return "verify_rebuild_buildroot"
+    if state.triage_result.resolution == Resolution.REBASE:
+        return "consolidate_rebase_siblings"
+    return "comment_in_jira"
+
+
+async def read_rebuild_buildroot(state: TriageState, gateway_tools) -> tuple[bool, str] | None:
+    data = state.triage_result.data
+    dep_issue_key = getattr(data, "dependency_issue", None)
+    dep_component = getattr(data, "dependency_component", None)
+
+    if not dep_issue_key or not dep_component or not state.target_branch:
+        logger.info("Missing dependency info or target branch — skipping buildroot check")
+        return None
+
+    dep_details = await run_tool(
+        "get_jira_details",
+        available_tools=gateway_tools,
+        issue_key=dep_issue_key,
+    )
+    fixed_in_build = dep_details.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
+    if not fixed_in_build:
+        logger.warning(f"Dependency {dep_issue_key} has no Fixed in Build — skipping buildroot check")
+        return None
+
+    # fix_version is already normalized by run_triage_analysis (e.g. rhel-9.8 → rhel-9.8.z)
+    fix_version = getattr(data, "fix_version", None) or ""
+
+    try:
+        in_buildroot = await check_build_in_buildroot(
+            state.target_branch,
+            dep_component,
+            fixed_in_build,
+            fix_version=fix_version,
+        )
+    except Exception as e:
+        logger.warning(f"Buildroot check failed for {dep_component} ({fixed_in_build}): {e}")
+        return None
+
+    return in_buildroot, fixed_in_build
+
+
+def apply_rebuild_buildroot(state: TriageState, buildroot: tuple[bool, str] | None) -> str:
+    if buildroot is None:
+        return "consolidate_rebuild_siblings"
+    in_buildroot, fixed_in_build = buildroot
+    data = state.triage_result.data
+    dep_issue_key = data.dependency_issue
+    dep_component = data.dependency_component
+    if in_buildroot:
+        return "consolidate_rebuild_siblings"
+
+    logger.info(
+        f"Dependency {dep_component} ({fixed_in_build}) not in "
+        f"{state.target_branch} buildroot — postponing {state.jira_issue}"
+    )
+    state.triage_result = OutputSchema(
+        resolution=Resolution.POSTPONED_DEPENDENCY,
+        confidence=state.triage_result.confidence,
+        data=PostponedData(
+            summary=(
+                f"Rebuild of {data.package} waiting for {dep_component} "
+                f"({fixed_in_build}) to land in {state.target_branch} buildroot"
+            ),
+            pending_issues=[dep_issue_key],
+            jira_issue=state.jira_issue,
+            blocker_references=[dep_issue_key],
+            package=data.package,
+            fix_version=data.fix_version,
+            cve_id=data.cve_id,
+            dependency_issue=dep_issue_key,
+            dependency_component=dep_component,
+        ),
+    )
+    return "comment_in_jira"
+
+
 async def run_workflow(
     jira_issue,
     dry_run,
@@ -1064,612 +1691,60 @@ async def run_workflow(
         )
 
         async def check_cve_eligibility(state):
-            """Check CVE eligibility for the issue"""
-            logger.info(f"Checking CVE eligibility for {state.jira_issue}")
-            result = await run_tool(
-                "check_cve_triage_eligibility",
-                available_tools=gateway_tools,
-                issue_key=state.jira_issue,
-            )
-            state.cve_eligibility_result = CVEEligibilityResult.model_validate(result)
-
-            eligibility = state.cve_eligibility_result.eligibility
-            logger.info(
-                f"CVE eligibility for {state.jira_issue}: "
-                f"eligibility={eligibility.value}, "
-                f"reason={state.cve_eligibility_result.reason!r}, "
-                f"needs_internal_fix={state.cve_eligibility_result.needs_internal_fix}, "
-                f"pending_zstream_issues={state.cve_eligibility_result.pending_zstream_issues}"
-            )
-
+            state.cve_eligibility_result = await read_cve_eligibility(state.jira_issue, gateway_tools)
             dup_key = state.cve_eligibility_result.duplicate_of
-
-            if eligibility == TriageEligibility.IMMEDIATELY:
-                if dup_key and not dry_run:
-                    logger.info(
-                        f"Issue {state.jira_issue} has a closed/rejected duplicate "
-                        f"{dup_key} — posting informational comment and proceeding"
-                    )
-                    try:
-                        await tasks.comment_in_jira(
-                            jira_issue=state.jira_issue,
-                            agent_type="Triage",
-                            comment_text=(
-                                f"An older tracker {dup_key} exists for the same CVE, "
-                                f"component, and fix version, but it was closed/rejected. "
-                                f"Proceeding with triage for this tracker."
-                            ),
-                            available_tools=gateway_tools,
-                            user_triggered=user_triggered,
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to post duplicate info comment: {e}")
-                return "run_triage_analysis"
-
-            if force_cve_triage and not state.cve_eligibility_result.error:
-                logger.info(
-                    f"Issue {state.jira_issue} not eligible for immediate triage "
-                    f"(eligibility={eligibility.value}, reason={state.cve_eligibility_result.reason!r}), "
-                    "but force_cve_triage is set — proceeding"
-                )
-                return "run_triage_analysis"
-
-            if eligibility == TriageEligibility.PENDING_DEPENDENCIES:
-                pending = state.cve_eligibility_result.pending_zstream_issues or []
-                if not pending:
-                    logger.warning(
-                        f"Issue {state.jira_issue}: eligibility is PENDING_DEPENDENCIES "
-                        f"but no pending Z-stream issues were returned — this is unexpected"
-                    )
-                    state.triage_result = OutputSchema(
-                        resolution=Resolution.OPEN_ENDED_ANALYSIS,
-                        data=OpenEndedAnalysisData(
-                            summary=(
-                                "Eligibility blocked on PENDING_DEPENDENCIES but "
-                                "no Z-stream issues were returned."
-                            ),
-                            jira_issue=state.jira_issue,
-                            recommendation="Check the eligibility tool output manually.",
-                        ),
-                    )
-                    return "comment_in_jira"
-                logger.info(
-                    f"Issue {state.jira_issue} postponed — waiting for "
-                    f"{len(pending)} Z-stream issue(s): {pending}. "
-                    f"Reason: {state.cve_eligibility_result.reason}"
-                )
-                # A Y-stream CVE waiting for its Z-stream clones to ship is the
-                # "y_stream" postponement category (waiting for Z-stream errata),
-                # NOT "dependency" (a rebuild waiting for another component's
-                # fixed build). PENDING_DEPENDENCIES is only ever returned by the
-                # Y-stream eligibility path, so this always maps to y_stream and
-                # is swept by YStreamSweep.
-                state.triage_result = OutputSchema(
-                    resolution=Resolution.POSTPONED_Y_STREAM,
-                    data=PostponedData(
-                        summary=state.cve_eligibility_result.reason,
-                        pending_issues=pending,
+            if state.cve_eligibility_result.is_eligible_for_triage and dup_key and not dry_run:
+                try:
+                    await tasks.comment_in_jira(
                         jira_issue=state.jira_issue,
-                        blocker_references=pending,
-                    ),
-                )
-                return "comment_in_jira"
-
-            logger.info(
-                f"Issue {state.jira_issue} not eligible for triage: {state.cve_eligibility_result.reason}"
-            )
-            if state.cve_eligibility_result.error:
-                # Distinguish human-correctable errors from transient/operational failures:
-                # - Missing Fix Versions field → CLARIFICATION_NEEDED (non-retriable,
-                #   maps to ymir_needs_attention)
-                # - Clone/dependency check failures → ERROR (retriable,
-                #   maps to ymir_triage_errored)
-                error_msg = state.cve_eligibility_result.error
-                is_missing_fix_version = "Fix Versions field is empty" in error_msg
-
-                if is_missing_fix_version:
-                    # Non-retriable: requires human intervention (e.g., setting Fix Versions field)
-                    # Use CLARIFICATION_NEEDED to skip retry loop and post comment only once
-                    # Maps to ymir_needs_attention label (issue data incomplete, needs human attention)
-                    state.triage_result = OutputSchema(
-                        resolution=Resolution.CLARIFICATION_NEEDED,
-                        data=ClarificationNeededData(
-                            findings=f"CVE eligibility check error: {error_msg}",
-                            additional_info_needed=(
-                                "Please fix the issue and retry manually (e.g., via ymir_todo label)."
-                            ),
-                            jira_issue=state.jira_issue,
+                        agent_type="Triage",
+                        comment_text=(
+                            f"An older tracker {dup_key} exists for the same CVE, "
+                            f"component, and fix version, but it was closed/rejected. "
+                            f"Proceeding with triage for this tracker."
                         ),
+                        available_tools=gateway_tools,
+                        user_triggered=user_triggered,
                     )
-                else:
-                    # Retriable: operational/transient errors (network, API failures, etc.)
-                    # Use ERROR resolution to trigger retry logic
-                    # Maps to ymir_triage_errored label after max retries exhausted
-                    state.triage_result = OutputSchema(
-                        resolution=Resolution.ERROR,
-                        data=ErrorData(
-                            details=f"CVE eligibility check error: {error_msg}",
-                            jira_issue=state.jira_issue,
-                        ),
-                    )
-            elif dup_key:
-                state.triage_result = OutputSchema(
-                    resolution=Resolution.OPEN_ENDED_ANALYSIS,
-                    data=OpenEndedAnalysisData(
-                        summary=(
-                            f"Duplicate tracker detected. {state.jira_issue} appears to be "
-                            f"a duplicate of {dup_key} (same CVE, component, and fix version)."
-                        ),
-                        recommendation=(f"Consider closing this issue as a duplicate of {dup_key}."),
-                        jira_issue=state.jira_issue,
-                    ),
-                )
-            else:
-                state.triage_result = OutputSchema(
-                    resolution=Resolution.OPEN_ENDED_ANALYSIS,
-                    data=OpenEndedAnalysisData(
-                        summary="CVE eligibility check decided to skip "
-                        f"triaging: {state.cve_eligibility_result.reason}",
-                        recommendation="No action needed — this issue is not eligible for triage processing.",
-                        jira_issue=state.jira_issue,
-                    ),
-                )
-            return "comment_in_jira"
+                except Exception as e:
+                    logger.warning(f"Failed to post duplicate info comment: {e}")
+            return apply_cve_eligibility(state, force_cve_triage)
 
         async def run_triage_analysis(state):
-            """Run the main triage analysis"""
-            logger.info(f"Running triage analysis for {state.jira_issue}")
-
-            try:
-                jira_details = await run_tool(
-                    "get_jira_details",
-                    available_tools=gateway_tools,
-                    issue_key=state.jira_issue,
-                )
-                if not isinstance(jira_details, dict) or not isinstance(jira_details.get("fields"), dict):
-                    raise ValueError("Jira response did not include an issue fields object")
-            except Exception as error:
-                logger.warning("Could not prefetch Jira details for %s: %s", state.jira_issue, error)
-                jira_details = {}
-
-            fields = jira_details.get("fields", {})
-            fix_versions = fields.get("fixVersions") or []
-            fix_version_name = fix_versions[0].get("name") if fix_versions else None
-
-            input_data = InputSchema(issue=state.jira_issue)
-            state.is_rebase_sibling = (
-                state.is_rebase_sibling or get_rebase_primary_issue(jira_details) is not None
-            )
-            state.rebase_waiting_for_siblings = state.rebase_waiting_for_siblings or (
-                JiraLabels.WAITING_FOR_SIBLINGS.value in (fields.get("labels") or [])
-            )
-            state.jira_summary = fields.get("summary")
-            raw_component = fields.get(DOWNSTREAM_COMPONENT_CUSTOM_FIELD)
-            state.raw_downstream_component = raw_component or None
-            # Modular issues store "module:stream/package" (e.g. "postgresql:16/postgis");
-            # extract the package so is_modular() / parse_module_stream() match the summary.
-            state.downstream_component = extract_downstream_package(raw_component)
+            prompt, context = await prepare_triage_analysis(state, gateway_tools)
             triage_agent = triage_agent_factory(gateway_tools, local_tool_options)
-            prompt = await render_prompt(
-                input_data,
-                fix_version=fix_version_name,
-                cve_eligibility_result=state.cve_eligibility_result,
-                jira_summary=state.jira_summary,
-                downstream_component=state.downstream_component,
-            )
-            if jira_details:
-                prompt += f"\n\nJira issue data (JSON):\n{json.dumps(jira_details, ensure_ascii=False)}"
-            response = await run_pydantic_agent(
-                triage_agent,
-                prompt,
-                deps=TriageRunContext(state.jira_issue, fix_version_name, state.jira_summary),
-            )
-            state.triage_result = response.output
-
-            # postponed_y_stream is owned by the eligibility system (PENDING_DEPENDENCIES
-            # verdict). The LLM analysis node is only reached when eligibility returned
-            # IMMEDIATELY or force_cve_triage bypassed it — in both cases the eligibility
-            # tool has already decided the issue is not waiting on Z-stream clones.
-            # An LLM-asserted postponed_y_stream would be swept away immediately anyway,
-            # so coerce it to open-ended-analysis to surface the mismatch for review.
-            if state.triage_result.resolution == Resolution.POSTPONED_Y_STREAM:
-                logger.warning(
-                    "LLM emitted postponed_y_stream for %s, which is reserved for the "
-                    "eligibility system. Coercing to open-ended-analysis.",
-                    state.jira_issue,
-                )
-                state.triage_result = OutputSchema(
-                    resolution=Resolution.OPEN_ENDED_ANALYSIS,
-                    data=OpenEndedAnalysisData(
-                        summary=(
-                            "Triage agent identified a Y-stream/Z-stream dependency, "
-                            "but the eligibility system did not return PENDING_DEPENDENCIES. "
-                            "Manual review required."
-                        ),
-                        recommendation=(
-                            "Check whether Z-stream clones exist and their shipping status. "
-                            "If the dependency is genuine, the eligibility tool may need updating."
-                        ),
-                        jira_issue=state.jira_issue,
-                    ),
-                )
-
-            # postponed_pr_pending is only sweepable if the comment carries the
-            # PR/MR URL in blocker_references (PRPendingSweep polls that URL).
-            if (
-                state.triage_result.resolution == Resolution.POSTPONED_PR_PENDING
-                and not state.triage_result.data.blocker_references
-            ):
-                raise ValueError(
-                    f"LLM emitted postponed_pr_pending for {state.jira_issue} without a "
-                    "blocker MR/PR URL in blocker_references; retrying."
-                )
-
-            # Jira issue key in resolution data has been generated by LLM, make sure it's upper-case
-            state.triage_result.data.jira_issue = state.triage_result.data.jira_issue.upper()
-
-            # Normalize stale Y-stream fixVersion (e.g. rhel-9.8 → rhel-9.8.z after GA)
-            if hasattr(state.triage_result.data, "fix_version") and state.triage_result.data.fix_version:
-                rhel_config = await load_rhel_config()
-                state.triage_result.data.fix_version = normalize_fix_version(
-                    state.triage_result.data.fix_version, rhel_config
-                )
-            if state.triage_result.resolution == Resolution.REBASE:
-                return "verify_rebase_author"
-            if state.triage_result.resolution in [
-                Resolution.BACKPORT,
-                Resolution.REBUILD,
-            ]:
-                return "determine_target_branch"
-            if state.triage_result.resolution in [
-                Resolution.CLARIFICATION_NEEDED,
-                Resolution.OPEN_ENDED_ANALYSIS,
-                Resolution.NOT_AFFECTED,
-            ]:
-                return "comment_in_jira"
-            if state.triage_result.resolution in POSTPONED_RESOLUTIONS:
-                # Route postponed-rebuild CVEs through applicability to check
-                # if the CVE actually affects the package — if not, resolve as
-                # NOT_AFFECTED instead of waiting for the dependency to ship.
-                if (
-                    state.triage_result.data.package
-                    and state.cve_eligibility_result
-                    and state.cve_eligibility_result.is_cve
-                ):
-                    return "determine_target_branch"
-                return "comment_in_jira"
-            return None
+            response = await run_pydantic_agent(triage_agent, prompt, deps=context)
+            apply_triage_output(state, response.output)
+            await normalize_triage_version(state)
+            return next_after_triage_output(state)
 
         async def determine_target_branch_step(state):
-            """Determine target branch for rebase/backport decisions"""
-            logger.info(f"Determining target branch for {state.jira_issue}")
-
-            state.target_branch, state.dist_git_namespace = await determine_target_branch(
-                cve_eligibility_result=state.cve_eligibility_result,
-                triage_data=state.triage_result.data,
-                jira_summary=state.jira_summary,
-                downstream_component=state.downstream_component,
-            )
-
-            if state.target_branch:
-                logger.info(
-                    f"Target branch determined: {state.target_branch}"
-                    + (f" (namespace={state.dist_git_namespace})" if state.dist_git_namespace else "")
-                )
-            else:
-                logger.warning(f"Could not determine target branch for {state.jira_issue}")
-
-            package = getattr(state.triage_result.data, "package", None)
-            if package:
-                try:
-                    await _record_target_branch_existence(state, package, gateway_tools)
-                except Exception as e:
-                    logger.warning(f"Failed to check branches for {package}: {e}")
-                await _record_branch_creation_policy(state, package, gateway_tools)
-                await _record_auto_processing_policy(
-                    state, package, gateway_tools, user_triggered, triage_only_requested
-                )
-
-            if (
-                state.cve_eligibility_result
-                and state.cve_eligibility_result.is_cve
-                and state.triage_result.resolution
-                in (Resolution.BACKPORT, Resolution.REBUILD, Resolution.REBASE, *POSTPONED_RESOLUTIONS)
-            ):
-                return "check_cve_applicability"
-
-            if state.triage_result.resolution == Resolution.REBUILD:
-                return "consolidate_rebuild_siblings"
-            if state.triage_result.resolution == Resolution.REBASE:
-                return "consolidate_rebase_siblings"
-            return "comment_in_jira"
+            await resolve_triage_target(state, gateway_tools, user_triggered, triage_only_requested)
+            return next_after_triage_target(state)
 
         async def verify_rebase_author(state):
-            """Verify that the issue author is a Red Hat employee"""
-            logger.info(f"Verifying issue author for {state.jira_issue}")
-
-            is_rh_employee = await run_tool(
-                "verify_issue_author",
-                available_tools=gateway_tools,
-                issue_key=state.jira_issue,
-            )
-
-            issue_status = await run_tool(
-                "get_jira_details",
-                available_tools=gateway_tools,
-                issue_key=state.jira_issue,
-            )
-            issue_status = issue_status.get("fields", {}).get("status", {}).get("name")
-
-            if not is_rh_employee and issue_status == "New":
-                logger.warning(
-                    f"Issue author for {state.jira_issue} is not verified as "
-                    "RH employee - ending triage with clarification needed"
-                )
-
-                # override triage result with clarification needed so that it gets reviewed by us
-                state.triage_result = OutputSchema(
-                    resolution=Resolution.CLARIFICATION_NEEDED,
-                    data=ClarificationNeededData(
-                        findings="The rebase resolution was determined, but author verification failed.",
-                        additional_info_needed="Needs human review, as the issue "
-                        "author is not verified as a Red Hat employee.",
-                        jira_issue=state.jira_issue,
-                    ),
-                )
-
-                return "comment_in_jira"
-
-            logger.info(
-                f"Issue author for {state.jira_issue} verified as RH employee "
-                "or issue is not in new status - proceeding with rebase"
-            )
-
-            return "determine_target_branch"
+            employee, status = await read_rebase_author(state, gateway_tools)
+            return apply_rebase_author(state, employee, status)
 
         async def check_cve_applicability(state):
-            """Check if a CVE actually affects the package by analyzing source code."""
-            resolution = state.triage_result.resolution
-            package = state.triage_result.data.package
-            logger.info(
-                f"Checking CVE applicability for {state.jira_issue} ({resolution.value} of {package})"
-            )
-
-            if not state.target_branch:
-                logger.warning("No target branch — skipping applicability check")
-                return "comment_in_jira"
-
-            data = state.triage_result.data
-            cve_id = data.cve_id
-            dep_component = getattr(data, "dependency_component", None)
-            dep_issue_key = getattr(data, "dependency_issue", None)
-
-            patch_urls = getattr(data, "patch_urls", None) or []
-
-            # For z-stream branches, check if the branch actually exists.
-            # For older z-streams whose branch doesn't exist yet, resolve
-            # the base commit from Koji so we analyze the right source
-            # (not CentOS Stream, which may already contain the fix).
-            clone_branch = state.target_branch
-            base_ref = None
-            parsed = parse_rhel_version(state.target_branch)
-
-            # The initial branch-existence check runs while determining the
-            # target branch.  Retry it here when it was unavailable so a
-            # transient MCP failure does not suppress the fallback that the
-            # original applicability flow performed at this point.
-            if parsed and state.target_branch_exists is None:
-                try:
-                    await _record_target_branch_existence(state, package, gateway_tools)
-                except Exception as e:
-                    logger.warning(f"Failed to recheck branches for {package}: {e}")
-
-            if state.target_branch_exists is False and state.automatic_branch_creation_disabled is None:
-                await _record_branch_creation_policy(state, package, gateway_tools)
-
-            if parsed and state.target_branch_exists is False:
-                major_version = parsed[0]
-                try:
-                    older_zstream = await is_older_zstream(state.target_branch)
-                except Exception as e:
-                    logger.warning(f"Could not determine fallback branch for {state.target_branch}: {e}")
-                    older_zstream = None
-
-                if older_zstream is True:
-                    try:
-                        _, base_ref = await get_latest_candidate_build(package, state.target_branch)
-                        logger.info(
-                            f"Branch {state.target_branch} not found for {package}, "
-                            f"using base ref {base_ref} for applicability analysis"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Could not resolve base ref for {state.target_branch}: {e} — "
-                            f"skipping applicability check"
-                        )
-                        state.applicability_check_skipped = True
-                        if state.triage_result.resolution == Resolution.REBUILD:
-                            return "consolidate_rebuild_siblings"
-                        if state.triage_result.resolution == Resolution.REBASE:
-                            return "consolidate_rebase_siblings"
-                        return "comment_in_jira"
-                elif older_zstream is False:
-                    clone_branch = f"c{major_version}s"
-                    logger.info(
-                        f"Branch {state.target_branch} not found for {package}, "
-                        f"using {clone_branch} for applicability analysis"
-                    )
-
+            prepared, next_step = await prepare_cve_applicability(state, gateway_tools)
+            if prepared is None:
+                return next_step
+            cleanup["builddir"] = prepared.builddir
             try:
-                local_clone, unpacked_sources, prep_ok, builddir = await tasks.clone_and_prep_sources(
-                    package=package,
-                    dist_git_branch=clone_branch,
-                    available_tools=gateway_tools,
-                    jira_issue=state.jira_issue,
-                    ref=base_ref,
-                    dist_git_namespace=state.dist_git_namespace,
-                )
-            except Exception as e:
-                logger.warning(f"Could not prep sources for applicability check: {e}")
-                state.applicability_check_skipped = True
-                if state.triage_result.resolution == Resolution.REBUILD:
-                    return "verify_rebuild_buildroot"
-                if state.triage_result.resolution == Resolution.REBASE:
-                    return "consolidate_rebase_siblings"
-                return "comment_in_jira"
-
-            if not prep_ok:
-                logger.warning(f"Source prep failed for {package} — analyzing unpatched upstream source")
-
-            cleanup["builddir"] = builddir
-            state.applicability_local_clone = local_clone
-            state.applicability_unpacked_sources = unpacked_sources
-            state.applicability_used_fallback = not prep_ok
-
-            try:
-                patch_files = []
-                for idx, url in enumerate(patch_urls):
-                    try:
-                        content = await run_tool(
-                            patch_fetch_tool_name(url),
-                            patch_url=url,
-                            available_tools=gateway_tools,
-                        )
-                        patch_name = f"{state.jira_issue}-{idx}.patch"
-                        (local_clone / patch_name).write_text(content)
-                        patch_files.append(str(local_clone / patch_name))
-                    except Exception:
-                        logger.warning(f"Could not fetch patch from {url}")
-
-                applicability_tool_options: dict = {"working_directory": local_clone}
+                options = {"working_directory": prepared.local_clone}
                 if mock_env:
-                    applicability_tool_options["env"] = mock_env
-                applicability_agent = create_triage_applicability_agent(
-                    gateway_tools, applicability_tool_options
-                )
-                prompt = build_applicability_prompt(
-                    jira_issue=state.jira_issue,
-                    package=package,
-                    target_branch=state.target_branch,
-                    resolution=resolution,
-                    cve_id=cve_id,
-                    dep_component=dep_component,
-                    dep_issue_key=dep_issue_key,
-                    patch_files=patch_files,
-                    unpacked_sources=unpacked_sources,
-                    prep_ok=prep_ok,
-                )
-
-                response = await run_pydantic_agent(applicability_agent, prompt)
-                applicability = response.output
-                state.triage_result.confidence = applicability.confidence
-
-                if not applicability.is_affected:
-                    logger.info(
-                        f"CVE not applicable for {state.jira_issue}: {applicability.justification_category}"
-                    )
-                    explanation = applicability.explanation
-                    if state.applicability_used_fallback:
-                        explanation += (
-                            "\n\n_Note: RPM prep failed — analysis was performed on "
-                            "unpatched upstream source (Source0 only). Downstream "
-                            "patches were not applied._"
-                        )
-                    else:
-                        explanation += (
-                            "\n\n_Note: Analysis was performed on fully prepared "
-                            "sources (with downstream patches applied)._"
-                        )
-                    prior = state.triage_result.data
-                    state.triage_result = OutputSchema(
-                        resolution=Resolution.NOT_AFFECTED,
-                        confidence=applicability.confidence,
-                        data=NotAffectedData(
-                            justification_category=applicability.justification_category,
-                            explanation=explanation,
-                            jira_issue=state.jira_issue,
-                            package=getattr(prior, "package", None),
-                            cve_id=getattr(prior, "cve_id", None),
-                            fix_version=getattr(prior, "fix_version", None),
-                            triage_summary=getattr(prior, "triage_summary", None),
-                            patch_urls=getattr(prior, "patch_urls", None),
-                        ),
-                    )
-                    return "comment_in_jira"
-
-                logger.info(
-                    f"CVE confirmed applicable for {state.jira_issue}: {applicability.explanation[:100]}"
-                )
+                    options["env"] = mock_env
+                applicability_agent = create_triage_applicability_agent(gateway_tools, options)
+                response = await run_pydantic_agent(applicability_agent, prepared.prompt)
+                return apply_cve_applicability(state, response.output)
             except Exception as e:
                 logger.warning(f"Applicability check failed: {e}")
                 state.applicability_check_skipped = True
-
-            if state.triage_result.resolution == Resolution.REBUILD:
-                return "verify_rebuild_buildroot"
-            if state.triage_result.resolution == Resolution.REBASE:
-                return "consolidate_rebase_siblings"
-            return "comment_in_jira"
+                return next_after_cve_applicability(state)
 
         async def verify_rebuild_buildroot(state):
-            """Verify the dependency's fixed build is available in the target buildroot."""
-            data = state.triage_result.data
-            dep_issue_key = getattr(data, "dependency_issue", None)
-            dep_component = getattr(data, "dependency_component", None)
-
-            if not dep_issue_key or not dep_component or not state.target_branch:
-                logger.info("Missing dependency info or target branch — skipping buildroot check")
-                return "consolidate_rebuild_siblings"
-
-            dep_details = await run_tool(
-                "get_jira_details",
-                available_tools=gateway_tools,
-                issue_key=dep_issue_key,
-            )
-            fixed_in_build = dep_details.get("fields", {}).get(FIXED_IN_BUILD_CUSTOM_FIELD)
-            if not fixed_in_build:
-                logger.warning(f"Dependency {dep_issue_key} has no Fixed in Build — skipping buildroot check")
-                return "consolidate_rebuild_siblings"
-
-            # fix_version is already normalized by run_triage_analysis (e.g. rhel-9.8 → rhel-9.8.z)
-            fix_version = getattr(data, "fix_version", None) or ""
-
-            try:
-                in_buildroot = await check_build_in_buildroot(
-                    state.target_branch,
-                    dep_component,
-                    fixed_in_build,
-                    fix_version=fix_version,
-                )
-            except Exception as e:
-                logger.warning(f"Buildroot check failed for {dep_component} ({fixed_in_build}): {e}")
-                return "consolidate_rebuild_siblings"
-
-            if in_buildroot:
-                return "consolidate_rebuild_siblings"
-
-            logger.info(
-                f"Dependency {dep_component} ({fixed_in_build}) not in "
-                f"{state.target_branch} buildroot — postponing {state.jira_issue}"
-            )
-            state.triage_result = OutputSchema(
-                resolution=Resolution.POSTPONED_DEPENDENCY,
-                confidence=state.triage_result.confidence,
-                data=PostponedData(
-                    summary=(
-                        f"Rebuild of {data.package} waiting for {dep_component} "
-                        f"({fixed_in_build}) to land in {state.target_branch} buildroot"
-                    ),
-                    pending_issues=[dep_issue_key],
-                    jira_issue=state.jira_issue,
-                    blocker_references=[dep_issue_key],
-                    package=data.package,
-                    fix_version=data.fix_version,
-                    cve_id=data.cve_id,
-                    dependency_issue=dep_issue_key,
-                    dependency_component=dep_component,
-                ),
-            )
-            return "comment_in_jira"
+            return apply_rebuild_buildroot(state, await read_rebuild_buildroot(state, gateway_tools))
 
         async def consolidate_rebuild_siblings(state):
             """Find and analyze sibling issues that can share a single rebuild MR."""

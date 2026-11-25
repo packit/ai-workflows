@@ -14,6 +14,7 @@ dynamic = ["dependencies"]
 files = ["requirements-global.txt", "requirements.txt"]
 
 [project.optional-dependencies]
+temporal = ["temporalio==1.32.0", "uvicorn"]
 test = [
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",

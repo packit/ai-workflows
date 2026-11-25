@@ -58,7 +58,7 @@ x-beeai-agent-c9s: &beeai-agent-c9s
 x-beeai-agent-c10s: &beeai-agent-c10s
   <<: *beeai-agent
   image: beeai-agent:c10s
-  build:
+  build: &beeai-agent-c10s-build
     context: .
     dockerfile: Containerfile.c10s
     args:
@@ -290,9 +290,17 @@ services:
 
   triage-agent-e2e-tests:
     <<: *beeai-agent-c10s
+    image: beeai-agent:triage-e2e
+    build:
+      <<: *beeai-agent-c10s-build
+      target: triage-e2e
+    security_opt:
+      - label=disable
     environment:
       <<: *beeai-env
       MOCK_REPOS_DIR: /home/beeai/mock_repos/triage
+      TEMPORAL_TRIAGE_ADDRESS: ${TEMPORAL_TRIAGE_ADDRESS:-local}
+      PYTEST_ADDOPTS: ${TRIAGE_E2E_PYTEST_ARGS:-}
       # SAFETY: These MUST be set to prevent E2E tests from writing to production Jira.
       # Tests use real issue keys (e.g., RHEL-174694) and will post comments to
       # production if these are not enforced. The Makefile passes them via -e flags,

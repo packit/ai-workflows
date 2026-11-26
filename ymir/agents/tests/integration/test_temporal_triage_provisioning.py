@@ -24,12 +24,51 @@ from ymir.agents.temporal_worker_pods import (
     GATEWAY_URL,
     READY_FILE,
     OpenShiftPodProvisioner,
+    PodmanPodProvisioner,
     WorkerPod,
     WorkerPodConfig,
 )
 
 ADDRESS = os.getenv("TEMPORAL_TEST_ADDRESS")
 POD_TEMPLATE = Path("openshift/templates/temporal-worker-pod.yml")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("dry_run_only", "dry_run"), [(False, False), (False, True), (True, True)])
+async def test_podman_pod_passes_request_mode_to_both_containers(dry_run_only, dry_run):
+    provisioner = PodmanPodProvisioner(
+        ("podman-remote",),
+        "network",
+        {},
+        {},
+        "temporal:7233",
+        "testing",
+        "controller",
+        TRIAGE_WORKER_POD,
+        dry_run_only=dry_run_only,
+    )
+    launched = {}
+
+    async def launch(pod, slot, role, template, mounts, env, command):
+        launched[role] = env
+
+    async def reserve(pod):
+        return "slot"
+
+    async def create_volume(*args):
+        assert args[:2] == ("volume", "create")
+
+    flexmock(provisioner).should_receive("_slot").replace_with(reserve)
+    flexmock(provisioner).should_receive("_run").replace_with(create_volume)
+    flexmock(provisioner).should_receive("_container").replace_with(launch)
+    pod = WorkerPod("ymir-triage-fixture", "RHEL-987654", dry_run)
+    await provisioner.create(pod)
+    assert launched["worker"]["TEMPORAL_TASK_QUEUE"] == pod.task_queue
+    assert launched["worker"]["MCP_GATEWAY_URL"] == GATEWAY_URL
+    assert launched["gateway"]["MCP_BIND_HOST"] == "127.0.0.1"
+    for env in launched.values():
+        assert (env.get("JIRA_DRY_RUN") == "true") == dry_run
+        assert (env.get("MOCK_JIRA") == "true") == dry_run_only
 
 
 def test_openshift_pod_shares_only_one_execution_workspace():
@@ -94,7 +133,6 @@ def test_shared_template_accepts_workflow_specific_settings():
 async def test_provisioning_cleans_up_after_failure(failure, monkeypatch):
     monkeypatch.setenv("CHAT_MODEL", "test")
     monkeypatch.delenv("CHAT_MODEL_TRIAGE", raising=False)
-    monkeypatch.setenv("TEMPORAL_TRIAGE_INLINE", "false")
     monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
     created = asyncio.Event()
     started = []

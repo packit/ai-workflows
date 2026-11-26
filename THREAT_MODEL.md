@@ -44,11 +44,14 @@ the Temporal namespace because its history also contains proposed writes and
 downstream payloads.
 
 The Temporal triage control worker provisions execution pods using the configured
-OpenShift identity or the local rootless Podman API. The E2E launcher creates a
-temporary Unix socket and mounts it only into the test controller. It removes the
-socket and its labelled test pods and volumes at exit. Each execution pod uses
-a private workspace and a loopback MCP gateway. Provider credentials go to the
-worker, and the gateway receives the existing Jira and packaging credentials.
+OpenShift identity or the local Podman API. The Compose, CLI, and E2E
+controllers mount the host user's rootless Podman socket. On a rootful TMT
+guest, the E2E controller mounts the guest's system Podman socket. Socket
+access grants control over that Podman instance. Each local controller cleans
+up its labelled pods and volumes on shutdown. Each execution pod uses a
+private workspace and a loopback MCP gateway. Provider
+credentials go to the worker, and the gateway receives the existing Jira and
+packaging credentials.
 Execution pods have service account token automounting disabled in OpenShift.
 
 Jira discovery, the CLI, and postponed-issue sweeps submit triage directly

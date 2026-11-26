@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 import shutil
+import signal
+import socket
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from importlib.util import find_spec
@@ -478,6 +480,11 @@ async def run_temporal_cases(cases: list[TriageAgentTestCase], address: str) -> 
             case.metrics["duration"] = monotonic() - start
 
     async with AsyncExitStack() as stack:
+        task = asyncio.current_task()
+        assert task is not None
+        loop = asyncio.get_running_loop()
+        loop.add_signal_handler(signal.SIGTERM, task.cancel)
+        stack.callback(loop.remove_signal_handler, signal.SIGTERM)
         if address == "local":
             if not (temporal_cli := shutil.which("temporal")):
                 raise RuntimeError("The local Temporal E2E runner requires the temporal CLI")
@@ -491,13 +498,15 @@ async def run_temporal_cases(cases: list[TriageAgentTestCase], address: str) -> 
             client = environment.client
         else:
             client = await Client.connect(address, **client_options)
-        provisioner = await PodmanPodProvisioner.for_e2e(
-            os.environ["YMIR_E2E_CONTROLLER"],
+        provisioner = await PodmanPodProvisioner.from_compose(
+            socket.gethostname(),
             client.service_client.config.target_host,
             client.namespace,
             TRIAGE_WORKER_POD,
-            local=address == "local",
+            temporal_in_controller=address == "local",
+            dry_run_only=True,
         )
+        stack.push_async_callback(provisioner.cleanup)
         async with create_triage_control_worker(client, queue, provisioner):
             await asyncio.gather(*(run(case, client) for case in cases))
 

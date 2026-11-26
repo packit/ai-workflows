@@ -65,7 +65,8 @@ class TriagePublicationRequest:
     request_id: str
     dry_run: bool = True
     enqueue_reproducer: bool = False
-    provision_pod: bool = False
+    # Older Temporal histories recorded False for requests run inline.
+    provision_pod: bool = True
     # Preserve the mode recorded in older Temporal activity results for replay.
     coordinate: bool = True
 

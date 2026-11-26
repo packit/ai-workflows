@@ -28,6 +28,7 @@ only need to clone it once; the tests run entirely offline against the local cop
 ### Running
 
 ```bash
+systemctl --user start podman.socket
 make run-triage-agent-e2e-tests
 make run-backport-agent-e2e-tests
 ```
@@ -36,9 +37,10 @@ Both targets hardcode `MOCK_JIRA=true` and `DRY_RUN=true`. The mock Jira files a
 so without `DRY_RUN=true` the agent would write comments back to them and corrupt the fixtures
 on subsequent runs.
 
-The triage target requires rootless Podman. Its test controller starts a local
-Temporal server and provisions a separate dry-run pod per case. Up to three
-pods can run at once, each with its own worker, local gateway, and workspace.
+Local triage E2E runs use the rootless Podman socket. The TMT runner starts
+its guest's Podman socket before running the suite. The test controller starts
+a local Temporal server and provisions a separate dry-run pod per case. Up to
+three pods can run at once, each with its own worker, local gateway, and workspace.
 
 ## Merging Policy
 

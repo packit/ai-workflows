@@ -64,10 +64,8 @@ async def create_analysis_worker(
     model: Model,
     *,
     gateway_connection_attempts: int = 1,
-    ingress: bool = False,
 ) -> Worker:
     plugins = await analysis.configure_triage_agents(model, gateway_connection_attempts)
-    workflows = [analysis.TriageAnalysisWorkflow]
     activities = [
         analysis.read_eligibility,
         analysis.prepare_publication_analysis,
@@ -79,19 +77,14 @@ async def create_analysis_worker(
         analysis.read_buildroot,
         *PUBLICATION_ACTIVITIES,
     ]
-    if ingress:
-        workflows.extend(CONTROL_WORKFLOWS)
-        activities.extend(_control_activities(client, task_queue))
     return Worker(
         client,
         task_queue=task_queue,
-        workflows=workflows,
-        activities=list(dict.fromkeys(activities)),
+        workflows=[analysis.TriageAnalysisWorkflow],
+        activities=activities,
         plugins=plugins,
         workflow_runner=SandboxedWorkflowRunner(
-            restrictions=SandboxRestrictions.default.with_passthrough_modules(
-                *(definition.__module__ for definition in workflows)
-            )
+            restrictions=SandboxRestrictions.default.with_passthrough_modules(analysis.__name__)
         ),
     )
 

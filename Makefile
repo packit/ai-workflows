@@ -82,7 +82,7 @@ run-triage-agent-e2e-tests:
 	# comments to production. Setting them in the environment (not just -e flags)
 	# ensures dependent services like mcp-gateway pick them up via ${VAR:-default}.
 	# The conftest.py enforces this in the test container itself.
-	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true scripts/run-compose-with-backend.py scripts/run-worker-e2e-podman.py triage $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm --build \
+	MOCK_JIRA=true DRY_RUN=true ALLOW_RHEL_CONFIG_OVERRIDE=true scripts/run-compose-with-backend.py $(COMPOSE) -f $(COMPOSE_FILE) --profile=e2e-test run --rm --build \
 		-e MOCK_JIRA="true" \
 		-e DRY_RUN="true" \
 		triage-agent-e2e-tests

@@ -30,7 +30,7 @@ from temporalio.exceptions import ApplicationError
 from ymir.agents import temporal_package_coordination as coordination
 from ymir.agents import temporal_triage_publication as publication
 from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow, prepare_triage_intent
-from ymir.agents.temporal_triage_worker import create_analysis_worker
+from ymir.agents.temporal_triage_worker import create_analysis_worker, create_triage_control_worker
 
 ADDRESS = os.getenv("TEMPORAL_TEST_ADDRESS")
 REDIS_URL = os.getenv("TEMPORAL_TEST_REDIS_URL")
@@ -54,7 +54,6 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
     monkeypatch.setenv("AUTO_CHAIN", "true")
     monkeypatch.setenv("TRIAGE_ENQUEUE_REPRODUCER", "false")
     monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
-    monkeypatch.setenv("TEMPORAL_TRIAGE_INLINE", "true")
     monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
     config = tmp_path / "rhel-config.json"
     config.write_text(json.dumps({"current_y_streams": {"9": "rhel-9.9"}, "current_z_streams": {}}))
@@ -210,6 +209,22 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
     first_request = await prepare_triage_intent(first)
     triage_only_request = await prepare_triage_intent(triage_only)
 
+    class TestPods:
+        def __init__(self):
+            self.workers = {}
+
+        async def create(self, pod):
+            worker = await create_analysis_worker(client, pod.task_queue, FunctionModel(model_response))
+            await worker.__aenter__()
+            self.workers[pod.name] = worker
+
+        async def ready(self, pod):
+            return pod.name in self.workers
+
+        async def delete(self, pod):
+            if worker := self.workers.pop(pod.name, None):
+                await worker.__aexit__(None, None, None)
+
     async def submit(intent, *, wait=True):
         return await asyncio.wait_for(submit_triage_intent(client, intent, task_queue=queue, wait=wait), 25)
 
@@ -223,9 +238,7 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
             async with asyncio.timeout(5):
                 while not server.started:
                     await asyncio.sleep(0.01)
-            async with await create_analysis_worker(
-                client, queue, FunctionModel(model_response), ingress=True
-            ):
+            async with create_triage_control_worker(client, queue, TestPods()):
                 assert await submit(first, wait=False) == "accepted"
                 await asyncio.wait_for(model_started.wait(), timeout=15)
                 run_id = (await issue_handle.describe()).run_id

@@ -50,36 +50,16 @@ class TestDetectComposeCmd:
         result = detect_compose_cmd()
         assert result == ["/usr/bin/podman-compose"]
 
-    def test_docker_compose(self):
-        flexmock(subprocess).should_receive("run").once().with_args(
-            ["/usr/bin/docker", "compose", "version"],
-            capture_output=True,
-            check=True,
-        ).and_return(flexmock(returncode=0))
+    def test_docker_alone_cannot_provision_podman_pods(self):
         flexmock(shutil).should_receive("which").replace_with(mock_shutil_which_docker)
-
-        result = detect_compose_cmd()
-        assert result == ["/usr/bin/docker", "compose"]
-
-    def test_docker_compose_standalone(self):
-        def which_docker_standalone_only(cmd: str):
-            if cmd == "docker":
-                return "/usr/bin/docker"
-            if cmd == "docker-compose":
-                return "/usr/bin/docker-compose"
-            return None
-
-        flexmock(subprocess).should_receive("run").and_raise(FileNotFoundError)
-        flexmock(shutil).should_receive("which").replace_with(which_docker_standalone_only)
-
-        result = detect_compose_cmd()
-        assert result == ["/usr/bin/docker-compose"]
+        with pytest.raises(RuntimeError, match="requires Podman"):
+            detect_compose_cmd()
 
     def test_no_runtime_raises(self):
         flexmock(subprocess).should_receive("run").and_raise(FileNotFoundError)
         flexmock(shutil).should_receive("which").and_return(None)
 
-        with pytest.raises(RuntimeError, match="No compose tool found"):
+        with pytest.raises(RuntimeError, match="requires Podman"):
             detect_compose_cmd()
 
 

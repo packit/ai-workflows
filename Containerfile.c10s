@@ -157,10 +157,12 @@ CMD ["/bin/bash"]
 
 FROM agent AS temporal-worker
 
-FROM temporal-worker AS triage-e2e
-COPY --from=temporal-cli /usr/local/bin/temporal /usr/local/bin/temporal
+FROM temporal-worker AS podman-controller
 USER root
 RUN dnf -y install podman-remote && dnf clean all
 USER beeai
+
+FROM podman-controller AS triage-e2e
+COPY --from=temporal-cli /usr/local/bin/temporal /usr/local/bin/temporal
 
 FROM agent AS runtime

@@ -19,13 +19,9 @@ STOPPABLE_SERVICES = ["triage-cli", "mcp-gateway-cli"]
 def detect_compose_cmd() -> list[str]:
     """Detect and return available compose command.
 
-    Mirrors the detection logic in the Makefile:
-    podman compose > podman-compose > docker compose > docker-compose
+    The Compose containers and execution pods must share one Podman runtime.
     """
-    for runtime in ("podman", "docker"):
-        runtime_path = shutil.which(runtime)
-        if not runtime_path:
-            continue
+    if runtime_path := shutil.which("podman"):
         try:
             subprocess.run(  # noqa: S603
                 [runtime_path, "compose", "version"],
@@ -36,13 +32,10 @@ def detect_compose_cmd() -> list[str]:
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
-        if standalone := shutil.which(f"{runtime}-compose"):
+        if standalone := shutil.which("podman-compose"):
             return [standalone]
 
-    raise RuntimeError(
-        "No compose tool found. Install one of: "
-        "podman compose, podman-compose, docker compose, docker-compose"
-    )
+    raise RuntimeError("The Compose-backed triage CLI requires Podman with a Compose provider")
 
 
 @cache

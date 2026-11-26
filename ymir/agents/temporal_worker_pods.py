@@ -1,4 +1,4 @@
-"""Per-run Temporal worker pods on OpenShift and in Podman E2E tests."""
+"""Per-run Temporal worker pods on OpenShift and local Podman."""
 
 import asyncio
 import json
@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
+from urllib.parse import urlsplit
 
 import aiohttp
 import yaml
@@ -34,6 +35,13 @@ GATEWAY_MOUNTS = {
     "/home/mcp/ymir/tools",
     "/home/mcp/ymir/common",
     "/home/mcp/ymir/tools/privileged/tests/data",
+    "/home/mcp/keytab",
+    "/home/mcp/rhel-config.json",
+    "/home/mcp/konflux-token",
+}
+CHOWN_MOUNTS = {
+    "/home/beeai/rhel-config.json",
+    "/home/beeai/jotnar-vertex-dev.json",
     "/home/mcp/keytab",
     "/home/mcp/rhel-config.json",
     "/home/mcp/konflux-token",
@@ -118,7 +126,7 @@ def _worker_env(pod: WorkerPod, config: WorkerPodConfig, address: str, namespace
 
 
 class PodmanPodProvisioner:
-    """Reserve three Podman slots across E2E invocations for each workflow."""
+    """Reserve three Podman slots across local controllers for each workflow."""
 
     def __init__(
         self,
@@ -130,6 +138,8 @@ class PodmanPodProvisioner:
         namespace: str,
         suite: str,
         config: WorkerPodConfig,
+        *,
+        dry_run_only: bool = False,
     ):
         self.command = command
         self.network = network
@@ -139,34 +149,57 @@ class PodmanPodProvisioner:
         self.namespace = namespace
         self.suite = suite
         self.config = config
+        self.dry_run_only = dry_run_only
         self.suite_label = f"ymir-{config.workflow}-suite"
         self.slots = [f"ymir-{config.workflow}-slot-{i + 1}" for i in range(PODMAN_LIMIT)]
         self.lock = asyncio.Lock()
 
     @classmethod
-    async def for_e2e(
-        cls, controller: str, endpoint: str, namespace: str, config: WorkerPodConfig, *, local: bool
+    async def from_compose(
+        cls,
+        controller: str,
+        endpoint: str,
+        namespace: str,
+        config: WorkerPodConfig,
+        *,
+        temporal_in_controller: bool = False,
+        dry_run_only: bool = False,
     ):
         command = ("podman-remote", "--url", os.environ["YMIR_PODMAN_URL"])
         _, raw = await _command(*command, "container", "inspect", controller)
         worker = json.loads(raw)[0]
         network, settings = next(iter(worker["NetworkSettings"]["Networks"].items()))
-        if local:
+        if temporal_in_controller:
             endpoint = f"{settings['IPAddress']}:{endpoint.rsplit(':', 1)[1]}"
         project = worker["Config"]["Labels"]["com.docker.compose.project"]
+        env = dict(entry.split("=", 1) for entry in worker["Config"]["Env"])
+        gateway_service = urlsplit(env["MCP_GATEWAY_URL"]).hostname
         _, raw = await _command(
             *command,
             "ps",
             "--filter",
             f"label=com.docker.compose.project={project}",
             "--filter",
-            "label=com.docker.compose.service=mcp-gateway",
+            f"label=com.docker.compose.service={gateway_service}",
             "--format",
             "{{.ID}}",
         )
-        (gateway_id,) = raw.split()
+        gateway_ids = raw.split()
+        if len(gateway_ids) != 1:
+            raise ContainerCommandError(f"Expected one running {gateway_service} service in {project}")
+        (gateway_id,) = gateway_ids
         _, raw = await _command(*command, "container", "inspect", gateway_id)
-        return cls(command, network, worker, json.loads(raw)[0], endpoint, namespace, controller, config)
+        return cls(
+            command,
+            network,
+            worker,
+            json.loads(raw)[0],
+            endpoint,
+            namespace,
+            worker["Name"].lstrip("/"),
+            config,
+            dry_run_only=dry_run_only,
+        )
 
     async def _run(self, *args: str, check: bool = True):
         return await _command(*self.command, *args, check=check)
@@ -192,7 +225,7 @@ class PodmanPodProvisioner:
             if labels.get(self.config.execution_label) == pod.name:
                 return slot
             suite, execution = labels.get(self.suite_label), labels.get(self.config.execution_label)
-            if suite and suite.startswith(f"ymir-{self.config.workflow}-e2e-") and execution:
+            if suite and execution:
                 controller = await self._inspect("container", suite)
                 if controller is None or not controller["State"]["Running"]:
                     await self._run("pod", "rm", "--force", "--ignore", state["Id"])
@@ -236,15 +269,19 @@ class PodmanPodProvisioner:
         for key in (
             "HOSTNAME",
             "YMIR_PODMAN_URL",
-            "YMIR_E2E_CONTROLLER",
             f"TEMPORAL_{self.config.workflow.upper().replace('-', '_')}_ADDRESS",
         ):
             config.pop(key, None)
         config.update(env)
         args = []
         for entry in template["Mounts"]:
-            if entry["Destination"] in mounts:
-                args.extend(("-v", f"{entry['Source']}:{entry['Destination']}:ro,z"))
+            target = entry["Destination"]
+            if target in mounts:
+                mode = "rw" if not self.dry_run_only and entry.get("RW") else "ro"
+                options = f"{mode},z"
+                if target in CHOWN_MOUNTS:
+                    options += ",U"
+                args.extend(("-v", f"{entry['Source']}:{target}:{options}"))
         # The remote CLI reads the env file on the controller. Keep credentials
         # out of OS command arguments and never mount the controller socket.
         with tempfile.NamedTemporaryFile(mode="w") as env_file:
@@ -272,7 +309,7 @@ class PodmanPodProvisioner:
             )
 
     async def create(self, pod: WorkerPod) -> None:
-        if not pod.dry_run:
+        if self.dry_run_only and not pod.dry_run:
             raise ApplicationError("Local E2E pods require dry-run requests", non_retryable=True)
         while True:
             async with self.lock:
@@ -288,12 +325,11 @@ class PodmanPodProvisioner:
                     break
             activity.heartbeat()
             await asyncio.sleep(POLL_SECONDS)
-        common = {
-            "DRY_RUN": "true",
-            "JIRA_DRY_RUN": "true",
-            "MOCK_JIRA": "true",
-            "GIT_REPO_BASEPATH": WORKSPACE,
-        }
+        common = {"GIT_REPO_BASEPATH": WORKSPACE}
+        if pod.dry_run:
+            common.update(DRY_RUN="true", JIRA_DRY_RUN="true")
+        if self.dry_run_only:
+            common.update(MOCK_JIRA="true", ALLOW_RHEL_CONFIG_OVERRIDE="true")
         await self._container(
             pod,
             slot,
@@ -306,7 +342,6 @@ class PodmanPodProvisioner:
                 "MCP_BIND_HOST": "127.0.0.1",
                 "SSE_PORT": "8000",
                 "GIT_CONFIG_GLOBAL": f"{WORKSPACE}/.mock_gitconfig",
-                "ALLOW_RHEL_CONFIG_OVERRIDE": "true",
             },
             ("python", "-m", "ymir.tools.privileged.gateway"),
         )
@@ -349,6 +384,15 @@ class PodmanPodProvisioner:
             code, _ = await self._run("volume", "rm", name, check=False)
             if code and await self._inspect("volume", name):
                 raise ContainerCommandError(f"Could not remove worker workspace {name}")
+
+    async def cleanup(self) -> None:
+        """Remove resources owned by this controller before Compose removes its network."""
+        for resource in ("pod", "volume"):
+            _, raw = await self._run(
+                resource, "ls", "-q", "--filter", f"label={self.suite_label}={self.suite}"
+            )
+            if ids := raw.split():
+                await self._run(resource, "rm", "--force", *ids)
 
 
 class InClusterPodAPI:

@@ -1,5 +1,15 @@
 #!/bin/sh
 
+if [ "$(id -u)" -eq 0 ]; then
+    export YMIR_E2E_USERNS=host
+    if [ -z "${YMIR_PODMAN_SOCKET:-}" ]; then
+        systemctl start podman.socket || exit $?
+        export YMIR_PODMAN_SOCKET=/run/podman/podman.sock
+    fi
+elif [ -z "${YMIR_PODMAN_SOCKET:-}" ]; then
+    systemctl --user start podman.socket || exit $?
+fi
+
 touch ${TMT_TEST_DATA}/results.yaml
 
 # Run the tests

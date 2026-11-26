@@ -148,9 +148,6 @@ services:
 
   mcp-gateway-cli:
     <<: *mcp-gateway
-    # keep-id maps the host UID into the container so git clones written to
-    # the bind-mounted GIT_REPOS_HOST directory are owned by the calling user.
-    userns_mode: keep-id
     ports:
       - "127.0.0.1:8000:8000"
     restart: "no"
@@ -258,18 +255,33 @@ services:
 
   triage-controller: &triage-controller
     <<: *beeai-agent-c10s
-    image: beeai-agent:triage-controller
+    image: beeai-agent:triage-podman-controller
     build:
       <<: *beeai-agent-c10s-build
-      target: temporal-worker
+      target: podman-controller
+    # Map the socket owner on the host to the worker user in the controller.
+    userns_mode: "keep-id:uid=1000,gid=1000"
+    security_opt:
+      - label=disable
     depends_on:
       mcp-gateway: {condition: service_started}
       valkey: {condition: service_started}
       otel-collector: {condition: service_started}
       temporal: {condition: service_healthy}
-    environment:
+    environment: &triage-podman-env
       <<: *beeai-env
-      TEMPORAL_TRIAGE_INLINE: "true"
+      YMIR_PODMAN_URL: unix:///run/ymir-podman.sock
+      MOCK_JIRA: ${MOCK_JIRA:-false}
+    volumes:
+      - ./ymir:/home/beeai/ymir:ro,z
+      - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z
+      - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z
+      - &triage-podman-socket
+        type: bind
+        source: ${YMIR_PODMAN_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/1000}/podman/podman.sock}
+        target: /run/ymir-podman.sock
+        bind:
+          create_host_path: false
     command: ["python3", "-m", "ymir.agents.temporal_triage_service"]
     profiles: ["agents"]
 
@@ -280,19 +292,12 @@ services:
       valkey: {condition: service_started}
       trace-server: {condition: service_started}
       temporal: {condition: service_healthy}
-    userns_mode: keep-id
     environment:
-      <<: *beeai-env
-      TEMPORAL_TRIAGE_INLINE: "true"
+      <<: *triage-podman-env
       TEMPORAL_NAMESPACE: ymir-cli
       MCP_GATEWAY_URL: http://mcp-gateway-cli:8000/sse
       COLLECTOR_ENDPOINT: http://trace-server:8080/v1/traces
       GOOGLE_APPLICATION_CREDENTIALS: /home/beeai/jotnar-vertex-dev.json
-    volumes:
-      - ./ymir:/home/beeai/ymir:ro,z
-      - ${GIT_REPOS_HOST:-git-repos}:${GIT_REPO_BASEPATH:-/git-repos}:rw,z
-      - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z
-      - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z
     restart: "no"
     profiles: ["cli"]
 
@@ -323,10 +328,14 @@ services:
     build:
       <<: *beeai-agent-c10s-build
       target: triage-e2e
+    userns_mode: "${YMIR_E2E_USERNS:-keep-id:uid=1000,gid=1000}"
+    # The system Podman socket on a rootful TMT guest is owned by root:root.
+    group_add:
+      - "0"
     security_opt:
       - label=disable
     environment:
-      <<: *beeai-env
+      <<: *triage-podman-env
       MOCK_REPOS_DIR: /home/beeai/mock_repos/triage
       TEMPORAL_TRIAGE_ADDRESS: ${TEMPORAL_TRIAGE_ADDRESS:-local}
       ALLOW_RHEL_CONFIG_OVERRIDE: ${ALLOW_RHEL_CONFIG_OVERRIDE:-false}
@@ -343,10 +352,11 @@ services:
     volumes:  # YAML doesn't support list concatenation
       - ./ymir:/home/beeai/ymir:ro,z
       - git-repos:/git-repos:rw,U
-      - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z,U
-      - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z,U
+      - .secrets/rhel-config.json:/home/beeai/rhel-config.json:ro,z
+      - .secrets/jotnar-vertex-dev.json:/home/beeai/jotnar-vertex-dev.json:ro,z
       - ${MOCK_REPOS_HOST:-./ymir/agents/tests/e2e/mock_repos}:/home/beeai/mock_repos:ro,z
       - ${TMT_TEST_DATA:-./.tmt}/results.yaml:/home/beeai/results.yaml:rw,z,U
+      - *triage-podman-socket
     # the option about default loop is here because of litellm issue
     # https://github.com/BerriAI/litellm/issues/14521
     command:

@@ -111,7 +111,7 @@ def triage(
     work_dir: str | None = typer.Option(
         None,
         "--work-dir",
-        help="Directory for working files (git clones). Created as a temp dir if not specified.",
+        help="Directory for triage results. Created as a temp dir if not specified.",
     ),
     request_id: Annotated[
         str | None,
@@ -198,7 +198,6 @@ def triage(
         issue_upper = issue.strip().upper()
         dry_run = dry_run or os.getenv("JIRA_DRY_RUN", "").lower() == "true"
         os.environ["DRY_RUN"] = "true" if dry_run else "false"
-        os.environ["GIT_REPOS_HOST"] = str(work_dir_path)
 
         agent_failed = False
         try:

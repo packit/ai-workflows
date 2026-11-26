@@ -10,7 +10,7 @@ See [README.md](README.md) for general notes about setting up the development en
 
 Both agent images run catatonit as PID 1. It forwards signals to the agent and
 reaps orphaned subprocesses after they exit. Agents remain persistent queue
-workers; automatic recycling and a per-task pod model are not enabled.
+workers for the Redis workflows. Temporal triage uses a worker pod per request.
 
 CI runs `python3 scripts/check_agent_init.py` to verify that OpenShift agent
 containers preserve the image entrypoint. This YAML check requires PyYAML.
@@ -494,12 +494,14 @@ Use commas to delimit multiple patch/commit URLs in `UPSTREAM_PATCHES`.
 
 ### Test Temporal triage
 
-The live-model E2E suite submits through Temporal triage ingress in dry-run mode
-using rootless Podman. The controller starts its own Temporal development
-server. Each case gets its own pod, Temporal task queue, worker, loopback MCP
+The live-model E2E suite submits through Temporal triage ingress in dry-run
+mode. For a local run, start the rootless Podman socket with
+`systemctl --user start podman.socket`. The controller starts its own
+Temporal development server. Each case gets its own pod, Temporal task queue, worker, loopback MCP
 gateway, and writable workspace. Each worker prepares its own mock repositories.
 The local limit is three active triage pods, shared across test invocations.
-The controller removes each pod and workspace when its case finishes. Set up
+The controller removes each pod and workspace when its case finishes and
+cleans up its remaining pods and volumes if interrupted. Set up
 the existing Jira and repository fixtures, then run the Make target. The metrics
 table reports `TemporalTriageIngress` for the cases it ran.
 [E2E fixture setup](CONTRIBUTING.md)
@@ -525,11 +527,19 @@ TEMPORAL_TEST_ADDRESS=127.0.0.1:7233 TEMPORAL_TEST_REDIS_URL=redis://127.0.0.1:6
 
 Jira discovery, sweeps, the CLI, and retries submit directly to the issue
 workflow `triage/<JIRA-KEY>`. The shared worker runs Temporal task queues.
-OpenShift provisions a dedicated worker and gateway pod for each execution.
-Local Compose provides an inline worker for the development pipeline and
-standalone Make target.
-The mock Jira E2E target uses its own Temporal server and up to three Podman
-execution pods.
+OpenShift and local Compose provision a dedicated worker and gateway pod for
+each request. The local Compose pipeline, standalone Make target, and
+Compose-backed CLI and E2E tests use the host's rootless Podman API locally.
+Start the user socket before using these entry points:
+
+```bash
+systemctl --user start podman.socket
+```
+
+Compose mounts `${XDG_RUNTIME_DIR}/podman/podman.sock` into the triage
+controller. Set `YMIR_PODMAN_SOCKET` when using a different socket for the
+same Podman instance. The limit of three active triage pods is shared by
+local controllers and E2E invocations.
 
 The OpenShift worker-pod template supplies the shared workspace and loopback
 MCP gateway. A workflow's controller supplies `WorkerPodConfig` with its
@@ -537,8 +547,7 @@ worker module and image, and can override the deadline, resources, environment,
 and gateway secret references. The worker module uses `serve_worker_pod` to
 connect to Temporal, prepare the workspace, and report readiness. The workflow
 registers its own Activities and uses `run_in_worker_pod` to provision,
-monitor, and clean up the pod. The Podman E2E launcher takes the workflow name
-and starts its Compose test controller with a temporary socket.
+monitor, and clean up the pod.
 [Worker-pod template](openshift/templates/temporal-worker-pod.yml)
 
 An acknowledgement records the manual request ID and mode in Jira. The
@@ -661,10 +670,10 @@ The `ymir` CLI starts a triage controller and its infrastructure through
 `compose.yaml` when you run it without `TEMPORAL_ADDRESS`.
 
 - **temporal** runs the development server and exposes the UI at `http://localhost:8235`.
-- **triage-cli** runs the shared triage worker in the `ymir-cli` namespace so
-  CLI requests use the gateway and workspace selected by the CLI.
-- **mcp-gateway-cli** (port 8000) — provides Jira, GitLab, and dist-git tools via
-  MCP over SSE. Uses `keep-id` UID mapping for host filesystem access.
+- **triage-cli** runs the control worker in the `ymir-cli` namespace and starts
+  a Podman execution pod for each request.
+- **mcp-gateway-cli** (port 8000) provides the controller's MCP gateway and the
+  image and settings for each execution pod's gateway.
 - **trace-server** (port 8082) — collects OpenTelemetry spans and serves a
   trace viewer UI.
 - **valkey** — stores temporary delivery receipts for local publication.
@@ -687,7 +696,8 @@ These services are defined in `compose.yaml` under the `cli` profile.
 2. When using Vertex AI models (`vertexai:` prefix in `CHAT_MODEL`), place the
    service account key in `.secrets/jotnar-vertex-dev.json`.
 
-3. Install the CLI into a virtual environment:
+3. Start the rootless Podman socket with `systemctl --user start podman.socket`
+   and install the CLI into a virtual environment:
 
    ```bash
    python -m venv .venv
@@ -702,9 +712,10 @@ These services are defined in `compose.yaml` under the `cli` profile.
 ymir RHEL-12345 --dry-run
 ```
 
-The CLI stops its worker and `mcp-gateway-cli` when the request finishes.
-Temporal, the trace server, and Valkey stay up. Select `ymir-cli` in the
-Temporal UI to see the CLI workflow history.
+Temporal removes the execution pod before the CLI receives its result. The
+CLI then stops `triage-cli` and `mcp-gateway-cli`. Temporal, the trace server,
+and Valkey stay up. Select `ymir-cli` in the Temporal UI to see the workflow
+history.
 
 The `--compose-file` option defaults to `compose.yaml` in the current
 directory. Pass a different path if running from elsewhere:
@@ -721,7 +732,7 @@ ymir RHEL-12345 --dry-run --compose-file /path/to/compose.yaml
 | `--force-cve-triage` | Force triage even when CVE eligibility check says to skip. |
 | `--secrets PATH` | Path to secrets directory (default: `.secrets`). |
 | `--compose-file PATH` | Path to compose.yaml for infrastructure containers (default: `compose.yaml`). |
-| `--work-dir PATH` | Directory for working files (git clones, triage results). A temporary directory is created if not specified. |
+| `--work-dir PATH` | Directory for the triage result JSON. A temporary directory is created if not specified. Each execution pod uses a separate temporary workspace for its clones. |
 | `--mock-jira PATH` | Path to mock Jira data directory. Sets `MOCK_JIRA=true` and configures the mock data path for the gateway container. |
 
 `--dry-run` and `--force-cve-triage` override any existing `DRY_RUN` /

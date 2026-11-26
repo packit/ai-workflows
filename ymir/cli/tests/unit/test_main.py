@@ -301,54 +301,20 @@ class TestTriageContainerLifecycle:
         assert work_dir.exists()
 
 
-class TestWorkDirEnv:
-    """--work-dir controls GIT_REPOS_HOST for compose bind-mount."""
-
-    def test_default_tmpdir_sets_git_repos_host(self, tmp_path):
-        """Without --work-dir, an auto-created temp dir drives GIT_REPOS_HOST."""
+class TestWorkDir:
+    def test_work_dir_does_not_override_compose_mounts(self, tmp_path):
         secrets_dir = _make_secrets(tmp_path)
-        captured_env = {}
+        work_dir = tmp_path / "results"
 
-        def _capture_env(*_args, **_kwargs):
-            captured_env["GIT_REPOS_HOST"] = os.environ.get("GIT_REPOS_HOST")
+        def submit(*_args, **_kwargs):
+            assert os.environ.get("GIT_REPOS_HOST") == "/custom-mount"
+            return "{}"
 
         flexmock(cli_main).should_receive("check_credentials")
         flexmock(cli_main).should_receive("start_services")
         flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("submit_triage").replace_with(_capture_env)
-        flexmock(os, environ={})
-
-        os.environ.pop("GIT_REPOS_HOST", None)
-
-        triage(
-            issue="RHEL-99999",
-            dry_run=True,
-            force_cve_triage=False,
-            secrets=str(secrets_dir),
-            compose_file="compose.yaml",
-            mock_jira=None,
-            work_dir=None,
-        )
-
-        assert captured_env["GIT_REPOS_HOST"] is not None
-        assert captured_env["GIT_REPOS_HOST"].startswith("/tmp/ymir-")
-
-    def test_explicit_work_dir_sets_git_repos_host(self, tmp_path):
-        """When --work-dir is given, GIT_REPOS_HOST must equal it."""
-        secrets_dir = _make_secrets(tmp_path)
-        work_dir = tmp_path / "custom-repos"
-        captured_env = {}
-
-        def _capture_env(*_args, **_kwargs):
-            captured_env["GIT_REPOS_HOST"] = os.environ.get("GIT_REPOS_HOST")
-
-        flexmock(cli_main).should_receive("check_credentials")
-        flexmock(cli_main).should_receive("start_services")
-        flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("submit_triage").replace_with(_capture_env)
-        flexmock(os, environ={})
-
-        os.environ.pop("GIT_REPOS_HOST", None)
+        flexmock(cli_main).should_receive("submit_triage").replace_with(submit)
+        flexmock(os, environ={"GIT_REPOS_HOST": "/custom-mount"})
 
         triage(
             issue="RHEL-99999",
@@ -360,34 +326,7 @@ class TestWorkDirEnv:
             work_dir=str(work_dir),
         )
 
-        assert captured_env["GIT_REPOS_HOST"] == str(work_dir)
-
-    def test_git_repos_host_restored_after_run(self, tmp_path):
-        """GIT_REPOS_HOST is restored to its original value after triage() returns."""
-        secrets_dir = _make_secrets(tmp_path)
-        captured_env = {}
-
-        def _capture_env(*_args, **_kwargs):
-            captured_env["GIT_REPOS_HOST"] = os.environ.get("GIT_REPOS_HOST")
-
-        flexmock(cli_main).should_receive("check_credentials")
-        flexmock(cli_main).should_receive("start_services")
-        flexmock(cli_main).should_receive("stop_services")
-        flexmock(cli_main).should_receive("submit_triage").replace_with(_capture_env)
-        flexmock(os, environ={"GIT_REPOS_HOST": "/custom-mount"})
-
-        triage(
-            issue="RHEL-99999",
-            dry_run=True,
-            force_cve_triage=False,
-            secrets=str(secrets_dir),
-            compose_file="compose.yaml",
-            mock_jira=None,
-            work_dir=None,
-        )
-
-        assert captured_env["GIT_REPOS_HOST"] != "/custom-mount"
-        assert os.environ["GIT_REPOS_HOST"] == "/custom-mount"
+        assert (work_dir / "RHEL-99999" / "triage_result.json").read_text() == "{}"
 
     def test_work_dir_path_printed(self, tmp_path, capsys):
         """Work directory path must be printed at exit."""

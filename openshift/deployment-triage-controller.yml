@@ -35,9 +35,6 @@ spec:
                 name: jira-env
             - configMapRef:
                 name: temporal-triage-env
-            - secretRef:
-                name: temporal-triage-gitlab
-                optional: true
           env:
             - name: REQUESTS_CA_BUNDLE
               value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem

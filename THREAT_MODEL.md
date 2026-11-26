@@ -69,12 +69,10 @@ failures through the Jira gateway. The controller's projected service account
 can create, inspect and delete Pods in the Ymir namespace. Execution pods have
 no mounted service account token.
 
-The package-stream coordinator uses the controller's Jira identity and a
-scoped read-only GitLab token. It accepts per-issue validation evidence only
-from configured Jira account IDs and binds it to the current GitLab MR head
-and target branch. The signer is trusted to attest build, test, and coverage
-results for that source revision. Issue findings and selected fix revisions go
-in Jira comments. Pending coordinator state remains in Temporal.
+The package-stream coordinator uses the controller's Jira identity. It checks
+the latest triage finding from that account before releasing waiting work or
+resubmitting an issue during recovery. Triage findings are stored in Jira
+comments. Pending coordinator state remains in Temporal.
 
 Security-relevant assumptions this system makes about its environment:
 

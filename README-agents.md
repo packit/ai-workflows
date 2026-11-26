@@ -607,49 +607,6 @@ blockers remain visible while independent fixes proceed after the sibling triage
 barrier. The bridge still dispatches individual backport tasks and uses the
 existing downstream MR consolidation path.
 
-Higher-stream matching uses CVE IDs and package identity, or Jira clone links
-for non-CVE work. The gate takes the nearest applicable stream per family,
-including across RHEL majors. The default order is descending major and minor
-version. Set `TEMPORAL_TRIAGE_STREAM_ORDER` from highest to lowest when the
-package policy requires a different order. Existing CVE eligibility checks
-continue to apply. Configure a scoped read-only `GITLAB_TOKEN` on
-the controller and approved Jira account IDs in
-`TEMPORAL_TRIAGE_VALIDATION_AUTHORS`. The controller consumes private Jira
-validation records authored by one of those IDs. The validation producer or
-maintainer records the passed checks against the exact source revision.
-Use Jira's `{code:json}` block for the record.
-
-```json
-{
-  "schema": 1,
-  "kind": "triage-fix-validation",
-  "issue": "RHEL-12345",
-  "stream": "rhel-10.2",
-  "target_branch": "c10s",
-  "cves": ["CVE-2025-12345"],
-  "merge_request": "https://gitlab.com/redhat/centos-stream/rpms/example/-/merge_requests/42",
-  "source_sha": "1111111111111111111111111111111111111111",
-  "resolution": "backport",
-  "patch_urls": ["https://github.com/example/example/commit/1111111111111111111111111111111111111111.patch"],
-  "reproducer_required": false,
-  "checks": {
-    "build": "https://build.example/result/1",
-    "test": "https://tests.example/result/1",
-    "coverage": "https://tests.example/result/1#RHEL-12345"
-  }
-}
-```
-
-For a rebase, the record carries `version`. For a rebuild it carries
-`dependency_component` and a `checks.rebuild` result. When paired reproducer
-validation is required, set `reproducer_required` to true and include
-`checks.paired_reproducer`. A signer attests per-issue coverage and supplies
-revision-specific result links. The coordinator verifies that the published
-MR is open or merged and still has the recorded head and target branch. A
-missing record, a changed MR head, or an incompatible approach keeps the
-issue pending. The legacy workers and pipelines need a signer to publish these
-records when they validate a higher-stream fix.
-
 After recreating the cluster, start the shared controller. Run the recovery
 command there so it uses the deployment's Temporal settings and Jira
 credentials. Recovery reads Jira

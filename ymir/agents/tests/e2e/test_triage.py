@@ -6,7 +6,6 @@ import signal
 import socket
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from importlib.util import find_spec
 from pathlib import Path
 from time import monotonic
 from types import SimpleNamespace
@@ -15,9 +14,17 @@ from uuid import uuid4
 
 import pytest
 from opentelemetry import baggage, context, trace
+from pydantic_ai.durable_exec.temporal import PydanticAIPlugin
 from tabulate import tabulate
+from temporalio.client import Client
+from temporalio.contrib.opentelemetry import TracingInterceptor
+from temporalio.testing import WorkflowEnvironment
 
 from ymir.agents.observability import setup_observability
+from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow
+from ymir.agents.temporal_triage_provisioning import TRIAGE_WORKER_POD
+from ymir.agents.temporal_triage_worker import create_triage_control_worker
+from ymir.agents.temporal_worker_pods import PODMAN_LIMIT, PodmanPodProvisioner
 from ymir.agents.triage_agent import TriageState, create_triage_agent, run_workflow
 from ymir.common.config import rhel_config_override
 from ymir.common.mock_repos import (
@@ -36,18 +43,6 @@ from ymir.common.models import (
     TriageOutputSchema,
 )
 from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
-
-TEMPORAL_AVAILABLE = find_spec("temporalio") is not None
-if TEMPORAL_AVAILABLE:
-    from pydantic_ai.durable_exec.temporal import PydanticAIPlugin
-    from temporalio.client import Client
-    from temporalio.contrib.opentelemetry import TracingInterceptor
-    from temporalio.testing import WorkflowEnvironment
-
-    from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow
-    from ymir.agents.temporal_triage_provisioning import TRIAGE_WORKER_POD
-    from ymir.agents.temporal_triage_worker import create_triage_control_worker
-    from ymir.agents.temporal_worker_pods import PODMAN_LIMIT, PodmanPodProvisioner
 
 logger = logging.getLogger(__name__)
 
@@ -428,9 +423,6 @@ def mock_centos_stream_repos(tmp_path_factory):
 
 
 async def run_temporal_cases(cases: list[TriageAgentTestCase], address: str) -> None:
-    if not TEMPORAL_AVAILABLE:
-        raise ModuleNotFoundError("Temporal triage E2E requires temporalio", name="temporalio")
-
     queue = f"triage-e2e-{uuid4().hex}"
     slots = asyncio.Semaphore(PODMAN_LIMIT)
     tracer = trace.get_tracer(__name__)

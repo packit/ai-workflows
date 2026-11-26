@@ -6,8 +6,6 @@ from argparse import Namespace
 import pytest
 from flexmock import flexmock
 
-pytest.importorskip("temporalio")
-
 from ymir.agents import temporal_triage_admin as admin
 
 

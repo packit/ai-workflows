@@ -519,7 +519,7 @@ Valkey instance. The tests use the actual downstream queue names.
 
 ```bash
 TEMPORAL_TEST_ADDRESS=127.0.0.1:7233 TEMPORAL_TEST_REDIS_URL=redis://127.0.0.1:6389/0 \
-  uv run --extra test --extra temporal pytest \
+  uv run --extra test pytest \
   ymir/agents/tests/integration/test_temporal_triage_publication.py
 ```
 
@@ -575,7 +575,7 @@ and `--full` to request downstream processing. Reuse the request ID and dry-run
 mode to reconnect to the same request while its Temporal history is retained.
 
 ```bash
-TEMPORAL_ADDRESS=127.0.0.1:7235 uv run --extra temporal ymir RHEL-287570 \
+TEMPORAL_ADDRESS=127.0.0.1:7235 uv run ymir RHEL-287570 \
   --dry-run --request-id triage-1
 ```
 

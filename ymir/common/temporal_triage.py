@@ -5,14 +5,8 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
-try:
-    from temporalio import client as temporal_client
-    from temporalio import common as temporal_common
-except ModuleNotFoundError as error:
-    if error.name != "temporalio":
-        raise
-    # The local Compose CLI can run without the Temporal SDK on the host.
-    temporal_client = temporal_common = None
+from temporalio import client as temporal_client
+from temporalio import common as temporal_common
 
 CONTROL_QUEUE = "ymir-triage-control"
 INGRESS_WORKFLOW = "TriageIngressWorkflow"
@@ -42,8 +36,6 @@ class TriageIntent:
 
 
 async def connect_triage_ingress():
-    if temporal_client is None:
-        raise ModuleNotFoundError("The Temporal client requires temporalio", name="temporalio")
     address = os.environ["TEMPORAL_ADDRESS"]
     return await temporal_client.Client.connect(address, namespace=os.getenv("TEMPORAL_NAMESPACE", "default"))
 
@@ -52,8 +44,6 @@ async def submit_triage_intent(
     client, intent: TriageIntent, *, task_queue: str | None = None, wait: bool = False
 ) -> str | dict:
     """Durably enqueue an intent and optionally wait for that request's result."""
-    if temporal_client is None:
-        raise ModuleNotFoundError("The Temporal client requires temporalio", name="temporalio")
     returns_result = wait or intent.source == "cli"
     handle = await client.start_update_with_start_workflow(
         "enqueue_and_wait" if returns_result else "enqueue",

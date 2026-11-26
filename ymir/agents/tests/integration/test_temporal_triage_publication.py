@@ -11,17 +11,9 @@ import pytest
 import uvicorn
 from flexmock import flexmock
 from mcp.server.fastmcp import FastMCP
+from pydantic_ai.durable_exec.temporal import PydanticAIPlugin
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import FunctionModel
-
-from ymir.common.base_utils import fix_await, redis_client
-from ymir.common.constants import JiraLabels, RedisQueues
-from ymir.common.models import Resolution, Task
-from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
-
-pytest.importorskip("temporalio")
-
-from pydantic_ai.durable_exec.temporal import PydanticAIPlugin
 from temporalio.api.common.v1 import WorkflowExecution
 from temporalio.api.workflowservice.v1 import ResetWorkflowExecutionRequest
 from temporalio.client import Client, WorkflowFailureError
@@ -31,6 +23,10 @@ from ymir.agents import temporal_package_coordination as coordination
 from ymir.agents import temporal_triage_publication as publication
 from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow, prepare_triage_intent
 from ymir.agents.temporal_triage_worker import create_analysis_worker, create_triage_control_worker
+from ymir.common.base_utils import fix_await, redis_client
+from ymir.common.constants import JiraLabels, RedisQueues
+from ymir.common.models import Resolution, Task
+from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
 
 ADDRESS = os.getenv("TEMPORAL_TEST_ADDRESS")
 REDIS_URL = os.getenv("TEMPORAL_TEST_REDIS_URL")

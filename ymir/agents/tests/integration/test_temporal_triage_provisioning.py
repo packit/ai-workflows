@@ -7,11 +7,6 @@ from uuid import uuid4
 
 import pytest
 from flexmock import flexmock
-
-from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
-
-pytest.importorskip("temporalio")
-
 from pydantic_ai.durable_exec.temporal import PydanticAIPlugin
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.exceptions import ApplicationError
@@ -28,6 +23,7 @@ from ymir.agents.temporal_worker_pods import (
     WorkerPod,
     WorkerPodConfig,
 )
+from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
 
 ADDRESS = os.getenv("TEMPORAL_TEST_ADDRESS")
 POD_TEMPLATE = Path("openshift/templates/temporal-worker-pod.yml")

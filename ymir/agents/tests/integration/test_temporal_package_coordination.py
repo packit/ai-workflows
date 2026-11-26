@@ -7,9 +7,6 @@ from uuid import uuid4
 
 import pytest
 from flexmock import flexmock
-
-pytest.importorskip("temporalio")
-
 from pydantic_ai.durable_exec.temporal import PydanticAIPlugin
 from temporalio import activity
 from temporalio.client import Client, WorkflowExecutionStatus

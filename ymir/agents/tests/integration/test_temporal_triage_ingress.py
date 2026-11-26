@@ -6,12 +6,6 @@ from uuid import uuid4
 
 import pytest
 from flexmock import flexmock
-
-from ymir.common.constants import JiraLabels
-from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
-
-pytest.importorskip("temporalio")
-
 from pydantic_ai.durable_exec.temporal import PydanticAIPlugin
 from temporalio import activity
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
@@ -24,6 +18,8 @@ from ymir.agents.temporal_triage_analysis import TriageAnalysisRequest
 from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow
 from ymir.agents.temporal_triage_publication import TriagePublicationRequest, TriageRequestReceiptWorkflow
 from ymir.agents.temporal_worker_pods import WorkerPod
+from ymir.common.constants import JiraLabels
+from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
 
 ADDRESS = os.getenv("TEMPORAL_TEST_ADDRESS")
 pytestmark = pytest.mark.skipif(not ADDRESS, reason="Set TEMPORAL_TEST_ADDRESS to a local Temporal server")

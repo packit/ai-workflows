@@ -1,30 +1,18 @@
-import functools
 import json
 import logging
 import os
-import shutil
-from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from opentelemetry import trace as trace_api
 from pydantic import BaseModel, Field, ValidationError
 from pydantic_ai import Agent, ModelRetry, PromptedOutput, RunContext
 from pydantic_ai.capabilities import Instrumentation
 
 import ymir.agents.tasks as tasks
-from ymir.agents.cve_applicability_agent import build_applicability_prompt, create_triage_applicability_agent
-from ymir.agents.pydantic_agent import adapt_tool, run_pydantic_agent
-from ymir.agents.rebase_consolidation import (
-    CLUSTER_LOCK_PREFIX,
-    get_rebase_primary_issue,
-    queue_siblings_for_triage,
-    rebase_cluster_lock_key,
-    sibling_link_is_stale,
-)
-from ymir.agents.rebuild_consolidation import find_rebuild_siblings
-from ymir.agents.tasks import InvalidReproducerConfigError
+from ymir.agents.cve_applicability_agent import build_applicability_prompt
+from ymir.agents.pydantic_agent import adapt_tool
+from ymir.agents.rebase_consolidation import get_rebase_primary_issue
 from ymir.agents.utils import (
     get_agent_execution_config,
     mcp_tools,
@@ -32,19 +20,15 @@ from ymir.agents.utils import (
     render_template,
     run_tool,
 )
-from ymir.common.base_utils import fix_await, redis_client
 from ymir.common.config import load_rhel_config
-from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels, RedisQueues
+from ymir.common.constants import JiraLabels
 from ymir.common.cve import extract_cve_ids
-from ymir.common.issue_lock import waiting_issue_lock
-from ymir.common.mock_repos import get_mock_local_tool_env
 from ymir.common.models import (
     POSTPONED_RESOLUTIONS,
     AssessedApplicabilityResult,
     AutoProcessingMode,
     BackportData,
     ClarificationNeededData,
-    ConfidenceAssessment,
     CVEEligibilityResult,
     ErrorData,
     NotAffectedData,
@@ -54,7 +38,6 @@ from ymir.common.models import (
     RebuildData,
     ReproducerInputSchema,
     Resolution,
-    Task,
     TriageEligibility,
 )
 from ymir.common.models import (
@@ -67,7 +50,6 @@ from ymir.common.utils import (
     DOWNSTREAM_COMPONENT_CUSTOM_FIELD,
     FIXED_IN_BUILD_CUSTOM_FIELD,
     check_build_in_buildroot,
-    extract_text_from_adf,
     get_latest_candidate_build,
 )
 from ymir.common.version_utils import (
@@ -81,75 +63,10 @@ from ymir.common.version_utils import (
     parse_rhel_version,
     parse_zstream_branch_name,
 )
-from ymir.tools.privileged.utils import APPLICABILITY_DIR
 from ymir.tools.unprivileged.commands import RunShellCommandTool
 from ymir.tools.unprivileged.version_mapper import VersionMapperTool
 
 logger = logging.getLogger(__file__)
-redis_logger = logging.getLogger("agent.redis")
-
-
-def _should_update_jira(
-    resolution: Resolution = None,
-    user_triggered: bool = False,
-    requires_manual_branch_creation: bool = False,
-    triage_only: bool = False,
-) -> bool:
-    """Whether to post a user-facing Jira comment for this run.
-
-    Used only for comments — labels are dedup anchors and are written
-    unconditionally. Default is silent: comments are suppressed unless the
-    run was explicitly requested by a maintainer (via ymir_todo) or the
-    resolution carries information the requester needs even unbidden.
-    A manual branch creation hold is also always commented because it is an
-    actionable state that blocks downstream processing. Other unbidden cases
-    are the resolutions that do NOT produce an MR — without a comment the
-    result would be invisible to the requester:
-    not-affected, postponed, open-ended-analysis, clarification-needed.
-    ERROR resolutions are dispatched to retry() and commented once via
-    post_terminal_error_comment() after retries are exhausted.
-    """
-    if resolution == Resolution.ERROR:
-        return False
-    if triage_only:
-        # Triage is the deliverable and no MR will be opened, so the result and
-        # the ymir_todo instructions must be visible.
-        return True
-    if requires_manual_branch_creation:
-        return True
-    if user_triggered:
-        return True
-    return resolution in (
-        Resolution.NOT_AFFECTED,
-        Resolution.OPEN_ENDED_ANALYSIS,
-        Resolution.CLARIFICATION_NEEDED,
-        *POSTPONED_RESOLUTIONS,
-    )
-
-
-async def _postponed_comment_exists(jira_issue: str, resolution: Resolution, available_tools) -> bool:
-    """Inspect the issue's existing comments for a Ymir Triage comment that already records ``resolution``.
-
-    Matching is on the marker plus the resolution's ``value`` (e.g.
-    ``postponed_no_patch``) rather than the rendered ``*Resolution*:`` line:
-    ``get_jira_details`` returns comment bodies as ADF, so the ``*bold*``
-    wiki markup is dropped and text nodes are space-joined by ``extract_text_from_adf`,
-    but the snake_case value carries no markup and survives intact.
-    A genuine resolution change (e.g. ``postponed_pr_pending`` -> ``postponed_no_patch``)
-    finds no match and is not suppressed.
-    """
-    details = await run_tool(
-        "get_jira_details",
-        issue_key=jira_issue,
-        available_tools=available_tools,
-    )
-    comments = details.get("fields", {}).get("comment", {}).get("comments", [])
-    marker = YMIR_COMMENT_MARKER.substitute(AGENT_TYPE="Triage")
-    for comment in comments:
-        body = extract_text_from_adf(comment.get("body", ""))
-        if marker in body and resolution.value in body:
-            return True
-    return False
 
 
 _RESOLUTION_TO_LABEL: dict[Resolution, JiraLabels] = {
@@ -171,29 +88,6 @@ _CONFIDENCE_TO_LABEL: dict[str, JiraLabels] = {
     "medium": JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM,
     "high": JiraLabels.APPLICABILITY_CONFIDENCE_HIGH,
 }
-
-
-def _terminal_ymir_labels(labels: list[str]) -> list[str]:
-    """Return Ymir labels that mark this issue as already triaged.
-
-    Trigger, coordination and assessment labels do not indicate completion: a
-    rebase primary requeued after its siblings finish must still run, and a
-    confidence assessment must not look like a terminal outcome.
-    """
-    non_terminal = {
-        JiraLabels.TRIAGE_IN_PROGRESS.value,
-        JiraLabels.REBASE_SIBLING.value,
-        JiraLabels.WAITING_FOR_SIBLINGS.value,
-        JiraLabels.TODO.value,
-        JiraLabels.TODO_TRIAGE.value,
-        JiraLabels.TRIAGE_ONLY.value,
-        JiraLabels.MR_CLOSED.value,
-        JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
-        JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
-        JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
-    }
-    known = JiraLabels.all_labels()
-    return [label for label in labels if label in known and label not in non_terminal]
 
 
 # Terminal labels used instead of _RESOLUTION_TO_LABEL when the package is in
@@ -232,133 +126,6 @@ def _should_defer_terminal_label(
     that would inherit the triage-only intent anyway.
     """
     return resolution == Resolution.REBASE and waiting_for_siblings and not triage_only
-
-
-async def _is_rebase_sibling(state, available_tools, user_triggered: bool, dry_run: bool = False) -> bool:
-    """Whether this issue is a sibling whose primary still awaits it.
-
-    The sibling marker is a permanent Jira comment (plus a label), so a link to a
-    primary that already finished is stale: an explicit ``ymir_todo`` must run
-    this issue's own fix instead of deferring forever.
-
-    An unreadable marker fails the run so the task retries: treating the issue
-    as a primary would queue the real primary as one of its siblings, leaving
-    both waiting on each other. An unreadable primary (unlike the marker) keeps the
-    deferral on automatic runs but fails an explicit one, which must not
-    silently consume the requested fix.
-    """
-    try:
-        details = await run_tool(
-            "get_jira_details",
-            issue_key=state.jira_issue,
-            available_tools=available_tools,
-        )
-    except Exception as e:
-        raise RuntimeError(f"Cannot verify the sibling link of {state.jira_issue}: {e}") from e
-
-    labels = details.get("fields", {}).get("labels", [])
-    primary_issue = get_rebase_primary_issue(details)
-    if not (
-        state.is_rebase_sibling or JiraLabels.REBASE_SIBLING.value in labels or primary_issue is not None
-    ):
-        return False
-    if primary_issue is None:
-        # Sibling without a readable link: keep deferring.
-        return True
-    try:
-        stale = await sibling_link_is_stale(primary_issue, available_tools)
-    except Exception as e:
-        if user_triggered:
-            raise RuntimeError(
-                f"Cannot verify the sibling link of {state.jira_issue} to {primary_issue}: {e}"
-            ) from e
-        logger.warning(f"Failed to read primary {primary_issue} while checking sibling link: {e}")
-        return True
-    if stale:
-        logger.info(
-            f"Ignoring stale sibling link on {state.jira_issue}: primary {primary_issue} already finished"
-        )
-        # The primary is finished, so this issue's own waiting marker (captured
-        # in the labels above) cannot be released by anyone anymore. Clear it
-        # now and record that, so the terminal label is written and the rebase
-        # is dispatched instead of the run deferring on a permanently stale
-        # marker and leaving the issue parked non-terminal.
-        if JiraLabels.WAITING_FOR_SIBLINGS.value in labels and not dry_run:
-            try:
-                await tasks.set_jira_labels(
-                    jira_issue=state.jira_issue,
-                    labels_to_remove=[JiraLabels.WAITING_FOR_SIBLINGS.value],
-                    dry_run=False,
-                    user_triggered=user_triggered,
-                    critical=True,
-                )
-                state.waiting_marker_cleared = True
-                state.rebase_waiting_for_siblings = False
-            except Exception as e:
-                logger.warning(
-                    f"Failed to clear stale waiting marker on {state.jira_issue}: {e}; "
-                    "the terminal label may be deferred"
-                )
-        return False
-    return True
-
-
-def cluster_serialized(discover):
-    """Run sibling discovery as the cluster's single primary.
-
-    Acquires the cluster's Redis lock, re-checks the sibling link while
-    holding it (the lock winner may have marked this issue as its sibling
-    while we waited for the lock — in that case the issue demotes itself
-    instead of forming a second cluster), and only then runs the discovery.
-    Concurrently triaged issues of the same cluster cannot both act as
-    primaries and mark each other.
-
-    A dry run performs no cluster mutations and skips the lock. When the lock
-    cannot be acquired (slow holder, Redis outage) the discovery still runs,
-    unlocked — failing open falls back to the rare pre-lock race instead of
-    blocking triage.
-    """
-
-    @functools.wraps(discover)
-    async def wrapper(state, gateway_tools, user_triggered, dry_run):
-        if dry_run:
-            return await discover(state, gateway_tools, user_triggered, dry_run)
-        rebase_data = state.triage_result.data
-        cluster_key = rebase_cluster_lock_key(
-            rebase_data.package, rebase_data.fix_version, state.raw_downstream_component
-        )
-        async with (
-            redis_client(os.environ["REDIS_URL"]) as redis,
-            waiting_issue_lock(redis, cluster_key, prefix=CLUSTER_LOCK_PREFIX) as acquired,
-        ):
-            if acquired:
-                # The lock winner may have marked this issue as its sibling
-                # while we waited for the lock.
-                state.is_rebase_sibling = await _is_rebase_sibling(state, gateway_tools, user_triggered)
-                if state.is_rebase_sibling:
-                    return 0
-            else:
-                logger.warning(
-                    "Cluster lock %s not acquired for %s; running sibling discovery unlocked",
-                    cluster_key,
-                    state.jira_issue,
-                )
-            return await discover(state, gateway_tools, user_triggered, dry_run)
-
-    return wrapper
-
-
-@cluster_serialized
-async def run_sibling_discovery(state, gateway_tools, user_triggered: bool, dry_run: bool) -> int:
-    """Queue this issue's rebase siblings for triage (as the cluster primary)."""
-    return await queue_siblings_for_triage(
-        primary_issue=state.jira_issue,
-        rebase_data=state.triage_result.data,
-        available_tools=gateway_tools,
-        dry_run=dry_run,
-        user_triggered=user_triggered,
-        downstream_component=state.raw_downstream_component,
-    )
 
 
 _REPRODUCER_ELIGIBLE_RESOLUTIONS = frozenset(
@@ -408,42 +175,6 @@ def _build_reproducer_input(state) -> ReproducerInputSchema | None:
         fix_version=getattr(data, "fix_version", None),
         target_branch=state.target_branch,
     )
-
-
-async def _enqueue_reproducer(redis, state, user_triggered: bool, gateway_tools) -> None:
-    """Push a reproducer job when triage resolution is eligible."""
-    if state.triage_result is None:
-        return
-    if state.triage_result.resolution not in _REPRODUCER_ELIGIBLE_RESOLUTIONS:
-        return
-    reproducer_input = _build_reproducer_input(state)
-    if reproducer_input is None:
-        logger.info(
-            "Skipping reproducer enqueue for %s — package not available on resolution data",
-            state.jira_issue,
-        )
-        return
-    if reproducer_input.package:
-        try:
-            config = await tasks.fetch_reproducer_config(reproducer_input.package, gateway_tools)
-        except InvalidReproducerConfigError as e:
-            logger.warning(
-                "Invalid reproducer config for %s: %s; skipping enqueue",
-                reproducer_input.package,
-                e,
-            )
-            return
-        if not config.enabled:
-            logger.info(
-                "Reproducer not enabled for %s, skipping enqueue for %s",
-                reproducer_input.package,
-                state.jira_issue,
-            )
-            return
-    queue = RedisQueues.get_reproducer_queue(user_triggered)
-    task = Task(metadata=reproducer_input.model_dump(), user_triggered=user_triggered)
-    await fix_await(redis.lpush(queue, task.model_dump_json()))
-    logger.info("Pushed %s to %s", state.jira_issue, queue)
 
 
 def _map_version_to_module_branch(version: str, summary: str, downstream_component: str) -> str | None:
@@ -1630,320 +1361,3 @@ def apply_rebuild_buildroot(state: TriageState, buildroot: tuple[bool, str] | No
         ),
     )
     return "comment_in_jira"
-
-
-async def run_workflow(
-    jira_issue,
-    dry_run,
-    triage_agent_factory,
-    auto_chain=False,
-    force_cve_triage=False,
-    user_triggered=False,
-    triage_only_requested=False,
-):
-    local_tool_options = None
-    if mock_env := get_mock_local_tool_env(jira_issue):
-        local_tool_options = {"env": mock_env}
-
-    cleanup = {"builddir": None}
-
-    async with AsyncExitStack() as stack:
-        # The trace server uses the finished workflow span to mark the run complete.
-        tracer = trace_api.get_tracer(__name__)
-        stack.enter_context(
-            tracer.start_as_current_span(
-                "TriageWorkflow", attributes={"jira.issue": jira_issue, "openinference.span.kind": "CHAIN"}
-            )
-        )
-        gateway_tools = await stack.enter_async_context(
-            mcp_tools(os.getenv("MCP_GATEWAY_URL"), call_meta={"jira_issue": jira_issue})
-        )
-
-        async def check_cve_eligibility(state):
-            state.cve_eligibility_result = await read_cve_eligibility(state.jira_issue, gateway_tools)
-            dup_key = state.cve_eligibility_result.duplicate_of
-            if state.cve_eligibility_result.is_eligible_for_triage and dup_key and not dry_run:
-                try:
-                    await tasks.comment_in_jira(
-                        jira_issue=state.jira_issue,
-                        agent_type="Triage",
-                        comment_text=(
-                            f"An older tracker {dup_key} exists for the same CVE, "
-                            f"component, and fix version, but it was closed/rejected. "
-                            f"Proceeding with triage for this tracker."
-                        ),
-                        available_tools=gateway_tools,
-                        user_triggered=user_triggered,
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to post duplicate info comment: {e}")
-            return apply_cve_eligibility(state, force_cve_triage)
-
-        async def run_triage_analysis(state):
-            prompt, context = await prepare_triage_analysis(state, gateway_tools)
-            triage_agent = triage_agent_factory(gateway_tools, local_tool_options)
-            response = await run_pydantic_agent(triage_agent, prompt, deps=context)
-            apply_triage_output(state, response.output)
-            await normalize_triage_version(state)
-            return next_after_triage_output(state)
-
-        async def determine_target_branch_step(state):
-            await resolve_triage_target(state, gateway_tools, user_triggered, triage_only_requested)
-            return next_after_triage_target(state)
-
-        async def verify_rebase_author(state):
-            employee, status = await read_rebase_author(state, gateway_tools)
-            return apply_rebase_author(state, employee, status)
-
-        async def check_cve_applicability(state):
-            prepared, next_step = await prepare_cve_applicability(state, gateway_tools)
-            if prepared is None:
-                return next_step
-            cleanup["builddir"] = prepared.builddir
-            try:
-                options = {"working_directory": prepared.local_clone}
-                if mock_env:
-                    options["env"] = mock_env
-                applicability_agent = create_triage_applicability_agent(gateway_tools, options)
-                response = await run_pydantic_agent(applicability_agent, prepared.prompt)
-                return apply_cve_applicability(state, response.output)
-            except Exception as e:
-                logger.warning(f"Applicability check failed: {e}")
-                state.applicability_check_skipped = True
-                return next_after_cve_applicability(state)
-
-        async def verify_rebuild_buildroot(state):
-            return apply_rebuild_buildroot(state, await read_rebuild_buildroot(state, gateway_tools))
-
-        async def consolidate_rebuild_siblings(state):
-            """Find and analyze sibling issues that can share a single rebuild MR."""
-            if state.triage_only:
-                logger.info(
-                    "Triage-only mode for %s — skipping rebuild sibling consolidation",
-                    state.jira_issue,
-                )
-                return "comment_in_jira"
-            rebuild_data = state.triage_result.data
-            included, summary = await find_rebuild_siblings(
-                jira_issue=state.jira_issue,
-                rebuild_data=rebuild_data,
-                available_tools=gateway_tools,
-                local_clone=state.applicability_local_clone,
-                unpacked_sources=state.applicability_unpacked_sources,
-                target_branch=state.target_branch,
-                downstream_component=state.raw_downstream_component,
-            )
-            rebuild_data.consolidated_issues = included
-            rebuild_data.consolidation_summary = summary or None
-            return "comment_in_jira"
-
-        async def consolidate_rebase_siblings(state):
-            """Queue sibling issues for triage and decide whether to queue primary for rebase."""
-
-            async def finish_as_sibling() -> str:
-                logger.info(f"Issue {state.jira_issue} is a sibling, skipping consolidation")
-                state.rebase_waiting_for_siblings = False
-                rebase_data.consolidated_issues = []
-                rebase_data.consolidation_summary = None
-                return "comment_in_jira"
-
-            if state.triage_only:
-                logger.info(
-                    "Triage-only mode for %s — skipping rebase sibling consolidation",
-                    state.jira_issue,
-                )
-                return "comment_in_jira"
-            rebase_data = state.triage_result.data
-
-            # Siblings must not search for their own siblings (prevents circular
-            # dependencies). The marker is permanent, so re-check it every run: once
-            # the primary has finished, this issue must run its own fix.
-            state.is_rebase_sibling = await _is_rebase_sibling(
-                state, gateway_tools, user_triggered, dry_run=dry_run
-            )
-            if state.is_rebase_sibling:
-                return await finish_as_sibling()
-
-            # A concurrently triaged cluster mate may be marking this issue as
-            # its sibling right now: the decision below is serialized per
-            # cluster and re-checks the link under the lock, so two primaries
-            # cannot mark each other and form two clusters.
-            sibling_count = await run_sibling_discovery(state, gateway_tools, user_triggered, dry_run)
-            if state.is_rebase_sibling:
-                return await finish_as_sibling()
-
-            # If siblings were queued, don't queue primary yet (wait for siblings)
-            if sibling_count > 0:
-                logger.info(
-                    f"Queued {sibling_count} siblings for {state.jira_issue}, "
-                    "primary will be queued after siblings finish triaging"
-                )
-                # Mark that this issue is waiting for siblings
-                state.rebase_waiting_for_siblings = True
-                # Clear consolidated issues - found during rebase via find_triaged_rebase_siblings()
-                rebase_data.consolidated_issues = []
-                rebase_data.consolidation_summary = None
-            else:
-                logger.info(
-                    "No new siblings queued for %s; waiting for previously queued siblings: %s",
-                    state.jira_issue,
-                    state.rebase_waiting_for_siblings,
-                )
-                rebase_data.consolidated_issues = []
-                rebase_data.consolidation_summary = None
-
-            return "comment_in_jira"
-
-        async def comment_in_jira(state):
-            comment_text = state.triage_result.format_for_comment(
-                auto_chain=auto_chain,
-                triage_only=_defers_fix(state.triage_result.resolution, state.triage_only),
-            )
-            if state.applicability_check_skipped:
-                comment_text += (
-                    "\n\n_Note: CVE applicability check could not be performed (source preparation failed)._"
-                )
-            if state.hold_for_manual_branch_creation:
-                comment_text += "\n\n---\n" + tasks.manual_branch_creation_comment(
-                    state.triage_result.data.package, state.target_branch, state.jira_issue
-                )
-            logger.info(f"Result to be put in Jira comment: {comment_text}")
-            if dry_run:
-                return
-            await label_applicability_confidence(
-                state.jira_issue,
-                state.triage_result.confidence,
-                dry_run=dry_run,
-                user_triggered=user_triggered,
-            )
-            if not _should_update_jira(
-                resolution=state.triage_result.resolution,
-                user_triggered=user_triggered,
-                requires_manual_branch_creation=state.hold_for_manual_branch_creation,
-                triage_only=state.triage_only,
-            ):
-                logger.info(
-                    f"Skipping Jira comment for {state.jira_issue} "
-                    f"(resolution={state.triage_result.resolution.value}, not user-triggered)"
-                )
-                return
-            # skip re-posting a comment when this issue already carries
-            # a Ymir comment for the same postponement resolution.
-            # User-triggered runs always get fresh confirmation, so they bypass this guard.
-            if (
-                not user_triggered
-                and state.triage_result.resolution in POSTPONED_RESOLUTIONS
-                and await _postponed_comment_exists(
-                    state.jira_issue, state.triage_result.resolution, gateway_tools
-                )
-            ):
-                logger.info(
-                    "Skipping duplicate postponed comment for %s "
-                    "(resolution=%s already recorded by a prior Ymir comment)",
-                    state.jira_issue,
-                    state.triage_result.resolution.value,
-                )
-                return
-            if state.hold_for_manual_branch_creation:
-                siblings = getattr(state.triage_result.data, "consolidated_issues", [])
-                await tasks.handle_manual_branch_creation_required(
-                    tasks.ManualBranchCreationRequired(
-                        state.triage_result.data.package,
-                        state.target_branch,
-                        [state.jira_issue, *[issue.issue_key for issue in siblings]],
-                    ),
-                    agent_type="Triage",
-                    triaged_label=_resolution_label(state.triage_result.resolution, state.triage_only).value,
-                    dry_run=dry_run,
-                    user_triggered=user_triggered,
-                    primary_comment=comment_text,
-                )
-            else:
-                await tasks.comment_in_jira(
-                    jira_issue=state.jira_issue,
-                    agent_type="Triage",
-                    comment_text=comment_text,
-                    available_tools=gateway_tools,
-                    user_triggered=user_triggered,
-                )
-            return
-
-        steps = {
-            "check_cve_eligibility": check_cve_eligibility,
-            "run_triage_analysis": run_triage_analysis,
-            "verify_rebase_author": verify_rebase_author,
-            "determine_target_branch": determine_target_branch_step,
-            "check_cve_applicability": check_cve_applicability,
-            "verify_rebuild_buildroot": verify_rebuild_buildroot,
-            "consolidate_rebuild_siblings": consolidate_rebuild_siblings,
-            "consolidate_rebase_siblings": consolidate_rebase_siblings,
-            "comment_in_jira": comment_in_jira,
-        }
-        state = TriageState(jira_issue=jira_issue)
-        try:
-            step = "check_cve_eligibility"
-            while step is not None:
-                step = await steps[step](state)
-            return state
-        finally:
-            applicability_dir = (
-                Path(os.environ.get("GIT_REPO_BASEPATH", "/git-repos")) / APPLICABILITY_DIR / jira_issue
-            )
-            if applicability_dir.exists():
-                shutil.rmtree(applicability_dir, ignore_errors=True)
-            if cleanup["builddir"]:
-                shutil.rmtree(cleanup["builddir"], ignore_errors=True)
-            state.applicability_local_clone = None
-            state.applicability_unpacked_sources = None
-
-
-async def label_applicability_confidence(
-    jira_issue: str,
-    confidence: ConfidenceAssessment | None,
-    dry_run: bool,
-    user_triggered: bool,
-) -> None:
-    """Replace the current confidence label without affecting triage routing."""
-    if dry_run:
-        return
-    selected = _CONFIDENCE_TO_LABEL[confidence.level].value if confidence else None
-    await tasks.set_jira_labels(
-        jira_issue=jira_issue,
-        labels_to_add=[selected] if selected else [],
-        labels_to_remove=[label.value for label in _CONFIDENCE_TO_LABEL.values() if label.value != selected],
-        dry_run=dry_run,
-        user_triggered=user_triggered,
-        critical=False,
-    )
-
-
-async def label_postponed_issues(jira_issue: str, output: OutputSchema, dry_run: bool, user_triggered: bool):
-    """Remove existing postponement and triage in progress labels, place label with reason on the issue.
-    Log and reraise exceptions."""
-    if not (reason_label := _RESOLUTION_TO_LABEL.get(output.resolution)):
-        raise ValueError(f"No label mapping for postponed resolution {output.resolution!r};")
-
-    postponement_labels = [lbl for lbl in JiraLabels.postponement_labels() if lbl != reason_label.value] + [
-        JiraLabels.TRIAGED_POSTPONED.value
-    ]
-    try:
-        await tasks.set_jira_labels(
-            jira_issue=jira_issue,
-            labels_to_add=[reason_label.value],
-            labels_to_remove=[
-                JiraLabels.TRIAGE_IN_PROGRESS.value,
-                JiraLabels.MANUAL_BRANCH_NEEDED.value,
-                JiraLabels.WAITING_FOR_SIBLINGS.value,
-                *postponement_labels,
-            ],
-            dry_run=dry_run,
-            user_triggered=user_triggered,
-            critical=True,
-        )
-    except Exception as e:
-        logger.warning(
-            "Failed to set postponement label on %s: %s",
-            jira_issue,
-            e,
-        )
-        raise

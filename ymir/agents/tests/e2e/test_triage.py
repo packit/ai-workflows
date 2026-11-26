@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import os
 import shutil
 import signal
@@ -8,8 +7,6 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
-from types import SimpleNamespace
-from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -25,14 +22,8 @@ from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow
 from ymir.agents.temporal_triage_provisioning import TRIAGE_WORKER_POD
 from ymir.agents.temporal_triage_worker import create_triage_control_worker
 from ymir.agents.temporal_worker_pods import PODMAN_LIMIT, PodmanPodProvisioner
-from ymir.agents.triage_agent import TriageState, create_triage_agent, run_workflow
-from ymir.common.config import rhel_config_override
-from ymir.common.mock_repos import (
-    apply_zstream_override,
-    cleanup_mock_gitconfig,
-    load_all_fixture_configs,
-    setup_mock_repos,
-)
+from ymir.agents.triage_agent import TriageState
+from ymir.common.mock_repos import load_all_fixture_configs
 from ymir.common.models import (
     BackportData,
     NotAffectedData,
@@ -44,8 +35,6 @@ from ymir.common.models import (
 )
 from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
 
-logger = logging.getLogger(__name__)
-
 DEFAULT_FIXTURES_DIR = Path(__file__).parent / "mock_repos" / "triage"
 
 
@@ -56,46 +45,7 @@ class TriageAgentTestCase:
     metrics: dict | None = None
     finished_state: TriageState | None = None
     error: BaseException | None = None
-    zstream_override: dict[str, str] | None = None
-    rhel_config_override: dict[str, Any] | None = None
     skip_reason: str | None = None
-
-    async def run(self) -> None:
-        if self.skip_reason is not None:
-            return
-
-        if self.zstream_override:
-            apply_zstream_override(self.zstream_override)
-
-        self.metrics = {"agent_name": "TriageAgent"}
-
-        def testing_factory(gateway_tools, local_tool_options=None):
-            triage_agent = create_triage_agent(gateway_tools, local_tool_options)
-
-            async def run(prompt, **kwargs):
-                start = monotonic()
-                try:
-                    result = await triage_agent.run(prompt, **kwargs)
-                    usage = result.usage
-                    self.metrics.update(
-                        tool_calls=usage.tool_calls,
-                        prompt_tokens=usage.input_tokens,
-                        completion_tokens=usage.output_tokens,
-                    )
-                    return result
-                finally:
-                    self.metrics["duration"] = monotonic() - start
-
-            return SimpleNamespace(run=run)
-
-        try:
-            with (
-                rhel_config_override(self.rhel_config_override),
-                _span_processor.jira_issue_context(self.input),
-            ):
-                self.finished_state = await run_workflow(self.input, False, testing_factory)
-        except BaseException as e:
-            self.error = e
 
     def __hash__(self) -> int:
         return hash(self.input)
@@ -349,83 +299,16 @@ test_cases = [
 ]
 
 
-_span_processor = None
-
-
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def observability_fixture():
-    """Set up OpenTelemetry tracing for the test session.
-
-    The returned ``AgentSpanProcessor`` is stored in the module-level
-    ``_span_processor`` so that each test case can wrap its ``run_workflow``
-    call with ``_span_processor.jira_issue_context(issue)`` — without this,
-    spans lack the ``jira.issue`` attribute and the trace-server cannot
-    index them by issue key.
-    """
-    global _span_processor
-    _span_processor = setup_observability(os.environ["COLLECTOR_ENDPOINT"])
-    yield _span_processor
-
-
-@pytest.fixture(scope="session", autouse=True)
-def mock_centos_stream_repos(tmp_path_factory):
-    """Clone CentOS Stream RPM repos at pre-fix state for each test case.
-
-    Bare clones are placed on the shared ``/git-repos/`` volume so that
-    both the test container and the MCP gateway can access them.
-
-    For each issue, ``setup_mock_repos`` writes a per-issue gitconfig
-    (``.mock_gitconfig_{issue_key}``) as well as a shared
-    ``.mock_gitconfig``.  The MCP gateway scopes ``GIT_CONFIG_GLOBAL``
-    to the per-issue file via ``_meta`` on each ``call_tool`` request,
-    so concurrent test cases using the same remote URL at different
-    commits get the correct bare clone.
-
-    Yields:
-        Control to the test session after repos are prepared.
-    """
-    fixtures_dir = os.getenv("MOCK_REPOS_DIR") or str(DEFAULT_FIXTURES_DIR)
-    configs = load_all_fixture_configs(fixtures_dir)
-
-    if os.getenv("TEMPORAL_TRIAGE_ADDRESS"):
-        for case in test_cases:
-            config = configs.get(case.input, {})
-            case.zstream_override = config.get("zstream_override")
-            case.rhel_config_override = config.get("rhel_config_override")
-        yield
-        return
-
-    if git_repo_basepath := os.getenv("GIT_REPO_BASEPATH"):
-        repo_dir = Path(git_repo_basepath) / "e2e_mock_clones"
-        shutil.rmtree(repo_dir, ignore_errors=True)
-        repo_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        repo_dir = tmp_path_factory.mktemp("centos_stream_repos")
-
-    try:
-        for issue_key, config in configs.items():
-            rhel_override = config.get("rhel_config_override")
-
-            for tc in test_cases:
-                if tc.input == issue_key:
-                    tc.zstream_override = config.get("zstream_override")
-                    tc.rhel_config_override = rhel_override
-                    break
-
-            if not (repos := config.get("repos", [])):
-                continue
-
-            setup_mock_repos(repos, issue_key, repo_dir)
-
-        yield
-    finally:
-        cleanup_mock_gitconfig()
+    return setup_observability(os.environ["COLLECTOR_ENDPOINT"])
 
 
 async def run_temporal_cases(cases: list[TriageAgentTestCase], address: str) -> None:
     queue = f"triage-e2e-{uuid4().hex}"
     slots = asyncio.Semaphore(PODMAN_LIMIT)
     tracer = trace.get_tracer(__name__)
+    configs = load_all_fixture_configs(os.getenv("MOCK_REPOS_DIR") or str(DEFAULT_FIXTURES_DIR))
     client_options = {
         "plugins": [PydanticAIPlugin()],
         "interceptors": [TracingInterceptor()],
@@ -434,9 +317,10 @@ async def run_temporal_cases(cases: list[TriageAgentTestCase], address: str) -> 
     async def run(case: TriageAgentTestCase, client: Client):
         if case.skip_reason:
             return
-        override = dict(case.rhel_config_override or {})
-        if case.zstream_override:
-            override["current_z_streams"] = override.get("current_z_streams", {}) | case.zstream_override
+        config = configs.get(case.input, {})
+        override = dict(config.get("rhel_config_override") or {})
+        if zstream_override := config.get("zstream_override"):
+            override["current_z_streams"] = override.get("current_z_streams", {}) | zstream_override
         start = monotonic()
         case.metrics = {"agent_name": "TemporalTriageIngress"}
         trace_context = baggage.set_baggage("jira.issue", case.input)
@@ -504,7 +388,7 @@ async def run_temporal_cases(cases: list[TriageAgentTestCase], address: str) -> 
 
 
 @pytest.fixture(scope="session", autouse=True)
-def run_test_cases_concurrently(request, mock_centos_stream_repos, observability_fixture):
+def run_test_cases_concurrently(request, observability_fixture):
     """Execute selected triage test cases concurrently via asyncio.gather, then collect metrics.
 
     ``observability_fixture`` is an ordering dependency: test cases need its
@@ -517,13 +401,8 @@ def run_test_cases_concurrently(request, mock_centos_stream_repos, observability
     }
     cases_to_run = [tc for tc in test_cases if tc in selected]
 
-    async def _run_all():
-        if address := os.getenv("TEMPORAL_TRIAGE_ADDRESS"):
-            await run_temporal_cases(cases_to_run, address)
-        else:
-            await asyncio.gather(*(tc.run() for tc in cases_to_run))
-
-    asyncio.run(_run_all())
+    address = os.getenv("TEMPORAL_TRIAGE_ADDRESS") or "local"
+    asyncio.run(run_temporal_cases(cases_to_run, address))
 
     yield
 
@@ -551,7 +430,7 @@ def run_test_cases_concurrently(request, mock_centos_stream_repos, observability
     "test_case",
     (pytest.param(test_case, id=test_case.input) for test_case in test_cases),
 )
-def test_triage_agent(test_case: TriageAgentTestCase, observability_fixture):
+def test_triage_agent(test_case: TriageAgentTestCase):
     if test_case.skip_reason is not None:
         pytest.skip(test_case.skip_reason)
 

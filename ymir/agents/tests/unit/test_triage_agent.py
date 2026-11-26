@@ -1,22 +1,14 @@
 import json
 import re
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 from flexmock import flexmock
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import BaseModel
 from pydantic_ai.messages import ModelResponse, RetryPromptPart, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 
-from ymir.agents import (
-    pydantic_agent,
-    rebase_consolidation,
-)
+from ymir.agents import pydantic_agent
 from ymir.agents import (
     tasks as agent_tasks,
 )
@@ -24,23 +16,16 @@ from ymir.agents import (
     triage_agent as t_agent,
 )
 from ymir.agents.constants import JIRA_COMMENT_TEMPLATE
-from ymir.agents.observability import AgentSpanProcessor
 from ymir.agents.triage_agent import (
     TriageState,
     _build_reproducer_input,
     _defers_fix,
-    _is_rebase_sibling,
     _map_version_to_module_branch,
-    _postponed_comment_exists,
     _record_auto_processing_policy,
     _resolution_label,
     _should_defer_terminal_label,
-    _should_update_jira,
-    _terminal_ymir_labels,
     determine_target_branch,
-    label_applicability_confidence,
     render_prompt,
-    run_workflow,
     validate_triage_output,
 )
 from ymir.common.constants import YMIR_COMMENT_MARKER, JiraLabels
@@ -49,10 +34,10 @@ from ymir.common.models import (
     AutoProcessingMode,
     BackportData,
     ConfidenceAssessment,
-    ConsolidatedIssue,
     CVEEligibilityResult,
     NotAffectedData,
     PackageAutoProcessingConfig,
+    PackageBranchCreationConfig,
     PostponedData,
     RebaseData,
     RebuildData,
@@ -61,73 +46,7 @@ from ymir.common.models import (
     TriageInputSchema,
     TriageOutputSchema,
 )
-from ymir.common.utils import FIXED_IN_BUILD_CUSTOM_FIELD
 from ymir.common.version_utils import extract_downstream_package, is_modular, parse_module_stream
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("level", [None, "low", "medium", "high"])
-@pytest.mark.parametrize("dry_run", [False, True])
-async def test_confidence_labels_replace_previous_rating(monkeypatch, level, dry_run):
-    updates = []
-
-    async def record_labels(**kwargs):
-        updates.append(kwargs)
-
-    monkeypatch.setattr(agent_tasks, "set_jira_labels", record_labels)
-    assessment = ConfidenceAssessment(level=level, reason="Source evidence") if level else None
-    await label_applicability_confidence("RHEL-1", assessment, dry_run=dry_run, user_triggered=False)
-    if dry_run:
-        assert updates == []
-        return
-    expected = f"ymir_applicability_confidence_{level}" if level else None
-    assert len(updates) == 1
-    assert updates[0]["jira_issue"] == "RHEL-1"
-    assert updates[0]["labels_to_add"] == ([expected] if expected else [])
-    assert set(updates[0]["labels_to_remove"]) == {
-        JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
-        JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
-        JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
-    } - ({expected} if expected else set())
-    assert updates[0]["critical"] is False
-
-
-def test_confidence_labels_are_not_terminal():
-    """A requeued sibling primary must still run with only a confidence label."""
-    assert _terminal_ymir_labels([JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value]) == []
-    assert _terminal_ymir_labels([JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value]) == []
-
-
-def test_terminal_labels_still_block_duplicate_triage():
-    labels = [
-        JiraLabels.TRIAGED_REBASE.value,
-        JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
-    ]
-    assert _terminal_ymir_labels(labels) == [JiraLabels.TRIAGED_REBASE.value]
-
-
-def test_closed_mr_label_is_not_terminal():
-    assert _terminal_ymir_labels([JiraLabels.MR_CLOSED.value]) == []
-
-
-@pytest.mark.parametrize(
-    "resolution",
-    [
-        Resolution.REBASE,
-        Resolution.BACKPORT,
-        Resolution.REBUILD,
-        Resolution.NOT_AFFECTED,
-        Resolution.POSTPONED_DEPENDENCY,
-        Resolution.POSTPONED_Y_STREAM,
-        Resolution.POSTPONED_NO_PATCH,
-        Resolution.POSTPONED_PR_PENDING,
-        Resolution.OPEN_ENDED_ANALYSIS,
-        Resolution.CLARIFICATION_NEEDED,
-    ],
-)
-def test_user_triggered_run_posts_normal_results(resolution):
-    """A maintainer-triggered run gets a normal result comment."""
-    assert _should_update_jira(resolution=resolution, user_triggered=True) is True
 
 
 @pytest.mark.asyncio
@@ -201,68 +120,6 @@ async def test_pydantic_triage_preserves_tools_and_validates_output():
     assert result.output.data.jira_issue == "RHEL-300091"
     assert result.output.data.fix_version == "rhel-10.4"
     assert result.output.data.cve_id == "CVE-2026-115905"
-
-
-@pytest.mark.parametrize(
-    "resolution",
-    [
-        Resolution.REBASE,
-        Resolution.BACKPORT,
-        Resolution.REBUILD,
-    ],
-)
-def test_non_user_triggered_skips_comment_when_mr_will_be_opened(resolution):
-    """Without ymir_todo, runs do not comment when an MR will be opened —
-    the MR itself is the user-visible artifact."""
-    assert _should_update_jira(resolution=resolution, user_triggered=False) is False
-
-
-def test_non_user_triggered_posts_manual_branch_creation_hold():
-    """A manual branch hold must be visible even when the resolution would normally be silent."""
-    assert (
-        _should_update_jira(
-            resolution=Resolution.REBASE,
-            user_triggered=False,
-            requires_manual_branch_creation=True,
-        )
-        is True
-    )
-
-
-@pytest.mark.parametrize(
-    "resolution",
-    [
-        Resolution.NOT_AFFECTED,
-        Resolution.POSTPONED_DEPENDENCY,
-        Resolution.POSTPONED_Y_STREAM,
-        Resolution.POSTPONED_NO_PATCH,
-        Resolution.POSTPONED_PR_PENDING,
-        Resolution.OPEN_ENDED_ANALYSIS,
-        Resolution.CLARIFICATION_NEEDED,
-    ],
-)
-def test_non_user_triggered_still_posts_when_no_mr_will_open(resolution):
-    """Resolutions that do not produce an MR must still post a comment —
-    otherwise the result is invisible to the requester."""
-    assert _should_update_jira(resolution=resolution, user_triggered=False) is True
-
-
-def test_error_deferred_to_terminal_retry_path():
-    """ERROR is dispatched to retry() and commented once after retries are exhausted."""
-    assert _should_update_jira(resolution=Resolution.ERROR, user_triggered=False) is False
-    assert _should_update_jira(resolution=Resolution.ERROR, user_triggered=True) is False
-
-
-def test_triage_only_run_posts_result_and_resume_instructions():
-    """In triage-only mode no MR will be opened, so the result must be visible."""
-    assert (
-        _should_update_jira(
-            resolution=Resolution.BACKPORT,
-            user_triggered=False,
-            triage_only=True,
-        )
-        is True
-    )
 
 
 @pytest.mark.parametrize(
@@ -421,21 +278,6 @@ async def test_auto_processing_user_triggered_run_does_not_need_rules_repo(monke
     await _record_auto_processing_policy(state, "bash", [], user_triggered=True)
 
     assert state.triage_only is False
-
-
-@pytest.fixture
-def _mock_env_vars(monkeypatch):
-    monkeypatch.setenv("MCP_GATEWAY_URL", "http://localhost")
-    monkeypatch.setenv("GIT_REPO_BASEPATH", "/tmp")
-
-    async def run_agent(agent, prompt, **kwargs):
-        return await agent.run(prompt, **kwargs)
-
-    flexmock(t_agent).should_receive("run_pydantic_agent").replace_with(run_agent)
-
-
-async def _async_noop(*_args, **_kwargs):
-    pass
 
 
 # --- Modular detection tests ---
@@ -905,393 +747,94 @@ def test_build_reproducer_input_skips_postponed():
 # --- Eligibility → resolution mapping regression tests ---
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "scenario",
-    [
-        "ready",
-        "direct",
-        "sibling",
-        "waiting",
-        "consolidated",
-        "comment_error",
-        "lock_demotes",
-        "lock_busy",
-    ],
-)
-@pytest.mark.parametrize(
-    ("initial_resolution", "is_affected", "in_buildroot", "expected_resolution", "expect_hold"),
-    [
-        (Resolution.BACKPORT, True, True, Resolution.BACKPORT, True),
-        (Resolution.REBASE, True, True, Resolution.REBASE, True),
-        (Resolution.REBUILD, True, True, Resolution.REBUILD, True),
-        (Resolution.REBUILD, False, True, Resolution.NOT_AFFECTED, False),
-        (Resolution.REBUILD, True, False, Resolution.POSTPONED_DEPENDENCY, False),
-    ],
-)
-@pytest.mark.parametrize("prep_ok", [False, True])
-@pytest.mark.parametrize("dry_run", [False, True])
-async def test_branch_creation_notice_uses_final_resolution(
-    scenario,
-    initial_resolution,
-    is_affected,
-    in_buildroot,
-    expected_resolution,
-    expect_hold,
-    _mock_env_vars,
-    monkeypatch,
-    tmp_path,
-    prep_ok,
-    dry_run,
-):
-    """Applicability and buildroot decisions can supersede the manual branch hold."""
-    monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
-    common_data = {
-        "package": "bash",
-        "jira_issue": "RHEL-99999",
-        "cve_id": "CVE-2025-1234",
-        "fix_version": "rhel-10.3.z",
-    }
-    if initial_resolution == Resolution.BACKPORT:
-        data = BackportData(**common_data, patch_urls=[], justification="Apply upstream fix")
-    elif initial_resolution == Resolution.REBASE:
-        data = RebaseData(**common_data, version="5.3")
-    else:
-        data = RebuildData(**common_data, dependency_issue="RHEL-1", dependency_component="openssl")
-    output = TriageOutputSchema(resolution=initial_resolution, data=data)
-    eligibility = CVEEligibilityResult(
-        is_cve=True, eligibility=TriageEligibility.IMMEDIATELY, reason="Eligible"
-    )
-    applicability = AssessedApplicabilityResult(
-        is_affected=is_affected,
-        explanation="Source analysis result",
-        confidence=ConfidenceAssessment(
-            level="high",
-            reason=(
-                "Inspected target source and build paths"
-                if prep_ok
-                else "Inspected Source0; downstream patches were not applied and remain a limitation"
-            ),
+def test_pending_dependencies_maps_to_postponed_y_stream():
+    pending_issues = ["RHEL-99998"]
+    state = TriageState(
+        jira_issue="RHEL-99999",
+        cve_eligibility_result=CVEEligibilityResult(
+            is_cve=True,
+            eligibility=TriageEligibility.PENDING_DEPENDENCIES,
+            reason="Waiting for Z-stream clones to ship",
+            pending_zstream_issues=pending_issues,
         ),
     )
 
-    @asynccontextmanager
-    async def _mock_mcp_tools(*_args, **_kwargs):
-        yield []
-
-    async def _mock_run_tool(name, **kwargs):
-        if name == "check_cve_triage_eligibility":
-            return eligibility.model_dump()
-        if name == "verify_issue_author":
-            return True
-        if name == "get_internal_rhel_branches":
-            return []
-        if name == "get_jira_details":
-            fields = {FIXED_IN_BUILD_CUSTOM_FIELD: "openssl-3.0-1.el10"}
-            if scenario == "sibling":
-                fields["comment"] = {
-                    "comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]
-                }
-            return {"fields": fields}
-        raise AssertionError(f"Unexpected tool: {name}")
-
-    async def _mock_rules(name, **kwargs):
-        assert name == "get_maintainer_rules"
-        assert kwargs["file_path"] == "ymir.yaml"
-        return "branch_creation:\n  automatic: false\n"
-
-    def _async_return(value):
-        async def _return(*_args, **_kwargs):
-            return value
-
-        return _return
-
-    triage_agent = flexmock()
-    triage_agent.should_receive("run").replace_with(_async_return(flexmock(output=output)))
-    applicability_agent = flexmock()
-    applicability_agent.should_receive("run").replace_with(_async_return(flexmock(output=applicability)))
-    flexmock(t_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
-    monkeypatch.setattr(agent_tasks, "mcp_tools", _mock_mcp_tools)
-    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
-    flexmock(agent_tasks).should_receive("run_tool").replace_with(_mock_rules)
-    monkeypatch.setattr(t_agent, "get_mock_local_tool_env", lambda *_: None)
-    monkeypatch.setattr(t_agent, "render_prompt", _async_return("triage prompt"))
-    monkeypatch.setattr(t_agent, "load_rhel_config", _async_return({}))
-    monkeypatch.setattr(t_agent, "determine_target_branch", _async_return(("rhel-10.3", None)))
-    monkeypatch.setattr(t_agent, "is_older_zstream", _async_return(False))
-    monkeypatch.setattr(
-        agent_tasks, "clone_and_prep_sources", _async_return((tmp_path, tmp_path, prep_ok, None))
-    )
-    monkeypatch.setattr(t_agent, "create_triage_applicability_agent", lambda *_: applicability_agent)
-    monkeypatch.setattr(t_agent, "check_build_in_buildroot", _async_return(in_buildroot))
-    siblings = [ConsolidatedIssue(issue_key="RHEL-200")] if scenario == "consolidated" else []
-    monkeypatch.setattr(t_agent, "find_rebuild_siblings", _async_return((siblings, None)))
-    monkeypatch.setattr(agent_tasks, "get_jira_issue_metadata", _async_return(([], "New")))
-    monkeypatch.setattr(
-        t_agent, "queue_siblings_for_triage", _async_return(2 if scenario == "waiting" else 0)
-    )
-
-    # The cluster lock serializes the primary decision; in tests it is always
-    # acquired (or busy for the fail-open scenario) and never touches Redis.
-    monkeypatch.setenv("REDIS_URL", "redis://localhost")
-
-    @asynccontextmanager
-    async def _fake_redis(*_args, **_kwargs):
-        yield None
-
-    @asynccontextmanager
-    async def _fake_cluster_lock(*_args, **_kwargs):
-        yield scenario != "lock_busy"
-
-    monkeypatch.setattr(t_agent, "redis_client", _fake_redis)
-    monkeypatch.setattr(t_agent, "waiting_issue_lock", _fake_cluster_lock)
-    if scenario in ("lock_demotes", "lock_busy"):
-        # First check: not a sibling. Re-check under the cluster lock: another
-        # primary has marked this issue as its sibling in the meantime.
-        sibling_checks = []
-
-        async def _flip_sibling(*_args, **_kwargs):
-            sibling_checks.append(1)
-            return len(sibling_checks) > 1
-
-        monkeypatch.setattr(t_agent, "_is_rebase_sibling", _flip_sibling)
-    labels = []
-    comments = []
-
-    async def _record_labels(**kwargs):
-        labels.append(kwargs)
-
-    async def _record_comment(**kwargs):
-        comments.append(kwargs)
-        if scenario == "comment_error" and expect_hold:
-            raise RuntimeError("Jira comments unavailable")
-
-    monkeypatch.setattr(agent_tasks, "set_jira_labels", _record_labels)
-    monkeypatch.setattr(agent_tasks, "comment_in_jira", _record_comment)
-
-    state = await run_workflow(
-        "RHEL-99999",
-        dry_run=dry_run,
-        triage_agent_factory=lambda *_: triage_agent,
-        auto_chain=scenario != "direct",
-    )
-
-    assert state.automatic_branch_creation_disabled is True
-    assert state.triage_result.resolution == expected_resolution
-    assert state.triage_result.confidence == applicability.confidence
-    if dry_run:
-        assert not labels
-        assert not comments
-        return
-    confidence_updates = [
-        call
-        for call in labels
-        if JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value in call.get("labels_to_add", [])
-    ]
-    assert len(confidence_updates) == 1
-    assert set(confidence_updates[0]["labels_to_remove"]) == {
-        JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
-        JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
-    }
-    labels = [call for call in labels if call not in confidence_updates]
-    if initial_resolution == Resolution.REBASE and scenario in ("sibling", "waiting", "lock_demotes"):
-        assert not state.hold_for_manual_branch_creation
-        assert not labels
-        assert not comments
-        return
-    held_issues = {"RHEL-99999"} if expect_hold else set()
-    if expect_hold and scenario == "consolidated" and initial_resolution == Resolution.REBUILD:
-        held_issues.add("RHEL-200")
-    assert {call["jira_issue"] for call in labels} == held_issues
-    for call in labels:
-        assert JiraLabels.MANUAL_BRANCH_NEEDED.value in call["labels_to_add"]
-        assert call["critical"] is True
-    assert len(comments) == (len(held_issues) or 1)
-    text = comments[-1]["comment_text"]
-    assert ("Automatic branch creation is disabled" in text) is expect_hold
-    assert ("create the branch manually" in text) is expect_hold
-    if expect_hold:
-        assert all("label to RHEL-99999" in call["comment_text"] for call in comments)
-
-
-@pytest.mark.asyncio
-async def test_pending_dependencies_maps_to_postponed_y_stream(_mock_env_vars):
-    """PENDING_DEPENDENCIES eligibility must produce POSTPONED_Y_STREAM, not
-    POSTPONED_DEPENDENCY.  The former is swept by YStreamSweep; the latter by
-    DependencySweep (rebuild waiting for a component's fixed build).  Mixing
-    them up silently deadlocks one of the two sweep paths."""
-    pending_issues = ["RHEL-99998"]
-    eligibility_result = CVEEligibilityResult(
-        is_cve=True,
-        eligibility=TriageEligibility.PENDING_DEPENDENCIES,
-        reason="Waiting for Z-stream clones to ship",
-        pending_zstream_issues=pending_issues,
-    )
-
-    @asynccontextmanager
-    async def _mock_mcp_tools(*_args, **_kwargs):
-        yield []
-
-    async def _mock_run_tool(*_args, **_kwargs):
-        return eligibility_result.model_dump()
-
-    flexmock(t_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
-    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
-    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
-
-    state = await run_workflow(
-        "RHEL-99999",
-        dry_run=True,
-        triage_agent_factory=lambda *_args, **_kwargs: flexmock(),
-    )
+    t_agent.apply_cve_eligibility(state, force_cve_triage=False)
 
     assert state.triage_result.resolution == Resolution.POSTPONED_Y_STREAM
     assert state.triage_result.data.pending_issues == pending_issues
 
 
 @pytest.mark.asyncio
-async def test_pr_pending_without_blocker_reference_raises(_mock_env_vars):
-    """A postponed_pr_pending resolution with no blocker_references URL is not
-    sweepable (PRPendingSweep has no MR/PR to poll), so run_triage_analysis must
-    raise rather than silently produce a permanently-stuck issue. The raise is
-    caught by the workflow's outer handler and routed through retry()."""
-    eligibility_result = CVEEligibilityResult(
-        is_cve=True,
-        eligibility=TriageEligibility.IMMEDIATELY,
-        reason="Eligible for immediate triage",
+@pytest.mark.parametrize(
+    ("initial_resolution", "is_affected", "in_buildroot", "final_resolution"),
+    [
+        (Resolution.BACKPORT, True, True, Resolution.BACKPORT),
+        (Resolution.REBASE, True, True, Resolution.REBASE),
+        (Resolution.REBUILD, True, True, Resolution.REBUILD),
+        (Resolution.REBUILD, False, True, Resolution.NOT_AFFECTED),
+        (Resolution.REBUILD, True, False, Resolution.POSTPONED_DEPENDENCY),
+    ],
+)
+async def test_manual_branch_hold_uses_final_resolution(
+    initial_resolution, is_affected, in_buildroot, final_resolution
+):
+    common = {"package": "bash", "jira_issue": "RHEL-99999", "fix_version": "rhel-10.3.z"}
+    if initial_resolution == Resolution.BACKPORT:
+        data = BackportData(**common, patch_urls=[], justification="Apply upstream fix")
+    elif initial_resolution == Resolution.REBASE:
+        data = RebaseData(**common, version="5.3")
+    else:
+        data = RebuildData(**common, dependency_issue="RHEL-1", dependency_component="openssl")
+    state = TriageState(
+        jira_issue=common["jira_issue"],
+        triage_result=TriageOutputSchema(resolution=initial_resolution, data=data),
+    )
+    confidence = ConfidenceAssessment(level="high", reason="Inspected target source and build paths")
+
+    async def determine_branch(**_kwargs):
+        return "rhel-10.3", "rhel"
+
+    async def list_branches(name, *, available_tools, package):
+        assert name == "get_internal_rhel_branches"
+        assert package == "bash"
+        return []
+
+    async def branch_policy(package, available_tools):
+        assert package == "bash"
+        return PackageBranchCreationConfig(automatic=False)
+
+    flexmock(t_agent).should_receive("determine_target_branch").replace_with(determine_branch)
+    flexmock(t_agent).should_receive("run_tool").replace_with(list_branches)
+    flexmock(agent_tasks).should_receive("fetch_branch_creation_config").replace_with(branch_policy)
+    await t_agent.resolve_triage_target(state, [], user_triggered=True, triage_only_requested=False)
+    assert state.hold_for_manual_branch_creation
+
+    next_step = t_agent.apply_cve_applicability(
+        state,
+        AssessedApplicabilityResult(
+            is_affected=is_affected, explanation="Source analysis result", confidence=confidence
+        ),
+    )
+    if next_step == "verify_rebuild_buildroot":
+        t_agent.apply_rebuild_buildroot(state, (in_buildroot, "openssl-3.0-1.el10"))
+
+    assert state.triage_result.resolution == final_resolution
+    assert state.triage_result.confidence == confidence
+    assert state.hold_for_manual_branch_creation is (final_resolution == initial_resolution)
+
+
+def test_apply_triage_output_rejects_pr_pending_without_blocker_reference():
+    state = TriageState(jira_issue="RHEL-99999")
+    output = TriageOutputSchema(
+        resolution=Resolution.POSTPONED_PR_PENDING,
+        data=PostponedData(
+            summary="Waiting for upstream PR", pending_issues=["RHEL-1"], jira_issue=state.jira_issue
+        ),
     )
 
-    # LLM output: postponed_pr_pending but blocker_references omitted.
-    llm_json = (
-        '{"resolution": "postponed_pr_pending", "data": {'
-        '"summary": "Fix pending in upstream MR; waiting for merge", '
-        '"pending_issues": ["RHEL-1"], "jira_issue": "RHEL-99999"}}'
-    )
-
-    async def _mock_agent_run(*_args, **_kwargs):
-        return flexmock(output=TriageOutputSchema.model_validate_json(llm_json))
-
-    def _mock_factory(*_args, **_kwargs):
-        return agent
-
-    @asynccontextmanager
-    async def _mock_mcp_tools(*_args, **_kwargs):
-        yield []
-
-    async def _mock_run_tool(name, **_kwargs):
-        if name == "get_jira_details":
-            return {"fields": {}}
-        return eligibility_result.model_dump()
-
-    async def _mock_prompt(*_args, **_kwargs):
-        return "prompt"
-
-    agent = flexmock()
-    agent.should_receive("run").replace_with(_mock_agent_run)
-    flexmock(t_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
-    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
-    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
-    flexmock(t_agent).should_receive("render_prompt").replace_with(_mock_prompt)
-
-    with pytest.raises(ValueError, match="postponed_pr_pending"):
-        await run_workflow("RHEL-99999", dry_run=True, triage_agent_factory=_mock_factory)
-
-
-def _adf_paragraph(*text_nodes: dict) -> dict:
-    return {"type": "paragraph", "content": list(text_nodes)}
-
-
-def _adf_ymir_postponed_body(resolution: Resolution, summary: str = "no upstream fix yet") -> dict:
-    """Build an ADF comment body as Jira REST v3 (get_jira_details) returns it.
-
-    Crucially this drops the ``*bold*`` wiki markup the agent posts: the
-    ``*Resolution*`` label becomes a strong-marked text node ("Resolution",
-    no asterisks) and the value lands in a separate text node. This is what
-    ``extract_text_from_adf`` actually sees in production, so the guard must
-    match on the marker + snake_case value token, not the rendered
-    ``*Resolution*:`` string.
-    """
-    return {
-        "type": "doc",
-        "version": 1,
-        "content": [
-            _adf_paragraph({"type": "text", "text": "Output from Ymir Triage Agent: "}),
-            _adf_paragraph(
-                {"type": "text", "text": "Resolution", "marks": [{"type": "strong"}]},
-                {"type": "text", "text": f": {resolution.value}"},
-            ),
-            _adf_paragraph(
-                {"type": "text", "text": "Summary", "marks": [{"type": "strong"}]},
-                {"type": "text", "text": f": {summary}"},
-            ),
-        ],
-    }
-
-
-def _details_with_comments(*bodies) -> dict:
-    """Wrap comment bodies (ADF dicts or plain strings) in the get_jira_details shape."""
-    return {"fields": {"comment": {"comments": [{"body": b} for b in bodies]}}}
-
-
-@pytest.mark.asyncio
-async def test_postponed_comment_exists_true_same_resolution():
-    """Returns True when a prior Ymir ADF comment records the same resolution."""
-
-    async def _mock_run_tool(*_args, **_kwargs):
-        return _details_with_comments(
-            "some unrelated human comment",
-            _adf_ymir_postponed_body(Resolution.POSTPONED_NO_PATCH),
-        )
-
-    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
-
-    assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is True
-
-
-@pytest.mark.asyncio
-async def test_postponed_comment_exists_false_different_resolution():
-    """A prior Ymir comment for a DIFFERENT resolution does not suppress."""
-
-    async def _mock_run_tool(*_args, **_kwargs):
-        return _details_with_comments(_adf_ymir_postponed_body(Resolution.POSTPONED_PR_PENDING))
-
-    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
-
-    assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is False
-
-
-@pytest.mark.asyncio
-async def test_postponed_comment_exists_false_without_marker():
-    """The resolution value without the Ymir marker (e.g. a human quote) is ignored."""
-
-    async def _mock_run_tool(*_args, **_kwargs):
-        return _details_with_comments(
-            {
-                "type": "doc",
-                "version": 1,
-                "content": [
-                    _adf_paragraph(
-                        {"type": "text", "text": "I think this should be postponed_no_patch, agreed?"}
-                    )
-                ],
-            }
-        )
-
-    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
-
-    assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is False
-
-
-@pytest.mark.asyncio
-async def test_postponed_comment_exists_false_no_comments():
-    """No comments at all -> nothing to deduplicate against."""
-
-    async def _mock_run_tool(*_args, **_kwargs):
-        return _details_with_comments()
-
-    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
-
-    assert await _postponed_comment_exists("RHEL-99999", Resolution.POSTPONED_NO_PATCH, []) is False
+    with pytest.raises(ValueError, match=r"postponed_pr_pending.*blocker MR/PR URL"):
+        t_agent.apply_triage_output(state, output)
 
 
 def test_ymir_comment_marker_triage():
@@ -1306,6 +849,47 @@ def test_jira_comment_template_output_unchanged():
 
 
 _CVE_SUMMARY = "CVE-2026-115905 keylime-agent-rust: zip: parser differential [rhel-10.4]"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefetch", ["success", "malformed", "error"])
+async def test_prepare_triage_analysis_includes_jira_context_when_available(prefetch):
+    state = TriageState(jira_issue="RHEL-300091")
+    details = {
+        "key": state.jira_issue,
+        "fields": {
+            "summary": _CVE_SUMMARY,
+            "fixVersions": [{"name": "rhel-10.4"}],
+            "comment": {"comments": [{"body": "Maintainer supplied patch details"}]},
+        },
+        "remote_links": [{"object": {"url": "https://example.com/change"}}],
+    }
+
+    async def read_issue(name, *, available_tools, issue_key):
+        assert name == "get_jira_details"
+        assert issue_key == state.jira_issue
+        if prefetch == "error":
+            raise TimeoutError("Jira request timed out")
+        return details if prefetch == "success" else {"error": "Jira returned no issue"}
+
+    async def is_older_zstream(_version):
+        return False
+
+    flexmock(t_agent).should_receive("run_tool").replace_with(read_issue).once()
+    flexmock(t_agent).should_receive("is_older_zstream").replace_with(is_older_zstream)
+
+    prompt, deps = await t_agent.prepare_triage_analysis(state, [])
+
+    assert deps.jira_issue == state.jira_issue
+    if prefetch == "success":
+        assert json.loads(prompt.split("Jira issue data (JSON):\n", 1)[1]) == details
+        assert deps.fix_version == "rhel-10.4"
+        assert deps.jira_summary == state.jira_summary == _CVE_SUMMARY
+    else:
+        assert "Jira issue data (JSON):" not in prompt
+        assert "If it is missing, fetch the issue using get_jira_details." in prompt
+        assert deps.fix_version is None
+        assert deps.jira_summary is None
 
 
 def _backport_answer(**data_overrides) -> dict:
@@ -1453,143 +1037,6 @@ def test_validate_triage_output_pr_pending_requires_blocker_references():
     )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("prefetch", ["success", "malformed", "error"])
-async def test_run_workflow_includes_jira_context_when_available(_mock_env_vars, prefetch):
-    eligibility_result = CVEEligibilityResult(
-        is_cve=True,
-        eligibility=TriageEligibility.IMMEDIATELY,
-        reason="Eligible for immediate triage",
-    )
-    jira_details = {
-        "key": "RHEL-300091",
-        "fields": {
-            "summary": _CVE_SUMMARY,
-            "fixVersions": [{"name": "rhel-10.4"}],
-            "description": "Fix needed in the existing package",
-            "comment": {"comments": [{"body": "Maintainer supplied patch details"}]},
-        },
-        "remote_links": [{"object": {"url": "https://example.com/change"}}],
-    }
-
-    async def _mock_agent_run(prompt, **kwargs):
-        deps = kwargs["deps"]
-        assert deps.jira_issue == "RHEL-300091"
-        if prefetch == "success":
-            assert json.loads(prompt.split("Jira issue data (JSON):\n", 1)[1]) == jira_details
-            assert deps.fix_version == "rhel-10.4"
-            assert deps.jira_summary == _CVE_SUMMARY
-        else:
-            assert "Jira issue data (JSON):" not in prompt
-            assert "If it is missing, fetch the issue using get_jira_details." in prompt
-            assert deps.fix_version is None
-            assert deps.jira_summary is None
-        return flexmock(
-            output=TriageOutputSchema(
-                resolution=Resolution.BACKPORT,
-                data=BackportData(
-                    **_backport_answer(
-                        jira_issue=deps.jira_issue, fix_version="rhel-10.4", cve_id="CVE-2026-115905"
-                    )["data"]
-                ),
-            )
-        )
-
-    agent = flexmock()
-    agent.should_receive("run").replace_with(_mock_agent_run).once()
-
-    @asynccontextmanager
-    async def _mock_mcp_tools(*_args, **_kwargs):
-        yield []
-
-    issue_reads = []
-
-    async def _mock_run_tool(name, **kwargs):
-        if name == "get_jira_details":
-            issue_reads.append(kwargs["issue_key"])
-            if prefetch == "error":
-                raise TimeoutError("Jira request timed out")
-            return jira_details if prefetch == "success" else {"error": "Jira returned no issue"}
-        return eligibility_result.model_dump()
-
-    async def _mock_prompt(input_data, **_kwargs):
-        return t_agent.render_template("triage/prompt.j2", input_data)
-
-    async def _mock_rhel_config(*_args, **_kwargs):
-        return {}
-
-    flexmock(t_agent).should_receive("mcp_tools").replace_with(_mock_mcp_tools)
-    flexmock(t_agent).should_receive("run_tool").replace_with(_mock_run_tool)
-    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
-    flexmock(t_agent).should_receive("render_prompt").replace_with(_mock_prompt)
-    flexmock(t_agent).should_receive("load_rhel_config").replace_with(_mock_rhel_config)
-
-    triage_data = []
-
-    async def _stop_at_target_branch(**kwargs):
-        # The triage step is done once the workflow routes here; stop to keep the test focused.
-        triage_data.append(kwargs["triage_data"])
-        raise RuntimeError("stop")
-
-    flexmock(t_agent).should_receive("determine_target_branch").replace_with(_stop_at_target_branch)
-    flexmock(t_agent).should_receive("normalize_fix_version").replace_with(lambda version, _config: version)
-
-    with pytest.raises(RuntimeError, match=r"^stop$"):
-        await run_workflow("RHEL-300091", dry_run=True, triage_agent_factory=lambda *_: agent)
-    assert issue_reads == ["RHEL-300091"]
-    assert len(triage_data) == 1
-    assert isinstance(triage_data[0], BackportData)
-    assert triage_data[0].jira_issue == "RHEL-300091"
-    assert triage_data[0].fix_version == "rhel-10.4"
-    assert triage_data[0].cve_id == "CVE-2026-115905"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("gateway_close_fails", [False, True])
-async def test_run_workflow_exports_completion_span(request, gateway_close_fails):
-    provider = TracerProvider()
-    request.addfinalizer(provider.shutdown)
-    exporter = InMemorySpanExporter()
-    provider.add_span_processor(AgentSpanProcessor())
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer(t_agent.__name__)
-    flexmock(trace).should_receive("get_tracer").with_args(t_agent.__name__).and_return(tracer)
-
-    @asynccontextmanager
-    async def mock_mcp_tools(*args, **kwargs):
-        yield []
-        assert not any(span.name == "TriageWorkflow" for span in exporter.get_finished_spans())
-        if gateway_close_fails:
-            raise RuntimeError("Gateway session could not close")
-
-    async def check_eligibility(*args, **kwargs):
-        with tracer.start_as_current_span("check_cve_triage_eligibility"):
-            return CVEEligibilityResult(
-                is_cve=True, eligibility=TriageEligibility.NEVER, reason="Duplicate tracker"
-            ).model_dump()
-
-    flexmock(t_agent).should_receive("get_mock_local_tool_env").and_return(None)
-    flexmock(t_agent).should_receive("mcp_tools").replace_with(mock_mcp_tools)
-    flexmock(t_agent).should_receive("run_tool").replace_with(check_eligibility)
-
-    if gateway_close_fails:
-        with pytest.raises(RuntimeError, match="Gateway session could not close"):
-            await run_workflow("RHEL-1", dry_run=True, triage_agent_factory=None)
-    else:
-        state = await run_workflow("RHEL-1", dry_run=True, triage_agent_factory=None)
-        assert state.triage_result.resolution == Resolution.OPEN_ENDED_ANALYSIS
-
-    eligibility, workflow = exporter.get_finished_spans()
-    assert workflow.name == "TriageWorkflow"
-    assert workflow.parent is None
-    assert workflow.attributes["jira.issue"] == "RHEL-1"
-    assert eligibility.parent == workflow.context
-    assert eligibility.end_time <= workflow.end_time
-    assert workflow.status.status_code == (
-        trace.StatusCode.ERROR if gateway_close_fails else trace.StatusCode.UNSET
-    )
-
-
 @pytest.mark.parametrize(
     ("triage_only", "expected"),
     [(False, True), (True, False)],
@@ -1597,240 +1044,3 @@ async def test_run_workflow_exports_completion_span(request, gateway_close_fails
 def test_terminal_label_wait_is_ended_by_triage_only(triage_only, expected):
     """A triage-only run is an explicit stop, so it must not leave the wait dangling."""
     assert _should_defer_terminal_label(Resolution.REBASE, triage_only, waiting_for_siblings=True) is expected
-
-
-@pytest.mark.asyncio
-async def test_is_rebase_sibling_follows_the_newest_primary_link(monkeypatch):
-    """A re-queued sibling defers to its latest primary, not an older finished one.
-
-    Following the older marker would declare the link stale and make this issue
-    run as a primary, which then queues the current primary as its own sibling.
-    """
-
-    async def fake_run_tool(name, **kwargs):
-        return {
-            "fields": {
-                "labels": [],
-                "comment": {
-                    "comments": [
-                        {"body": "Queued for triage as potential sibling of RHEL-100"},
-                        {"body": "Queued for triage as potential sibling of RHEL-300"},
-                    ]
-                },
-            }
-        }
-
-    async def fake_stale(primary_issue, available_tools):
-        assert primary_issue == "RHEL-300"
-        return False
-
-    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
-    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
-
-    state = TriageState(jira_issue="RHEL-200")
-    assert await _is_rebase_sibling(state, [], user_triggered=True) is True
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("primary_stale", "expected"), [(True, False), (False, True)])
-async def test_is_rebase_sibling_follows_primary_state(monkeypatch, primary_stale, expected):
-    """A permanent sibling marker defers only while its primary is still working."""
-
-    async def fake_run_tool(name, **kwargs):
-        assert name == "get_jira_details"
-        return {
-            "fields": {
-                "labels": [],
-                "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
-            }
-        }
-
-    async def fake_stale(primary_issue, available_tools):
-        assert primary_issue == "RHEL-100"
-        return primary_stale
-
-    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
-    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
-
-    state = TriageState(jira_issue="RHEL-200")
-    assert await _is_rebase_sibling(state, [], user_triggered=False) is expected
-
-
-@pytest.mark.asyncio
-async def test_is_rebase_sibling_keeps_deferring_without_a_link(monkeypatch):
-    """Labelled sibling whose marker cannot be read must still defer (fail safe)."""
-
-    async def fake_run_tool(name, **kwargs):
-        return {"fields": {"labels": [JiraLabels.REBASE_SIBLING.value]}}
-
-    async def fake_stale(*_args):
-        raise AssertionError("primary lookup must not be attempted without a link")
-
-    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
-    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
-
-    state = TriageState(jira_issue="RHEL-200")
-    assert await _is_rebase_sibling(state, [], user_triggered=False) is True
-
-
-@pytest.mark.asyncio
-async def test_is_rebase_sibling_runs_own_fix_after_primary_deferred(monkeypatch):
-    """Sequence: primary stopped after triage, sibling then explicitly requested.
-
-    The primary's deferred label means it will not pick the sibling up, so the
-    sibling's ``ymir_todo`` must run its own rebase rather than follow the stale
-    permanent comment link.
-    """
-
-    async def fake_run_tool(name, **kwargs):
-        if kwargs["issue_key"] == "RHEL-200":
-            return {
-                "fields": {
-                    "labels": [],
-                    "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
-                }
-            }
-        assert kwargs["issue_key"] == "RHEL-100"
-        return {
-            "fields": {
-                "status": {"name": "In Progress"},
-                "labels": [JiraLabels.TRIAGED_DEFERRED_REBASE.value],
-            }
-        }
-
-    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
-    monkeypatch.setattr(rebase_consolidation, "run_tool", fake_run_tool)
-
-    state = TriageState(jira_issue="RHEL-200")
-    assert await _is_rebase_sibling(state, [], user_triggered=True) is False
-
-
-@pytest.mark.asyncio
-async def test_stale_link_clears_own_waiting_marker(monkeypatch):
-    """A run released from a finished primary must not defer on its own stale marker.
-
-    The issue's ymir_rebase_waiting_for_siblings cannot be released by its group
-    anymore (the primary is finished), so it is cleared and recorded: the label
-    captured at task start must not defer the terminal label or the rebase
-    dispatch of the run that now acts as its own primary.
-    """
-    label_writes = []
-
-    async def fake_run_tool(name, **kwargs):
-        if kwargs["issue_key"] == "RHEL-200":
-            return {
-                "fields": {
-                    "labels": [JiraLabels.WAITING_FOR_SIBLINGS.value],
-                    "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
-                }
-            }
-        assert kwargs["issue_key"] == "RHEL-100"
-        return {"fields": {"status": {"name": "New"}, "labels": [JiraLabels.REBASED.value]}}
-
-    async def fake_set_jira_labels(**kwargs):
-        label_writes.append(kwargs)
-
-    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
-    monkeypatch.setattr(rebase_consolidation, "run_tool", fake_run_tool)
-    monkeypatch.setattr(agent_tasks, "set_jira_labels", fake_set_jira_labels)
-
-    state = TriageState(jira_issue="RHEL-200")
-    state.rebase_waiting_for_siblings = True
-    assert await _is_rebase_sibling(state, [], user_triggered=False) is False
-    assert state.waiting_marker_cleared is True
-    assert state.rebase_waiting_for_siblings is False
-    assert label_writes == [
-        {
-            "jira_issue": "RHEL-200",
-            "labels_to_remove": [JiraLabels.WAITING_FOR_SIBLINGS.value],
-            "dry_run": False,
-            "user_triggered": False,
-            "critical": True,
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_stale_link_keeps_deferral_when_cleanup_fails(monkeypatch):
-    """If the stale marker cannot be removed, the run keeps the deferral behavior."""
-
-    async def fake_run_tool(name, **kwargs):
-        if kwargs["issue_key"] == "RHEL-200":
-            return {
-                "fields": {
-                    "labels": [JiraLabels.WAITING_FOR_SIBLINGS.value],
-                    "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
-                }
-            }
-        assert kwargs["issue_key"] == "RHEL-100"
-        return {"fields": {"status": {"name": "New"}, "labels": [JiraLabels.REBASED.value]}}
-
-    async def failing_set_jira_labels(**_kwargs):
-        raise RuntimeError("Jira unavailable")
-
-    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
-    monkeypatch.setattr(rebase_consolidation, "run_tool", fake_run_tool)
-    monkeypatch.setattr(agent_tasks, "set_jira_labels", failing_set_jira_labels)
-
-    state = TriageState(jira_issue="RHEL-200")
-    state.rebase_waiting_for_siblings = True
-    assert await _is_rebase_sibling(state, [], user_triggered=False) is False
-    assert state.waiting_marker_cleared is False
-    # The in-memory wait stays untouched: the terminal label must keep deferring
-    # on the marker that could not be removed.
-    assert state.rebase_waiting_for_siblings is True
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("user_triggered", "expects_raise"), [(True, True), (False, False)])
-async def test_is_rebase_sibling_unknown_primary_state(monkeypatch, user_triggered, expects_raise):
-    """An unreadable primary keeps an automatic run deferring but fails an explicit one.
-
-    Deferring an explicit ``ymir_todo`` would write a triage label and silently
-    drop the requested fix, so that run raises into the task retry path instead.
-    """
-
-    async def fake_run_tool(name, **kwargs):
-        return {
-            "fields": {
-                "labels": [],
-                "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]},
-            }
-        }
-
-    async def failing_stale(*_args):
-        raise RuntimeError("Jira unavailable")
-
-    monkeypatch.setattr(t_agent, "run_tool", fake_run_tool)
-    monkeypatch.setattr(t_agent, "sibling_link_is_stale", failing_stale)
-
-    state = TriageState(jira_issue="RHEL-200")
-    if expects_raise:
-        with pytest.raises(RuntimeError, match="RHEL-200"):
-            await _is_rebase_sibling(state, [], user_triggered=user_triggered)
-    else:
-        assert await _is_rebase_sibling(state, [], user_triggered=user_triggered) is True
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("user_triggered", [True, False])
-async def test_is_rebase_sibling_fails_when_own_details_unreadable(monkeypatch, user_triggered):
-    """An unreadable marker must not make a real sibling act as a primary.
-
-    The sibling state flag is only set from the marker read itself, so returning
-    False here would start consolidation and queue the real primary as one of
-    this issue's siblings, leaving both waiting on each other.
-    """
-
-    async def failing_run_tool(*_args, **_kwargs):
-        raise RuntimeError("Jira unavailable")
-
-    async def fake_stale(*_args):
-        raise AssertionError("primary lookup must not be attempted")
-
-    monkeypatch.setattr(t_agent, "run_tool", failing_run_tool)
-    monkeypatch.setattr(t_agent, "sibling_link_is_stale", fake_stale)
-
-    state = TriageState(jira_issue="RHEL-200")
-    with pytest.raises(RuntimeError, match="RHEL-200"):
-        await _is_rebase_sibling(state, [], user_triggered=user_triggered)

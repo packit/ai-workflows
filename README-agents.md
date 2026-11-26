@@ -510,8 +510,9 @@ table reports `TemporalTriageIngress` for the cases it ran.
 make run-triage-agent-e2e-tests DRY_RUN=true
 ```
 
-To use an existing development server, set `TEMPORAL_TRIAGE_ADDRESS` to an
-address reachable from the controller and execution pods. You can select
+The suite starts a local Temporal server and provisions a worker pod for each
+case. To use an existing development server, set `TEMPORAL_TRIAGE_ADDRESS` to
+an address reachable from the controller and execution pods. You can select
 individual cases with `TRIAGE_E2E_PYTEST_ARGS='-k RHEL-278652'`.
 
 Run the publication tests with a local Temporal server and a **disposable**

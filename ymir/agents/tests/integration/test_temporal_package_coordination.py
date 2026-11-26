@@ -35,7 +35,15 @@ from ymir.agents.temporal_triage_publication import (
 )
 from ymir.agents.triage_agent import TriageState
 from ymir.common.constants import JiraLabels
-from ymir.common.models import BackportData, RebaseData, RebuildData, Resolution, Task, TriageOutputSchema
+from ymir.common.models import (
+    BackportData,
+    ConfidenceAssessment,
+    RebaseData,
+    RebuildData,
+    Resolution,
+    Task,
+    TriageOutputSchema,
+)
 
 ADDRESS = os.getenv("TEMPORAL_TEST_ADDRESS")
 CVE = "CVE-2025-12345"
@@ -334,6 +342,48 @@ async def test_publication_records_the_handoff_for_the_coordinator_without_dispa
     ]
     assert written[1][1][1].coordination_workflow_id == work.key.workflow_id
     assert WAITING in written[-1][1][1]
+
+
+@pytest.mark.parametrize("level", [None, "low", "medium", "high"])
+def test_publication_replaces_previous_confidence_label(level):
+    work = make_work("RHEL-1")
+    if level:
+        work.state.triage_result.confidence = ConfidenceAssessment(level=level, reason="Source evidence")
+    confidence_labels = {
+        JiraLabels.APPLICABILITY_CONFIDENCE_LOW.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_MEDIUM.value,
+        JiraLabels.APPLICABILITY_CONFIDENCE_HIGH.value,
+    }
+    expected = {f"ymir_applicability_confidence_{level}"} if level else set()
+
+    add, remove = publication._terminal_labels(TriageAnalysisResult(work.state, True), [])
+
+    assert set(add) & confidence_labels == expected
+    assert set(remove) & confidence_labels == confidence_labels - expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("branch_exists", [False, True])
+async def test_publication_reports_manual_branch_hold(branch_exists):
+    work = make_work("RHEL-1")
+    work.state.automatic_branch_creation_disabled = True
+    work.state.target_branch_exists = branch_exists
+    result = TriageAnalysisResult(work.state, follow_up_requested=True)
+    waiting = not branch_exists
+
+    async def post_comment(request, step, body):
+        assert request is work.request
+        assert step == "finding"
+        assert ("Automatic branch creation is disabled" in body) is waiting
+        assert ("create the branch manually" in body) is waiting
+        assert ("`ymir_todo` label to RHEL-1" in body) is waiting
+
+    flexmock(publication).should_receive("_post_comment").replace_with(post_comment).once()
+    handoff = publication._downstream_handoff(work.request, result, [])
+    assert (handoff is None) is waiting
+    await publication.publish_triage_finding(work.request, result, [handoff] if handoff else [])
+    add, _ = publication._terminal_labels(result, [])
+    assert (JiraLabels.MANUAL_BRANCH_NEEDED.value in add) is waiting
 
 
 @pytest.mark.asyncio

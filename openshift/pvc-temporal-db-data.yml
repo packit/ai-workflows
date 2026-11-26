@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: temporal-db-data
+  labels:
+    paas.redhat.com/appcode: JTNR-001
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: rh-restricted-iscsi
+  resources:
+    requests:
+      storage: 5Gi

@@ -32,7 +32,7 @@ async def main() -> None:
         provisioner = OpenShiftPodProvisioner(
             namespace,
             Path(__file__).resolve().parents[2] / "temporal-worker-pod.yml",
-            os.getenv("TEMPORAL_POD_ADDRESS") or address,
+            address,
             client.namespace,
             TRIAGE_WORKER_POD,
             api=InClusterPodAPI(namespace),

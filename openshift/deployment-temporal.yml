@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal
+  annotations:
+    image.openshift.io/triggers: |
+      [
+        {"from":{"kind":"ImageStreamTag","name":"temporal:server"},"fieldPath":"spec.template.spec.containers[?(@.name==\"server\")].image"},
+        {"from":{"kind":"ImageStreamTag","name":"temporal:admin-tools"},"fieldPath":"spec.template.spec.initContainers[?(@.name==\"schema\")].image"}
+      ]
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: temporal
+  template:
+    metadata:
+      labels:
+        app: temporal
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: schema
+          image: temporal:admin-tools
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              temporal-sql-tool --database temporal setup-schema -v 0.0
+              temporal-sql-tool --database temporal update-schema -d /etc/temporal/schema/postgresql/v12/temporal/versioned
+              temporal-sql-tool --database temporal_visibility setup-schema -v 0.0
+              temporal-sql-tool --database temporal_visibility update-schema -d /etc/temporal/schema/postgresql/v12/visibility/versioned
+          env:
+            - name: SQL_HOST
+              value: temporal-db
+            - name: SQL_PORT
+              value: "5432"
+            - name: SQL_PLUGIN
+              value: postgres12
+            - name: SQL_USER
+              value: temporal
+            - name: SQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: temporal-db
+                  key: password
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: server
+          image: temporal:server
+          env:
+            - name: BIND_ON_IP
+              value: 0.0.0.0
+            - name: TEMPORAL_BROADCAST_ADDRESS
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: DB
+              value: postgres12
+            - name: POSTGRES_SEEDS
+              value: temporal-db
+            - name: POSTGRES_USER
+              value: temporal
+            - name: SQL_MAX_CONNS
+              value: "10"
+            - name: SQL_MAX_IDLE_CONNS
+              value: "10"
+            - name: SQL_VIS_MAX_CONNS
+              value: "3"
+            - name: SQL_VIS_MAX_IDLE_CONNS
+              value: "3"
+            - name: TEMPORAL_ALLOW_NO_AUTH
+              value: "true"
+            - name: POSTGRES_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: temporal-db
+                  key: password
+          ports:
+            - containerPort: 7233
+          readinessProbe:
+            grpc:
+              port: 7233
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: dynamic-config
+              mountPath: /etc/temporal/config/dynamicconfig
+              readOnly: true
+      volumes:
+        - name: dynamic-config
+          configMap:
+            name: temporal-dynamic-config

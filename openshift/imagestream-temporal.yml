@@ -1,0 +1,20 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: temporal
+spec:
+  lookupPolicy:
+    local: true
+  tags:
+    - name: server
+      from:
+        kind: DockerImage
+        name: docker.io/temporalio/server:1.32.2
+    - name: admin-tools
+      from:
+        kind: DockerImage
+        name: docker.io/temporalio/admin-tools:1.32.2
+    - name: postgres
+      from:
+        kind: DockerImage
+        name: quay.io/sclorg/postgresql-16-c9s

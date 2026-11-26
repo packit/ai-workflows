@@ -6,13 +6,6 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"
 
 oc project jotnar-ymir--jotnar-ymir
-temporal_configmap=$(oc get configmap temporal-triage-env --ignore-not-found -o name)
-if [ -z "$temporal_configmap" ]; then
-    : "${TEMPORAL_ADDRESS:?Set TEMPORAL_ADDRESS to the Temporal server address for the first deployment}"
-    temporal_manifest=$(oc set data --local -f configmap-temporal-triage-env.yml -o yaml \
-        "TEMPORAL_ADDRESS=$TEMPORAL_ADDRESS" "TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}")
-    printf '%s\n' "$temporal_manifest" | oc create -f -
-fi
 
 apply() {
     echo "Applying $1 ..."
@@ -82,6 +75,28 @@ apply configmap-chat-env.yml
 apply configmap-endpoints-env.yml
 apply configmap-jira-env.yml
 apply configmap-kerberos-env.yml
+apply configmap-temporal-triage-env.yml
+
+# Temporal and its cluster-local database
+apply imagestream-temporal.yml
+import_image temporal
+temporal_db_secret=$(oc get secret temporal-db --ignore-not-found -o name)
+if [ -z "$temporal_db_secret" ]; then
+    temporal_db_password=$(python3 -c 'import secrets; print(secrets.token_hex(24))')
+    printf '%s' "$temporal_db_password" | oc create secret generic temporal-db --from-file=password=/dev/stdin
+    unset temporal_db_password
+fi
+apply networkpolicy-temporal.yml
+apply configmap-temporal-db-init.yml
+apply pvc-temporal-db-data.yml
+apply service-temporal-db.yml
+apply deployment-temporal-db.yml
+apply configmap-temporal-dynamic-config.yml
+apply service-temporal.yml
+apply deployment-temporal.yml
+oc rollout status deployment/temporal --timeout=5m
+temporal_namespace_job=$(oc create -f job-temporal-namespace.yml -o name)
+oc wait --for=condition=complete "$temporal_namespace_job" --timeout=3m
 
 # Phoenix PostgreSQL database
 apply imagestream-phoenix-db.yml

@@ -3,5 +3,6 @@ kind: ConfigMap
 metadata:
   name: temporal-triage-env
 data:
+  TEMPORAL_ADDRESS: temporal:7233
   TEMPORAL_NAMESPACE: default
   TEMPORAL_TRIAGE_CONTROL_QUEUE: ymir-triage-control

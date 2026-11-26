@@ -516,20 +516,18 @@ oc rollout restart deployment/triage-controller  # plus any other affected deplo
 
 ## Cut over triage to Temporal
 
-Deployment creates `temporal-triage-env` in the Ymir OpenShift namespace if
-absent. On the first deployment, pass the existing Temporal service address
-and its Ymir namespace to `make deploy`. Omit `TEMPORAL_NAMESPACE` to use
-`default`. Triage accepts submissions once the controller starts polling
-Temporal. For later changes, edit the existing ConfigMap. Redeploying
-preserves its values.
+`make deploy` installs Temporal and its PostgreSQL database in the Ymir
+OpenShift namespace. It creates the database credentials on the first deploy,
+initializes the SQL schemas, and ensures Temporal's `default` namespace exists.
+The controller, execution pods, and Jira producers all connect to
+`temporal:7233` through the cluster Service. The controller uses its own
+service account to provision execution pods with the existing worker and
+gateway images.
 
-```bash
-TEMPORAL_ADDRESS=temporal.example.com:7233 TEMPORAL_NAMESPACE=ymir make deploy
-```
-
-Set `TEMPORAL_POD_ADDRESS` in the ConfigMap if the execution pods reach
-Temporal at a different address. The controller uses its own service account
-to provision pods. The execution pods use the existing worker and gateway images.
+Workflow state stays in the cluster-local `temporal-db-data` claim across
+pod restarts. The Temporal namespace retains closed workflow history for
+seven days. Jira and GitLab remain the durable records for recovery after
+cluster loss.
 
 1. Publish the updated C10S agent, fetcher, and sweep images.
 2. For an existing Redis installation, suspend the old fetcher and sweep

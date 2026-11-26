@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: temporal-db-init
+data:
+  visibility.sh: |
+    if [ -z "$(psql -U postgres -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname = 'temporal_visibility'")" ]; then
+      createdb -U postgres -O temporal temporal_visibility
+    fi

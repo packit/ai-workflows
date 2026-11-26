@@ -43,6 +43,12 @@ The Jira acknowledgement and finding are private comments. Restrict access to
 the Temporal namespace because its history also contains proposed writes and
 downstream payloads.
 
+The OpenShift deployment runs Temporal with a cluster-local PostgreSQL
+database. An ingress network policy restricts both services to pods in the
+Ymir project. PostgreSQL credentials are stored in an OpenShift Secret.
+Workflow history is stored on the database's persistent volume for recovery
+across pod restarts. Closed workflows are retained for seven days.
+
 The Temporal triage control worker provisions execution pods using the configured
 OpenShift identity or the local Podman API. The Compose, CLI, and E2E
 controllers mount the host user's rootless Podman socket. On a rootful TMT

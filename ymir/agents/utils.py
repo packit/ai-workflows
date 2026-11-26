@@ -1,5 +1,7 @@
+import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -41,11 +43,22 @@ def unsupported_model_params(chat_model: str) -> tuple[str, ...]:
 
 
 def patch_fetch_tool_name(patch_url: str) -> str:
-    """Select authenticated patch retrieval for HTTPS URLs hosted on GitHub."""
+    """Select a tool that retrieves complete patch content for deterministic application."""
     parsed_url = urlparse(patch_url)
     if parsed_url.scheme == "https" and parsed_url.hostname in {"github.com", "www.github.com"}:
         return "get_github_patch_full"
-    return "get_patch_from_url"
+    return "get_patch_from_url_full"
+
+
+def tool_error_detail(message: str) -> str:
+    """Unwrap the JSON-quoted, prefixed text of an error raised by an MCP tool."""
+    try:
+        decoded = json.loads(message)
+    except (json.JSONDecodeError, TypeError):
+        decoded = message
+    if not isinstance(decoded, str):
+        decoded = message
+    return re.sub(r"^Error executing tool \S+: ", "", decoded)
 
 
 def resolve_chat_model_override(agent_type: str) -> None:

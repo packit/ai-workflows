@@ -245,6 +245,12 @@ for private Red Hat projects on `gitlab.com` (including projects under
 `FORK_NAMESPACE`) or for `gitlab.cee.redhat.com`. Public projects on other
 allowlisted hosts remain unauthenticated.
 
+Patch fetches (`get_patch_from_url`, `get_patch_from_url_full`) rewrite private
+commit `.patch`/`.diff` URLs to the commit diff API, send the token only over
+HTTPS, and never follow redirects for authenticated requests. Workflows that
+write patch files use `get_patch_from_url_full`, which fails instead of
+returning truncated, incomplete, binary or non-patch content.
+
 ### Git Operations
 
 **HTTPS (MCP Server):**

@@ -25,7 +25,7 @@ from ymir.agents.backport_agent import (
     resolve_latest_resolved_sibling_source,
     resolve_resolved_sibling_source,
 )
-from ymir.agents.utils import patch_fetch_tool_name
+from ymir.agents.utils import patch_fetch_tool_name, tool_error_detail
 from ymir.agents.ystream_inherit import (
     BrewSource,
     InheritCandidateError,
@@ -92,12 +92,31 @@ def test_parse_upstream_patches_rejects_empty_entries(patches):
         ("https://github.com/owner/repo/commit/deadbeef", "get_github_patch_full"),
         ("https://github.com/owner/repo/pull/1.diff?download=1", "get_github_patch_full"),
         ("https://github.com/owner/repo/raw/main/fix.patch#contents", "get_github_patch_full"),
-        ("http://github.com/owner/repo/pull/1.patch", "get_patch_from_url"),
-        ("https://gitlab.gnome.org/GNOME/gvfs/-/commit/ea1322da.patch", "get_patch_from_url"),
+        ("http://github.com/owner/repo/pull/1.patch", "get_patch_from_url_full"),
+        ("https://gitlab.gnome.org/GNOME/gvfs/-/commit/ea1322da.patch", "get_patch_from_url_full"),
+        (
+            "https://gitlab.com/redhat/rhel/rpms/json-glib/-/commit/5e0be60e.patch",
+            "get_patch_from_url_full",
+        ),
     ],
 )
 def test_patch_fetch_tool_name(patch_url, tool_name):
     assert patch_fetch_tool_name(patch_url) == tool_name
+
+
+@pytest.mark.parametrize(
+    ("message", "detail"),
+    [
+        (
+            '"Error executing tool get_patch_from_url_full: Patch from https://x/y.patch is too large"',
+            "Patch from https://x/y.patch is too large",
+        ),
+        ("Required tool 'x' is unavailable", "Required tool 'x' is unavailable"),
+        ('{"error": "not a string"}', '{"error": "not a string"}'),
+    ],
+)
+def test_tool_error_detail(message, detail):
+    assert tool_error_detail(message) == detail
 
 
 @pytest.mark.asyncio

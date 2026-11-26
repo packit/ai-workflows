@@ -226,7 +226,6 @@ def _get_api_diff_url(url: str) -> str:
         return url
 
     parsed = urlparse(url)
-    hostname = parsed.hostname or ""
     match = _GITLAB_COMMIT_RE.match(parsed.path)
     if not match:
         return url
@@ -234,7 +233,11 @@ def _get_api_diff_url(url: str) -> str:
     project_path = match.group(1)
     sha = match.group(2)
     encoded_path = quote(project_path, safe="")
-    return f"{parsed.scheme}://{hostname}/api/v4/projects/{encoded_path}/repository/commits/{sha}/diff"
+    host = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname
+    return (
+        f"https://{host}/api/v4/projects/{encoded_path}/repository/commits/{sha}/diff"
+        f"?per_page={GITLAB_COMMIT_DIFF_PAGE_SIZE}"
+    )
 
 
 _SENSITIVE_STDERR_RE = re.compile(
@@ -1770,6 +1773,36 @@ class GetMergeRequestDetailsTool(
 
 
 MAX_PATCH_CONTENT_LENGTH = 2000
+MAX_FULL_PATCH_CONTENT_LENGTH = 5_000_000
+GITLAB_COMMIT_DIFF_PAGE_SIZE = 100
+_PATCH_CONTENT_RE = re.compile(r"^(?:diff --git |@@ -\d)", re.MULTILINE)
+_GITLAB_API_DIFF_RE = re.compile(r"^/api/v4/projects/[^/]+/repository/commits/[0-9a-f]+/diff$", re.IGNORECASE)
+
+
+_GIT_PATH_ESCAPES = {'"': '\\"', "\\": "\\\\", "\t": "\\t", "\n": "\\n", "\r": "\\r"}
+
+
+def _git_quote_path(path: str) -> str:
+    """Quote a patch header path the way git does when it contains special characters."""
+
+    def escape(char: str) -> str:
+        if char in _GIT_PATH_ESCAPES:
+            return _GIT_PATH_ESCAPES[char]
+        if ord(char) < 0x20 or ord(char) == 0x7F:
+            return f"\\{ord(char):03o}"
+        return char
+
+    escaped = "".join(escape(char) for char in path)
+    return path if escaped == path else f'"{escaped}"'
+
+
+def _api_mode_change(hunk: dict) -> tuple[str, str] | None:
+    """Return (old, new) modes when a GitLab diff entry explicitly changes the file mode."""
+    a_mode, b_mode = hunk.get("a_mode"), hunk.get("b_mode")
+    modes = (a_mode, b_mode)
+    if all(isinstance(mode, str) and mode != "0" for mode in modes) and a_mode != b_mode:
+        return a_mode, b_mode
+    return None
 
 
 class GetPatchFromUrlToolInput(BaseModel):
@@ -1784,6 +1817,7 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
     Returns the patch content as text (truncated to the first 2000 characters for large patches).
     """
     input_schema = GetPatchFromUrlToolInput
+    max_content_length: int | None = MAX_PATCH_CONTENT_LENGTH
 
     def _create_emitter(self) -> Emitter:
         return Emitter.root().child(
@@ -1801,15 +1835,55 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
         )
 
     @staticmethod
+    def _parse_api_diff(request_url: str, text: str) -> list[dict] | None:
+        """Return GitLab commit diff entries, or None if the response is not one."""
+        if not _GITLAB_API_DIFF_RE.match(urlparse(request_url).path):
+            return None
+        try:
+            hunks = json.loads(text)
+        except json.decoder.JSONDecodeError:
+            return None
+        if not isinstance(hunks, list) or not all(
+            isinstance(hunk, dict)
+            and isinstance(hunk.get("old_path"), str)
+            and isinstance(hunk.get("new_path"), str)
+            and hunk["old_path"]
+            and hunk["new_path"]
+            and "diff" in hunk
+            and (hunk["diff"] is None or isinstance(hunk["diff"], str))
+            for hunk in hunks
+        ):
+            return None
+        return hunks
+
+    @staticmethod
     def _json_hunks_to_text(hunks: list[dict]) -> str:
         parts = []
         for hunk in hunks:
-            old_path = hunk.get("old_path", "")
-            new_path = hunk.get("new_path", "")
-            parts.append(f"--- a/{old_path}")
-            parts.append(f"+++ b/{new_path}")
-            parts.append(hunk.get("diff", ""))
-        return "\n".join(parts)
+            old_path = hunk["old_path"]
+            new_path = hunk["new_path"]
+            a_path = _git_quote_path(f"a/{old_path}")
+            b_path = _git_quote_path(f"b/{new_path}")
+            a_mode = hunk.get("a_mode") or "0"
+            b_mode = hunk.get("b_mode") or "0"
+            diff = hunk.get("diff") or ""
+            parts.append(f"diff --git {a_path} {b_path}")
+            if hunk.get("new_file"):
+                parts.append(f"new file mode {b_mode if b_mode != '0' else '100644'}")
+            elif hunk.get("deleted_file"):
+                parts.append(f"deleted file mode {a_mode if a_mode != '0' else '100644'}")
+            elif mode_change := _api_mode_change(hunk):
+                parts.append(f"old mode {mode_change[0]}")
+                parts.append(f"new mode {mode_change[1]}")
+            if hunk.get("renamed_file"):
+                parts.append(f"rename from {_git_quote_path(old_path)}")
+                parts.append(f"rename to {_git_quote_path(new_path)}")
+            # git rejects ---/+++ lines that are not followed by a hunk.
+            if diff:
+                parts.append("--- /dev/null" if hunk.get("new_file") else f"--- {a_path}")
+                parts.append("+++ /dev/null" if hunk.get("deleted_file") else f"+++ {b_path}")
+                parts.append(diff.removesuffix("\n"))
+        return "".join(f"{part}\n" for part in parts)
 
     async def _run(
         self,
@@ -1819,7 +1893,14 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
     ) -> StringToolOutput:
         patch_url = tool_input.patch_url
         request_url = _get_api_diff_url(patch_url)
-        headers = gitlab_headers(request_url)
+        headers = gitlab_headers(patch_url)
+        authenticated = "PRIVATE-TOKEN" in headers
+        if authenticated:
+            request_url = urlparse(request_url)._replace(scheme="https").geturl()
+        complete = self.max_content_length is None
+        oversized = False
+        next_page = prev_page = ""
+        text = ""
 
         with tool_error_context(
             f"Failed to fetch patch from {patch_url}",
@@ -1828,24 +1909,141 @@ class GetPatchFromUrlTool(Tool[GetPatchFromUrlToolInput, ToolRunOptions, StringT
         ):
             async with (
                 aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
-                aiohttp_get_with_retries(session, request_url, headers=headers) as response,
+                aiohttp_get_with_retries(
+                    session,
+                    request_url,
+                    yield_final_retryable_response=True,
+                    headers=headers,
+                    # Never forward the GitLab token to a redirect target.
+                    allow_redirects=not authenticated,
+                ) as response,
             ):
-                if response.status >= 400:
-                    # We return Error string instead of ToolError, because status >= 400
-                    # on for example badly formatted URL is not a tool error and
-                    # should not be flagged
-                    return StringToolOutput(
-                        result=f"Error: Failed to fetch patch from {patch_url}: HTTP {response.status}"
-                    )
-                text = await response.text()
-        try:
-            hunks = json.loads(text)
-        except json.decoder.JSONDecodeError:
-            pass
-        else:
-            if isinstance(hunks, list):
-                text = self._json_hunks_to_text(hunks)
-        return StringToolOutput(result=self._truncate(text))
+                status = response.status
+                if status < 300:
+                    next_page = (response.headers.get("X-Next-Page") or "").strip()
+                    prev_page = (response.headers.get("X-Prev-Page") or "").strip()
+                    if complete:
+                        text, oversized = await self._read_limited(response)
+                    else:
+                        text = await response.text()
+
+        if complete and status != 200:
+            # Anything else, e.g. 206 Partial Content, may carry an incomplete body.
+            raise ToolError(f"Error: Failed to fetch patch from {patch_url}: HTTP {status}")
+        if status >= 300:
+            message = f"Error: Failed to fetch patch from {patch_url}: HTTP {status}"
+            # We return Error string instead of ToolError, because status >= 400
+            # on for example badly formatted URL is not a tool error and
+            # should not be flagged
+            return StringToolOutput(result=message)
+        if oversized:
+            raise ToolError(f"Patch from {patch_url} exceeds the {MAX_FULL_PATCH_CONTENT_LENGTH} byte limit")
+
+        hunks = self._parse_api_diff(request_url, text)
+        if hunks is not None:
+            if complete:
+                self._ensure_complete_api_diff(patch_url, hunks, next_page or prev_page)
+                await self._ensure_diff_matches_commit_stats(patch_url, request_url, headers, hunks)
+            text = self._json_hunks_to_text(hunks)
+
+        if complete:
+            # Converted GitLab API diffs gain headers, so check the final size too.
+            if len(text.encode()) > MAX_FULL_PATCH_CONTENT_LENGTH:
+                raise ToolError(
+                    f"Patch from {patch_url} exceeds the {MAX_FULL_PATCH_CONTENT_LENGTH} byte limit"
+                )
+            if not _PATCH_CONTENT_RE.search(text):
+                raise ToolError(f"Content fetched from {patch_url} does not look like a patch")
+            return StringToolOutput(result=text)
+        max_length = self.max_content_length or MAX_PATCH_CONTENT_LENGTH
+        return StringToolOutput(result=self._truncate(text, max_length))
+
+    @staticmethod
+    async def _ensure_diff_matches_commit_stats(
+        patch_url: str, request_url: str, headers: dict[str, str], hunks: list[dict]
+    ) -> None:
+        """Reject diffs that GitLab cut short at its instance-wide diff limits.
+
+        Once a commit exceeds those limits, GitLab stops listing files without
+        any marker, so compare the diff with the commit's line statistics.
+        """
+        commit_url = urlparse(request_url)._replace(query="").geturl().removesuffix("/diff")
+        with tool_error_context(
+            f"Failed to verify that the patch from {patch_url} is complete",
+            patch_url=patch_url,
+            request_url=commit_url,
+        ):
+            async with (
+                aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session,
+                aiohttp_get_with_retries(
+                    session, commit_url, headers=headers, allow_redirects="PRIVATE-TOKEN" not in headers
+                ) as response,
+            ):
+                response.raise_for_status()
+                stats = (await response.json())["stats"]
+                expected = (int(stats["additions"]), int(stats["deletions"]))
+        lines = [line for hunk in hunks for line in (hunk["diff"] or "").splitlines()]
+        actual = (
+            sum(line.startswith("+") for line in lines),
+            sum(line.startswith("-") for line in lines),
+        )
+        if actual != expected:
+            raise ToolError(
+                f"GitLab returned an incomplete diff for {patch_url}: the commit adds {expected[0]} and "
+                f"removes {expected[1]} lines, but the diff adds {actual[0]} and removes {actual[1]}"
+            )
+
+    @staticmethod
+    async def _read_limited(response: aiohttp.ClientResponse) -> tuple[str, bool]:
+        """Read at most MAX_FULL_PATCH_CONTENT_LENGTH bytes; report whether the body was larger."""
+        limit = MAX_FULL_PATCH_CONTENT_LENGTH
+        if response.content_length is not None and response.content_length > limit:
+            return "", True
+        body = bytearray()
+        async for chunk in response.content.iter_chunked(64 * 1024):
+            body.extend(chunk)
+            if len(body) > limit:
+                return "", True
+        return body.decode(response.charset or "utf-8"), False
+
+    @staticmethod
+    def _ensure_complete_api_diff(patch_url: str, hunks: list[dict], other_page: str) -> None:
+        if other_page:
+            raise ToolError(
+                f"Patch from {patch_url} spans multiple pages of more than {GITLAB_COMMIT_DIFF_PAGE_SIZE} "
+                "changed files; refusing to return an incomplete diff"
+            )
+        omitted = [
+            hunk["new_path"]
+            for hunk in hunks
+            if hunk.get("too_large")
+            or hunk.get("collapsed")
+            or (
+                not hunk["diff"]
+                and not any(hunk.get(flag) for flag in ("new_file", "deleted_file", "renamed_file"))
+                and _api_mode_change(hunk) is None
+            )
+        ]
+        if omitted:
+            raise ToolError(
+                f"GitLab omitted the diff of {', '.join(omitted)} in {patch_url}; "
+                "refusing to return an incomplete patch"
+            )
+        binary = [hunk["new_path"] for hunk in hunks if (hunk.get("diff") or "").startswith("Binary files ")]
+        if binary:
+            raise ToolError(
+                f"Patch from {patch_url} changes binary files ({', '.join(binary)}), "
+                "which cannot be represented as a text patch"
+            )
+
+
+class GetPatchFromUrlFullTool(GetPatchFromUrlTool):
+    name = "get_patch_from_url_full"
+    description = """
+    Fetches complete patch/diff content from a URL for deterministic patch application.
+    Fails instead of returning truncated, incomplete or non-patch content.
+    """
+    max_content_length = None
 
 
 class FetchGitlabMrNotesInput(BaseModel):

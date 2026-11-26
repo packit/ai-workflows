@@ -35,11 +35,7 @@ from ymir.common.cve import extract_cve_ids
 from ymir.common.gitlab_api import gitlab_api_get
 from ymir.common.jira_api import jira_api_get, jira_api_post
 from ymir.common.models import BackportData, ConsolidatedIssue, RebaseData, RebuildData, Resolution, Task
-from ymir.common.temporal_triage import (
-    TriageIntent,
-    submit_triage_intent,
-    temporal_triage_accepts_requests,
-)
+from ymir.common.temporal_triage import TriageIntent, submit_triage_intent
 from ymir.common.version_utils import get_fix_version_variants
 
 WAIT_INTERVAL = timedelta(minutes=15)
@@ -716,8 +712,6 @@ class PackageStreamActivities:
 
     @activity.defn
     async def submit_sibling_triage(self, issues: dict[str, str]) -> None:
-        if not temporal_triage_accepts_requests():
-            return
         for issue, updated in issues.items():
             await submit_triage_intent(
                 self.client,
@@ -741,8 +735,6 @@ class PackageStreamActivities:
 
 async def recover_package_coordination(client, queue: str) -> dict[str, str]:
     """Recover waiting issue intent from Jira in a fresh Temporal namespace."""
-    if not temporal_triage_accepts_requests():
-        raise ValueError("Enable Temporal triage admissions before recovery")
     account = (await jira_api_get("myself"))["accountId"]
     recovered = {}
     waiting = await _search_members(

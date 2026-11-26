@@ -649,9 +649,9 @@ missing record, a changed MR head, or an incompatible approach keeps the
 issue pending. The legacy workers and pipelines need a signer to publish these
 records when they validate a higher-stream fix.
 
-After recreating the cluster, start the shared controller with admissions
-enabled. Run the recovery command in the controller so it uses the
-deployment's Temporal settings and Jira credentials. Recovery reads Jira
+After recreating the cluster, start the shared controller. Run the recovery
+command there so it uses the deployment's Temporal settings and Jira
+credentials. Recovery reads Jira
 findings and resubmits waiting issues that lack an active owner. For a partly
 delivered handoff, inspect the existing Jira state and GitLab MR before retrying.
 
@@ -660,9 +660,10 @@ oc exec deployment/triage-controller -- \
   python3 -m ymir.agents.temporal_triage_admin recover-coordination
 ```
 
-For rollback, pause admissions, reconcile all open package-stream workflows
-and their downstream handoffs, then stop those workflows before transferring
-ownership. [OpenShift cutover](openshift/README.md#cut-over-triage-to-temporal)
+For rollback, suspend the fetcher and sweep CronJobs and stop other triage
+submitters. Reconcile open package-stream workflows and their downstream
+handoffs, then stop those workflows before transferring ownership.
+[OpenShift cutover](openshift/README.md#cut-over-triage-to-temporal)
 
 ### CLI
 

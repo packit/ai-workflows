@@ -43,12 +43,7 @@ from ymir.common.models import (
     RebaseOutputSchema,
     Task,
 )
-from ymir.common.temporal_triage import (
-    TriageIntent,
-    connect_triage_ingress,
-    submit_triage_intent,
-    temporal_triage_accepts_requests,
-)
+from ymir.common.temporal_triage import TriageIntent, connect_triage_ingress, submit_triage_intent
 from ymir.common.version_utils import construct_internal_branch_name, parse_rhel_version
 
 logger = logging.getLogger(__name__)
@@ -567,7 +562,7 @@ class JiraIssueFetcher:
             return set()
 
     async def submit_temporal_issues(self, issues: list[dict[str, Any]]) -> int:
-        if not issues or not temporal_triage_accepts_requests():
+        if not issues:
             return 0
 
         client = None

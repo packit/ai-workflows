@@ -18,7 +18,6 @@ from ymir.common.temporal_triage import (
     TriageIntent,
     connect_triage_ingress,
     submit_triage_intent,
-    temporal_triage_accepts_requests,
     triage_issue_workflow_id,
 )
 
@@ -126,9 +125,6 @@ def triage(
 ) -> None:
     """Run triage on a single Jira issue."""
     if os.getenv("TEMPORAL_ADDRESS"):
-        if not temporal_triage_accepts_requests():
-            typer.echo("Temporal triage admissions are paused for this issue.", err=True)
-            raise typer.Exit(1)
         if mock_jira:
             raise typer.BadParameter("--mock-jira requires the local Compose worker")
         intent = TriageIntent(

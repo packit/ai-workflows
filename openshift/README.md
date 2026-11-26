@@ -519,8 +519,9 @@ oc rollout restart deployment/triage-controller  # plus any other affected deplo
 Deployment creates `temporal-triage-env` in the Ymir OpenShift namespace if
 absent. On the first deployment, pass the existing Temporal service address
 and its Ymir namespace to `make deploy`. Omit `TEMPORAL_NAMESPACE` to use
-`default`. The ConfigMap starts with submissions paused. For later changes,
-edit the existing ConfigMap. Redeploying preserves its values.
+`default`. Triage accepts submissions once the controller starts polling
+Temporal. For later changes, edit the existing ConfigMap. Redeploying
+preserves its values.
 
 ```bash
 TEMPORAL_ADDRESS=temporal.example.com:7233 TEMPORAL_NAMESPACE=ymir make deploy
@@ -530,31 +531,27 @@ Set `TEMPORAL_POD_ADDRESS` in the ConfigMap if the execution pods reach
 Temporal at a different address. The controller uses its own service account
 to provision pods. The execution pods use the existing worker and gateway images.
 
-1. Publish the updated C10S agent, fetcher, and sweep images. For an existing
-   ConfigMap, set `TEMPORAL_TRIAGE_ADMISSIONS=false` while staging the new
-   configuration.
+1. Publish the updated C10S agent, fetcher, and sweep images.
 2. For an existing Redis installation, suspend the old fetcher and sweep
    CronJobs and let outstanding Jobs finish. Stop any other legacy triage
    queue producers. Resolve or retire historical triage failures in
    `error_list` while the old triage workers are available for retries. Let
    the workers finish queued and in-flight requests, then scale
    `deployment/triage-agent` to zero. After shutdown, verify that
-   `triage_queue`, `triage_queue_todo`, and any parked
-   `triage_queue:temporal-paused` and `triage_queue_todo:temporal-paused` lists
-   are empty. Shutdown can put an unfinished request back. Use
-   `make show-triage-queue` to check the two input queues.
+   `triage_queue` and `triage_queue_todo` are empty. Shutdown can put an
+   unfinished request back. Use `make show-triage-queue` to check the two
+   input queues. Reconcile Jira labels, GitLab MRs, and incomplete legacy
+   rebase sibling groups before deploying.
 3. Apply the updated manifests and verify that `deployment/triage-controller`
-   is ready. Reconcile Jira labels, GitLab MRs, and any incomplete legacy rebase
-   sibling groups before resubmitting ambiguous work.
-4. Enable `TEMPORAL_TRIAGE_ADMISSIONS=true` and restart the controller and
-   rebase deployments so they receive the change.
-5. Verify a Jira discovery request, a postponed-issue retry, and a manual
-   submission in Temporal. Resume the updated CronJobs and retire the scaled-down
-   deployment. The downstream fix and reproducer queues remain in Valkey.
+   is ready. Resume any CronJobs you suspended and verify a Jira discovery request,
+   a postponed-issue retry, and a manual submission in Temporal. Retire the
+   scaled-down deployment. The downstream fix and reproducer queues remain
+   in Valkey.
 
-To roll back, pause Temporal submissions, reconcile accepted workflows and
-their downstream effects, then redeploy the previous release and restore
-only unfinished work using Jira and GitLab.
+To roll back, suspend the fetcher and sweep CronJobs and stop other sources
+of new triage requests. Reconcile accepted triage and package-stream workflows
+and their downstream effects before switching to the previous release.
+Restore unfinished work using Jira and GitLab.
 
 ## Triggering the Pipeline Manually
 

@@ -269,8 +269,7 @@ async def test_rebuild_dependency_is_checked_only_in_shared_planner():
 
 
 @pytest.mark.asyncio
-async def test_recovery_resumes_waiting_intent_and_preserves_manual_override(monkeypatch):
-    monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
+async def test_recovery_resumes_waiting_intent_and_preserves_manual_override():
     accepted = []
 
     async def jira(path, params=None):

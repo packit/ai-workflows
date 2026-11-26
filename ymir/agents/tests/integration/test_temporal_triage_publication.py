@@ -53,7 +53,6 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
     monkeypatch.delenv("CHAT_MODEL_TRIAGE", raising=False)
     monkeypatch.setenv("AUTO_CHAIN", "true")
     monkeypatch.setenv("TRIAGE_ENQUEUE_REPRODUCER", "false")
-    monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
     monkeypatch.setenv("GIT_REPO_BASEPATH", str(tmp_path))
     config = tmp_path / "rhel-config.json"
     config.write_text(json.dumps({"current_y_streams": {"9": "rhel-9.9"}, "current_z_streams": {}}))

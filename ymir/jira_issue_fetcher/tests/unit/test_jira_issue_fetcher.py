@@ -682,8 +682,7 @@ async def test_process_consolidation_labels_skips_modular_next_issue(fetcher, mo
 
 
 @pytest.mark.asyncio
-async def test_fetcher_uses_temporal_for_all_eligible_issues(fetcher, monkeypatch, mock_redis_context):
-    monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
+async def test_fetcher_uses_temporal_for_all_eligible_issues(fetcher, mock_redis_context):
     fetcher.max_issues = 2
     client = object()
     submitted = []

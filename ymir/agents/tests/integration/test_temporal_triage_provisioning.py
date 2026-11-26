@@ -133,7 +133,6 @@ def test_shared_template_accepts_workflow_specific_settings():
 async def test_provisioning_cleans_up_after_failure(failure, monkeypatch):
     monkeypatch.setenv("CHAT_MODEL", "test")
     monkeypatch.delenv("CHAT_MODEL_TRIAGE", raising=False)
-    monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
     created = asyncio.Event()
     started = []
     removed = []

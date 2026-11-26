@@ -1,4 +1,4 @@
-"""Test concurrent admissions and rollback routing against Temporal."""
+"""Test concurrent triage submissions against Temporal."""
 
 import asyncio
 import os
@@ -9,7 +9,6 @@ from flexmock import flexmock
 
 from ymir.common.constants import JiraLabels
 from ymir.common.temporal_triage import TriageIntent, submit_triage_intent, triage_issue_workflow_id
-from ymir.jira_issue_fetcher import jira_issue_fetcher as discovery
 
 pytest.importorskip("temporalio")
 
@@ -174,21 +173,3 @@ async def test_ingress_serializes_requests_and_reports_failure(monkeypatch):
             (follow_up.request_id, "skipped")
         ]
         assert len([step for step in steps if step[:2] == ("ack", manual.request_id)]) == 1
-
-
-@pytest.mark.asyncio
-async def test_pausing_the_fetcher_leaves_unsubmitted_jira_triggers_for_rollback(monkeypatch):
-    issue = {
-        "key": "RHEL-912",
-        "fields": {"labels": [JiraLabels.TRIAGE_IN_PROGRESS.value, JiraLabels.TODO_TRIAGE.value]},
-    }
-    monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "false")
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379")
-    monkeypatch.setenv("JIRA_URL", "https://fixture.invalid/")
-    flexmock(discovery).should_receive("get_jira_auth_headers").and_return({})
-    fetcher = discovery.JiraIssueFetcher()
-    flexmock(fetcher).should_receive("authorized_trigger_event").never()
-    flexmock(fetcher).should_receive("_edit_jira_labels").never()
-    flexmock(discovery).should_receive("connect_triage_ingress").never()
-    assert await fetcher.submit_temporal_issues([issue]) == 0
-    assert JiraLabels.TODO_TRIAGE.value in issue["fields"]["labels"]

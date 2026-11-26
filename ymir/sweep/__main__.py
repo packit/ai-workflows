@@ -15,7 +15,7 @@ import logging
 import sys
 
 from ymir.common.http_utils import with_aiohttp_session, with_requests_session
-from ymir.common.temporal_triage import connect_triage_ingress, temporal_triage_accepts_requests
+from ymir.common.temporal_triage import connect_triage_ingress
 from ymir.common.utils import init_sentry
 from ymir.sweep.dependency import DependencySweep
 from ymir.sweep.no_patch import NoPatchSweep
@@ -39,9 +39,6 @@ async def run_sweep(strategy_names: list[str]) -> None:
     strategies. Strategies run sequentially to avoid concurrent Jira API
     pressure.
     """
-    if not temporal_triage_accepts_requests():
-        logger.info("Triage admissions are paused")
-        return
     client = await connect_triage_ingress()
     async with with_aiohttp_session(), with_requests_session():
         for name in strategy_names:

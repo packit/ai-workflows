@@ -22,14 +22,6 @@ def triage_issue_workflow_id(issue: str) -> str:
     return f"triage/{issue.strip().upper()}"
 
 
-def temporal_triage_accepts_requests() -> bool:
-    return os.getenv("TEMPORAL_TRIAGE_ADMISSIONS", "true").lower() == "true"
-
-
-class TriageAdmissionsPaused(RuntimeError):
-    pass
-
-
 @dataclass
 class TriageIntent:
     issue: str
@@ -62,8 +54,6 @@ async def submit_triage_intent(
     """Durably enqueue an intent and optionally wait for that request's result."""
     if temporal_client is None:
         raise ModuleNotFoundError("The Temporal client requires temporalio", name="temporalio")
-    if not temporal_triage_accepts_requests():
-        raise TriageAdmissionsPaused("Temporal triage admissions are paused")
     returns_result = wait or intent.source == "cli"
     handle = await client.start_update_with_start_workflow(
         "enqueue_and_wait" if returns_result else "enqueue",

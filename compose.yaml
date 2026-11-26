@@ -5,7 +5,6 @@ x-beeai-env: &beeai-env
   UPSTREAM_SEARCH_API_URL: http://upstream-sea.hosted.upshift.rdu2.redhat.com:80/v1
   REDIS_URL: redis://valkey:6379/0
   TEMPORAL_ADDRESS: temporal:7233
-  TEMPORAL_TRIAGE_ADMISSIONS: ${TEMPORAL_TRIAGE_ADMISSIONS:-true}
   COLLECTOR_ENDPOINT: http://otel-collector:4318/v1/traces
   TRACE_VIEWER_URL: ${TRACE_VIEWER_URL:-http://localhost:8082}
   GIT_REPO_BASEPATH: /git-repos
@@ -497,7 +496,6 @@ services:
     environment:
       - REDIS_URL=redis://valkey:6379/0
       - TEMPORAL_ADDRESS=temporal:7233
-      - TEMPORAL_TRIAGE_ADMISSIONS=${TEMPORAL_TRIAGE_ADMISSIONS:-true}
     env_file:
       - .secrets/jira-issue-fetcher.env
     restart: "no"
@@ -521,7 +519,6 @@ services:
     environment:
       - REDIS_URL=redis://valkey:6379/0
       - TEMPORAL_ADDRESS=temporal:7233
-      - TEMPORAL_TRIAGE_ADMISSIONS=${TEMPORAL_TRIAGE_ADMISSIONS:-true}
     env_file:
       - .secrets/sweep.env
     restart: "no"

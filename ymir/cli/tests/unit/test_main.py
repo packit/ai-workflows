@@ -638,7 +638,6 @@ class TestEnvVarRestoration:
 
 def test_cli_waits_for_the_temporal_request_and_prints_json(monkeypatch, tmp_path):
     monkeypatch.setenv("TEMPORAL_ADDRESS", "localhost:7233")
-    monkeypatch.setenv("TEMPORAL_TRIAGE_ADMISSIONS", "true")
 
     async def submit(intent, *, wait):
         assert intent.issue == "RHEL-99999" and intent.request_id == "cli:test-retry"

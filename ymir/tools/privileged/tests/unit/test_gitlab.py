@@ -21,8 +21,8 @@ from ogr.services.gitlab.project import GitlabProject
 from ymir.common import constants, http_utils
 from ymir.common.constants import GITLAB_MR_PAGE_SIZE
 from ymir.common.models import OpenMergeRequestResult
-from ymir.tools.privileged import gitlab as gitlab_tool_module
 from ymir.tools.privileged import gitlab as gitlab_module
+from ymir.tools.privileged import gitlab as gitlab_tool_module
 from ymir.tools.privileged import reviewer_resolver as _resolver
 from ymir.tools.privileged.gitlab import (
     MAX_PATCH_CONTENT_LENGTH,
@@ -38,9 +38,9 @@ from ymir.tools.privileged.gitlab import (
     GetMergeRequestCommitMessagesTool,
     GetMergeRequestDetailsTool,
     GetMergeRequestDiscussionsTool,
-    GetPipelineJobTraceTool,
     GetPatchFromUrlFullTool,
     GetPatchFromUrlTool,
+    GetPipelineJobTraceTool,
     GetRemoteBranchHeadTool,
     ListProjectMergeRequestsTool,
     OpenMergeRequestTool,
@@ -2231,6 +2231,8 @@ async def test_merge_request_details_keeps_source_repo_when_fork_is_accessible()
     )
 
     assert output.result.source_repo == "https://gitlab.com/luhliari/mod_security.git"
+
+
 # ---------------------------------------------------------------------------
 # GetPatchFromUrlTool / GetPatchFromUrlFullTool
 # ---------------------------------------------------------------------------

@@ -12,11 +12,13 @@ from beeai_framework.tools import ToolError
 from beeai_framework.tools.errors import ToolInputValidationError
 from flexmock import flexmock
 from ogr.abstract import PRStatus
+from ogr.exceptions import GitlabAPIException
 from ogr.services.gitlab import GitlabService
 from ogr.services.gitlab.project import GitlabProject
 
 from ymir.common.constants import GITLAB_MR_PAGE_SIZE
 from ymir.common.models import OpenMergeRequestResult
+from ymir.tools.privileged import gitlab as gitlab_tool_module
 from ymir.tools.privileged import reviewer_resolver as _resolver
 from ymir.tools.privileged.gitlab import (
     AddBlockingMergeRequestCommentTool,
@@ -29,6 +31,7 @@ from ymir.tools.privileged.gitlab import (
     GetAuthorizedCommentsFromMergeRequestTool,
     GetFailedPipelineJobsFromMergeRequestTool,
     GetMergeRequestCommitMessagesTool,
+    GetMergeRequestDetailsTool,
     GetMergeRequestDiscussionsTool,
     GetPipelineJobTraceTool,
     GetRemoteBranchHeadTool,
@@ -2141,3 +2144,82 @@ async def test_get_pipeline_job_trace():
     ).result
 
     assert "artifacts.osci.redhat.com/testing-farm/abc-123" in result
+
+
+class _MergeRequestWithInaccessibleFork:
+    """MR whose target project is readable but whose source (fork) project returns 404."""
+
+    id = 4
+    source_branch = "RHEL-316024"
+    target_branch = "rhel-9.9.0"
+    title = "Resolves: RHEL-316024"
+    description = "description"
+    _raw_pr = flexmock(updated_at="2026-11-26T09:00:00+00:00")
+    target_project = flexmock(
+        service=flexmock(user=flexmock(get_username=lambda: "bot")),
+        gitlab_repo=flexmock(name="mod_security"),
+    )
+
+    @property
+    def source_project(self):
+        raise GitlabAPIException("404: 404 Project Not Found")
+
+
+def _mock_merge_request_lookup(mr):
+    async def get_mr(_url):
+        return mr
+
+    async def get_comments(_url):
+        return []
+
+    flexmock(gitlab_tool_module).should_receive("_get_merge_request_from_url").replace_with(get_mr)
+    flexmock(gitlab_tool_module).should_receive(
+        "_fetch_authorized_comments_from_merge_request_url"
+    ).replace_with(get_comments)
+
+
+@pytest.mark.asyncio
+async def test_merge_request_details_fails_when_source_fork_is_inaccessible_by_default():
+    _mock_merge_request_lookup(_MergeRequestWithInaccessibleFork())
+
+    with pytest.raises(ToolError):
+        await GetMergeRequestDetailsTool().run(
+            input={"merge_request_url": "https://gitlab.com/redhat/rhel/rpms/mod_security/-/merge_requests/4"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_merge_request_details_returns_null_source_repo_when_flag_allows_inaccessible_fork():
+    _mock_merge_request_lookup(_MergeRequestWithInaccessibleFork())
+
+    output = await GetMergeRequestDetailsTool().run(
+        input={
+            "merge_request_url": "https://gitlab.com/redhat/rhel/rpms/mod_security/-/merge_requests/4",
+            "allow_inaccessible_source": True,
+        }
+    )
+
+    assert output.result.source_repo is None
+    assert output.result.source_branch == "RHEL-316024"
+    assert output.result.target_repo_name == "mod_security"
+    assert output.result.comments.root == []
+
+
+@pytest.mark.asyncio
+async def test_merge_request_details_keeps_source_repo_when_fork_is_accessible():
+    class _MergeRequestWithAccessibleFork(_MergeRequestWithInaccessibleFork):
+        source_project = flexmock(
+            get_git_urls=lambda: {"git": "https://gitlab.com/luhliari/mod_security.git"},
+            service=flexmock(user=flexmock(get_username=lambda: "bot")),
+        )
+
+    _mock_merge_request_lookup(_MergeRequestWithAccessibleFork())
+
+    output = await GetMergeRequestDetailsTool().run(
+        input={
+            "merge_request_url": "https://gitlab.com/redhat/rhel/rpms/mod_security/-/merge_requests/4",
+            "allow_inaccessible_source": True,
+        }
+    )
+
+    assert output.result.source_repo == "https://gitlab.com/luhliari/mod_security.git"

@@ -1368,7 +1368,9 @@ MergeRequestComments = RootModel[list[MergeRequestComment]]
 
 
 class MergeRequestDetails(BaseModel):
-    source_repo: str = Field(description="Clonable git URL of source project of the MR (fork)")
+    source_repo: str | None = Field(
+        description="Clonable git URL of source project of the MR (fork); null if the fork is not accessible"
+    )
     source_branch: str = Field(description="Source branch of the MR")
     target_repo_name: str = Field(description="Name of the target repository (package name)")
     target_branch: str = Field(description="Target branch of the MR")

@@ -531,6 +531,8 @@ async def run_mr_testing_analyst(
                 "get_merge_request_details",
                 available_tools=gateway_tools,
                 merge_request_url=state.mr_url,
+                # Testing only reads the target project and comments, so a private fork must not block it
+                allow_inaccessible_source=True,
             )
             state.mr_description = mr_details.get("description") or ""
 

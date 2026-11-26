@@ -1696,8 +1696,27 @@ class GetAuthorizedCommentsFromMergeRequestTool(
         return JSONToolOutput(result=comments)
 
 
+def _get_source_project(mr: GitlabPullRequest, allow_inaccessible: bool) -> GitlabProject | None:
+    """Return the MR's source (fork) project. With allow_inaccessible, a 404 from GitLab (the fork is
+    private and the token's user isn't a member) returns None instead of failing the whole lookup."""
+    try:
+        return mr.source_project
+    except GitlabAPIException as e:
+        if not allow_inaccessible:
+            raise
+        logger.warning("Source project of MR %s is not accessible, returning null source_repo: %s", mr.id, e)
+        return None
+
+
 class GetMergeRequestDetailsToolInput(BaseModel):
     merge_request_url: str = Field(description="URL of the merge request")
+    allow_inaccessible_source: bool = Field(
+        default=False,
+        description=(
+            "Return the MR even when its source (fork) project is not visible to the token. "
+            "source_repo is null in that case. Only the source fork is skipped; the target is still required."
+        ),
+    )
 
 
 class GetMergeRequestDetailsTool(
@@ -1733,10 +1752,12 @@ class GetMergeRequestDetailsTool(
         ):
             mr = await _get_merge_request_from_url(merge_request_url)
             comments = await _fetch_authorized_comments_from_merge_request_url(merge_request_url)
-            username = mr.source_project.service.user.get_username()
+            source_project = _get_source_project(mr, tool_input.allow_inaccessible_source)
+            # The fork and target share one GitLab service and token, so the target identifies the user too
+            username = (source_project or mr.target_project).service.user.get_username()
             return JSONToolOutput(
                 result=MergeRequestDetails(
-                    source_repo=mr.source_project.get_git_urls()["git"],
+                    source_repo=source_project.get_git_urls()["git"] if source_project else None,
                     source_branch=mr.source_branch,
                     target_repo_name=mr.target_project.gitlab_repo.name,
                     target_branch=mr.target_branch,

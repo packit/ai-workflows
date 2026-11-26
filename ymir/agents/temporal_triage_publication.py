@@ -65,10 +65,6 @@ class TriagePublicationRequest:
     request_id: str
     dry_run: bool = True
     enqueue_reproducer: bool = False
-    # Older Temporal histories recorded False for requests run inline.
-    provision_pod: bool = True
-    # Preserve the mode recorded in older Temporal activity results for replay.
-    coordinate: bool = True
 
     def operation_id(self, step: str) -> str:
         identity = ["ymir-triage-v1", self.analysis.jira_issue.upper(), self.request_id, step]
@@ -475,9 +471,6 @@ async def claim_triage_request(request: TriagePublicationRequest) -> None:
 async def execute_triage_request(
     request: TriagePublicationRequest, execution_id: str
 ) -> TriagePublicationResult:
-    if not request.provision_pod:
-        return await _run_request(request, execution_id)
-
     pod = WorkerPod(
         f"ymir-triage-{execution_id}",
         request.analysis.jira_issue,
@@ -494,7 +487,7 @@ async def execute_triage_request(
 
 
 async def _run_request(
-    request: TriagePublicationRequest, execution_id: str, *, task_queue: str | None = None
+    request: TriagePublicationRequest, execution_id: str, *, task_queue: str
 ) -> TriagePublicationResult:
     info = workflow.info()
     execute = partial(_run_activity, task_queue=task_queue)
@@ -510,8 +503,7 @@ async def _run_request(
         TriageAnalysisWorkflow.run,
         replace(
             analysis,
-            defer_rebuild_check=request.coordinate
-            and not inputs.dry_run
+            defer_rebuild_check=not inputs.dry_run
             and not analysis.triage_only_requested
             and (analysis.user_triggered or analysis.follow_up_requested)
             and (analysis.user_triggered or JiraLabels.TRIAGE_ONLY.value not in inputs.labels),
@@ -560,8 +552,7 @@ async def _run_request(
         )
 
     held = bool(
-        request.coordinate
-        and not inputs.dry_run
+        not inputs.dry_run
         and any(item.purpose == state.triage_result.resolution.value for item in handoffs)
         and state.triage_result.resolution in FIX_RESOLUTIONS
     )
@@ -591,16 +582,15 @@ async def _run_request(
             operation_id=request.operation_id("finding"),
         )
         add, remove = _terminal_labels(result, inputs.labels)
-        if request.coordinate:
-            waiting = JiraLabels.TRIAGE_COORDINATION_WAITING.value
-            if held:
-                label = triage._resolution_label(state.triage_result.resolution, state.triage_only)
-                if label is not None:
-                    remove.append(label.value)
-                    add = [value for value in add if value != label.value]
-                add.append(waiting)
-            else:
-                remove.append(waiting)
+        waiting = JiraLabels.TRIAGE_COORDINATION_WAITING.value
+        if held:
+            label = triage._resolution_label(state.triage_result.resolution, state.triage_only)
+            if label is not None:
+                remove.append(label.value)
+                add = [value for value in add if value != label.value]
+            add.append(waiting)
+        else:
+            remove.append(waiting)
         await execute(apply_triage_labels, request, add, remove, operation_id=request.operation_id("labels"))
         if not held:
             for item in handoffs:

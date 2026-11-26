@@ -49,7 +49,6 @@ async def test_ingress_serializes_requests_and_reports_failure(monkeypatch):
             TriageAnalysisRequest(issue, {}, 1, user_triggered=intent.user_triggered),
             intent.request_id,
             dry_run=intent.dry_run,
-            provision_pod=True,
         )
 
     @activity.defn(name="check_triage_intent")

@@ -80,41 +80,6 @@ def test_primary_reference_keeps_full_issue_key():
     assert get_rebase_primary_issue(details) == "RHEL-2001"
 
 
-@asynccontextmanager
-async def _gateway(*_args, **_kwargs):
-    yield []
-
-
-@pytest.mark.asyncio
-async def test_manual_hold_labels_group_and_keeps_primary_result_comment(monkeypatch):
-    monkeypatch.setenv("MCP_GATEWAY_URL", "http://gateway")
-    labels = []
-    comments = []
-
-    async def _record_labels(**kwargs):
-        labels.append(kwargs)
-
-    async def _record_comment(**kwargs):
-        comments.append(kwargs)
-
-    flexmock(tasks).should_receive("set_jira_labels").replace_with(_record_labels)
-    flexmock(tasks).should_receive("comment_in_jira").replace_with(_record_comment)
-    monkeypatch.setattr(tasks, "mcp_tools", _gateway)
-
-    await tasks.handle_manual_branch_creation_required(
-        tasks.ManualBranchCreationRequired("bash", "rhel-10.3", ["RHEL-1", "RHEL-2"]),
-        agent_type="Triage",
-        triaged_label=JiraLabels.TRIAGED_REBASE.value,
-        dry_run=False,
-        user_triggered=False,
-        primary_comment="Full triage result",
-    )
-
-    assert [call["jira_issue"] for call in labels] == ["RHEL-2", "RHEL-1"]
-    assert comments[0]["comment_text"] == "Full triage result"
-    assert "create the branch manually" in comments[1]["comment_text"]
-
-
 def _policy_tool_error(message: str, raw_stderr: str = "") -> ToolError:
     return ToolError(
         '"Error executing tool create_zstream_branch: escaped payload"',

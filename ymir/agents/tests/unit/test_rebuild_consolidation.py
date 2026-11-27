@@ -2,40 +2,7 @@ import pytest
 from flexmock import flexmock
 
 from ymir.agents.rebuild_agent import _clear_rebuild_resolved_errors
-from ymir.agents.rebuild_consolidation import build_rebuild_siblings_jql
 from ymir.common.models import ConsolidatedIssue, RebuildData
-
-
-def test_build_rebuild_siblings_jql():
-    jql = build_rebuild_siblings_jql("RHEL-100", "git-lfs", "rhel-9.8")
-    assert 'component = "git-lfs"' in jql
-    assert 'fixVersion in ("rhel-9.8", "rhel-9.8.z")' in jql
-    assert 'key != "RHEL-100"' in jql
-    assert 'labels = "SecurityTracking"' in jql
-    assert "labels not in" in jql
-    assert '"ymir_triaged_rebuild"' not in jql
-    assert '"ymir_rebuilt"' not in jql
-    assert '"ymir_triaged_not_affected"' in jql
-    assert '"ymir_triaged_deferred_rebuild"' in jql
-    assert '"ymir_triaged_deferred_rebase"' in jql
-    assert '"ymir_triaged_deferred_backport"' in jql
-    assert '"ymir_triage_only"' in jql
-    assert '"ymir_triaged_backport"' in jql
-    assert '"ymir_triaged_rebase"' in jql
-    assert 'status in ("New", "Planning")' in jql
-
-
-def test_build_rebuild_siblings_jql_filters_modular_stream():
-    jql = build_rebuild_siblings_jql(
-        "RHEL-100", "postgis", "rhel-9.8", downstream_component="postgresql:16/postgis"
-    )
-    assert 'cf[10669] = "postgresql:16/postgis"' in jql
-    assert 'component = "postgis"' in jql
-
-
-def test_build_rebuild_siblings_jql_no_filter_for_nonmodular():
-    jql = build_rebuild_siblings_jql("RHEL-100", "curl", "rhel-9.8", downstream_component="curl")
-    assert "cf[10669]" not in jql
 
 
 @pytest.mark.asyncio
@@ -66,9 +33,3 @@ async def test_successful_consolidated_rebuild_clears_primary_and_distinct_sibli
     )
 
     assert calls == [(redis, data.all_jira_issues, "rebuild_queue_c10s", "rhel-10.3", dry_run)]
-
-
-def test_build_rebuild_siblings_jql_escapes_component_quotes():
-    jql = build_rebuild_siblings_jql("RHEL-100", 'comp"name', "rhel-9.8.z")
-    assert r'component = "comp\"name"' in jql
-    assert 'fixVersion in ("rhel-9.8", "rhel-9.8.z")' in jql

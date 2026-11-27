@@ -93,9 +93,6 @@ When a sibling finishes triaging:
 6. If siblings still pending:
    - Do nothing, wait for next sibling to finish
 
-**Function**: `check_and_queue_primary_if_ready()` in `rebase_consolidation.py`
-**Called from**: `triage_agent.py` after triage completes (if sibling label present)
-
 **Why re-triage?**: Rebase queue requires full `TriageState` in `Task.metadata`. Re-triaging
 ensures primary has complete state for rebase workflow.
 

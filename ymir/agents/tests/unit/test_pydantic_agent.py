@@ -9,7 +9,7 @@ from beeai_framework.tools.mcp import MCPTool
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPToolInfo
 
-from ymir.agents.pydantic_agent import run_pydantic_agent
+from ymir.agents.pydantic_agent import configured_model, pydantic_model_settings
 from ymir.agents.triage_agent import TriageRunContext, create_triage_agent
 from ymir.common.models import ErrorData, Resolution
 from ymir.common.utils import _MetaInjectingSession
@@ -17,7 +17,8 @@ from ymir.common.utils import _MetaInjectingSession
 
 @pytest.mark.asyncio
 async def test_vertex_opus_triage_round_trips_mcp_and_redacted_thinking(monkeypatch):
-    monkeypatch.setenv("CHAT_MODEL", "vertexai:claude-opus-5-5")
+    model_id = "vertexai:claude-opus-5-5"
+    monkeypatch.setenv("CHAT_MODEL", model_id)
     monkeypatch.setenv("REASONING_EFFORT", "high")
     monkeypatch.setenv("GOOGLE_VERTEX_PROJECT", "test-project")
     monkeypatch.setenv("GOOGLE_VERTEX_LOCATION", "global")
@@ -93,11 +94,12 @@ async def test_vertex_opus_triage_round_trips_mcp_and_redacted_thinking(monkeypa
             )
 
     monkeypatch.setattr(anthropic, "AsyncAnthropicVertex", MockVertexClient)
-    result = await run_pydantic_agent(
-        create_triage_agent([jira_tool]),
-        "Triage RHEL-1",
-        deps=TriageRunContext("RHEL-1", None, None),
-    )
+    async with configured_model() as model:
+        result = await create_triage_agent([jira_tool], model=model).run(
+            "Triage RHEL-1",
+            deps=TriageRunContext("RHEL-1", None, None),
+            model_settings=pydantic_model_settings(model_id),
+        )
 
     assert len(requests) == 2
     assert result.output.resolution == Resolution.ERROR

@@ -25,7 +25,6 @@ from ymir.agents.constants import BRANCH_PREFIX, JIRA_COMMENT_TEMPLATE, trace_vi
 from ymir.agents.utils import check_subprocess, mcp_tools, run_subprocess, run_tool
 from ymir.common.base_utils import find_spec, is_cs_branch, is_modular_branch, resolve_dist_git_namespace
 from ymir.common.config import load_rhel_config
-from ymir.common.constants import JiraLabels
 from ymir.common.merge_queue import (  # noqa: F401 — re-exported for agents and tests
     _CONSOLIDATION_HASH_KEY,
     SubmitResult,
@@ -73,19 +72,6 @@ def manual_branch_creation_comment(package: str, branch: str, primary_issue: str
         "To proceed, create the branch manually and retrigger processing "
         f"by adding the `ymir_todo` label to {primary_issue}."
     )
-
-
-class ManualBranchCreationRequired(FrameworkError):
-    """An existing task must wait for a maintainer to create its target branch."""
-
-    def __init__(self, package: str, branch: str, jira_issues: list[str]):
-        self.package = package
-        self.branch = branch
-        self.jira_issues = list(dict.fromkeys(jira_issues))
-        super().__init__(
-            manual_branch_creation_comment(package, branch, self.jira_issues[0]),
-            is_retryable=False,
-        )
 
 
 class ZstreamBranchPolicyRejected(FrameworkError):
@@ -149,47 +135,6 @@ def discard_policy_rejection_details(error: BaseException) -> None:
     if isinstance(additional_context, dict):
         additional_context.pop("user_message", None)
         additional_context.pop("raw_stderr", None)
-
-
-async def handle_manual_branch_creation_required(
-    error: ManualBranchCreationRequired,
-    *,
-    agent_type: str,
-    triaged_label: str,
-    dry_run: bool,
-    user_triggered: bool,
-    primary_comment: str | None = None,
-) -> None:
-    """Hold a queued group without treating the maintainer policy as a failed task."""
-    if dry_run:
-        logger.info("[DRY-RUN] %s", error)
-        return
-    # Keep the primary's in-progress marker until every sibling is held.
-    for issue in [*error.jira_issues[1:], error.jira_issues[0]]:
-        await set_jira_labels(
-            jira_issue=issue,
-            labels_to_add=[triaged_label, JiraLabels.MANUAL_BRANCH_NEEDED.value],
-            labels_to_remove=[JiraLabels.TRIAGE_IN_PROGRESS.value],
-            user_triggered=user_triggered,
-            critical=True,
-        )
-    try:
-        async with mcp_tools(os.environ["MCP_GATEWAY_URL"]) as gateway_tools:
-            for issue in error.jira_issues:
-                try:
-                    await comment_in_jira(
-                        jira_issue=issue,
-                        agent_type=agent_type,
-                        comment_text=primary_comment
-                        if issue == error.jira_issues[0] and primary_comment
-                        else str(error),
-                        available_tools=gateway_tools,
-                        user_triggered=user_triggered,
-                    )
-                except Exception:
-                    logger.warning("Could not post manual branch hold comment on %s", issue, exc_info=True)
-    except Exception:
-        logger.warning("Could not connect to post manual branch hold comments", exc_info=True)
 
 
 async def _check_zstream_branch_consistency(

@@ -5,15 +5,12 @@ from ymir.agents import rebase_agent, rebase_consolidation
 from ymir.agents.rebase_agent import _clear_rebase_resolved_errors, _consolidated_issue_keys
 from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
-    build_rebase_siblings_jql,
+    build_siblings_jql,
     changelog_entry_headers,
-    check_and_queue_primary_if_ready,
     find_triaged_rebase_siblings,
     has_new_latest_changelog_entry,
-    sibling_link_is_stale,
     uses_autochangelog,
 )
-from ymir.common.constants import JiraLabels
 from ymir.common.models import ConsolidatedIssue, RebaseData
 from ymir.common.utils import extract_text_from_adf
 
@@ -236,92 +233,38 @@ async def test_successful_consolidated_rebase_clears_primary_and_distinct_siblin
     assert calls == [(redis, ["RHEL-100", "RHEL-200", "RHEL-300"], "rebase_queue_c10s", "rhel-10.3", dry_run)]
 
 
-def test_build_rebase_siblings_jql():
-    jql = build_rebase_siblings_jql("RHEL-100", "dotnet10.0", "rhel-10.2")
+def test_build_siblings_jql():
+    jql = build_siblings_jql("RHEL-100", "dotnet10.0", "rhel-10.2")
     assert 'component = "dotnet10.0"' in jql
     assert 'fixVersion in ("rhel-10.2", "rhel-10.2.z")' in jql
     assert 'key != "RHEL-100"' in jql
     assert 'labels = "SecurityTracking"' in jql
-    assert "labels not in" in jql
-    assert '"ymir_triaged_rebase"' in jql  # Exclude to prevent circular consolidation
-    assert '"ymir_triaged_not_affected"' in jql
-    assert '"ymir_triaged_backport"' in jql
-    assert '"ymir_triaged_rebuild"' in jql
-    assert '"ymir_triaged_deferred_rebase"' in jql
-    assert '"ymir_triaged_deferred_backport"' in jql
-    assert '"ymir_triaged_deferred_rebuild"' in jql
-    assert '"ymir_triaged_postponed"' in jql
     assert 'status in ("New", "Planning")' in jql
 
 
-def test_build_rebase_siblings_jql_escapes_component_quotes():
-    jql = build_rebase_siblings_jql("RHEL-100", 'comp"name', "rhel-9.8.z")
+def test_build_siblings_jql_escapes_component_quotes():
+    jql = build_siblings_jql("RHEL-100", 'comp"name', "rhel-9.8.z")
     assert r'component = "comp\"name"' in jql
     assert 'fixVersion in ("rhel-9.8", "rhel-9.8.z")' in jql
 
 
-def test_build_rebase_siblings_jql_filters_modular_stream():
+def test_build_siblings_jql_filters_modular_stream():
     """Modular issues must filter on Downstream Component Name to avoid mixing streams."""
-    jql = build_rebase_siblings_jql(
-        "RHEL-100", "postgis", "rhel-9.8", downstream_component="postgresql:16/postgis"
-    )
+    jql = build_siblings_jql("RHEL-100", "postgis", "rhel-9.8", downstream_component="postgresql:16/postgis")
     assert 'cf[10669] = "postgresql:16/postgis"' in jql
     assert 'component = "postgis"' in jql
 
 
-def test_build_rebase_siblings_jql_no_filter_for_nonmodular():
+def test_build_siblings_jql_no_filter_for_nonmodular():
     """Non-modular issues should not add a Downstream Component Name filter."""
-    jql = build_rebase_siblings_jql("RHEL-100", "curl", "rhel-9.8", downstream_component="curl")
+    jql = build_siblings_jql("RHEL-100", "curl", "rhel-9.8", downstream_component="curl")
     assert "cf[10669]" not in jql
 
 
-def test_build_rebase_siblings_jql_no_filter_when_none():
+def test_build_siblings_jql_no_filter_when_none():
     """When downstream_component is None, no extra filter is added."""
-    jql = build_rebase_siblings_jql("RHEL-100", "curl", "rhel-9.8", downstream_component=None)
+    jql = build_siblings_jql("RHEL-100", "curl", "rhel-9.8", downstream_component=None)
     assert "cf[10669]" not in jql
-
-
-def test_build_rebase_siblings_jql_excludes_correct_labels():
-    """Verify that JQL excludes non-retriable states but includes retriable FAILED labels.
-
-    Per jira_label_workflow_routing.md:
-    - ERRORED labels (triage/backport/rebase_errored) block retry → exclude
-    - FAILED labels (backport/rebase_failed) may auto-retry → include (don't exclude)
-
-    This prevents missing pending siblings when there are >50 total candidates.
-    """
-    jql = build_rebase_siblings_jql("RHEL-100", "python3.12", "rhel-9.8")
-
-    # Triage decisions (non-retriable)
-    assert '"ymir_triaged_not_affected"' in jql
-    assert '"ymir_triaged_backport"' in jql
-    assert '"ymir_triaged_rebuild"' in jql
-    assert '"ymir_triaged_rebase"' in jql
-    assert '"ymir_triaged_deferred_rebase"' in jql
-    assert '"ymir_triaged_deferred_backport"' in jql
-    assert '"ymir_triaged_deferred_rebuild"' in jql
-    assert '"ymir_triaged_postponed"' in jql
-
-    # Completion labels (non-retriable)
-    assert '"ymir_backported"' in jql
-    assert '"ymir_rebased"' in jql
-    assert '"ymir_rebuilt"' in jql
-
-    # ERRORED labels (block retry, must exclude)
-    assert '"ymir_triage_errored"' in jql
-    assert '"ymir_backport_errored"' in jql
-    assert '"ymir_rebase_errored"' in jql
-    assert '"ymir_rebuild_errored"' in jql
-
-    # FAILED labels (may auto-retry, must NOT exclude)
-    assert '"ymir_backport_failed"' not in jql
-    assert '"ymir_rebase_failed"' not in jql
-    assert '"ymir_rebuild_failed"' not in jql
-
-    # ymir_rebase_sibling must NOT be excluded - it's a queueing state, not a terminal state
-    # Excluding it would break check_and_queue_primary_if_ready() which needs to find
-    # queued-but-not-started siblings
-    assert '"ymir_rebase_sibling"' not in jql
 
 
 class TestSiblingCommentExtraction:
@@ -472,155 +415,6 @@ class TestSiblingCommentExtraction:
         assert "and" in result
 
 
-class TestTerminalLabels:
-    """Behavioral tests for terminal label handling in sibling consolidation.
-
-    These tests verify that the production code actually excludes all terminal states,
-    preventing bugs like RHEL-248139 where primaries got stuck waiting for siblings
-    that had already finished with ymir_backported or ymir_backport_errored.
-    """
-
-    def test_jql_excludes_all_triage_decision_labels(self):
-        """JQL must exclude all triage decision labels to avoid re-queueing decided siblings."""
-        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
-
-        # Verify each triage decision label appears in the JQL exclusion
-        for label in [
-            JiraLabels.TRIAGED_REBASE.value,
-            JiraLabels.TRIAGED_BACKPORT.value,
-            JiraLabels.TRIAGED_REBUILD.value,
-            JiraLabels.TRIAGED_NOT_AFFECTED.value,
-            JiraLabels.TRIAGED_POSTPONED.value,
-            JiraLabels.TRIAGED.value,  # Open-ended-analysis
-            JiraLabels.NEEDS_ATTENTION.value,  # Clarification-needed
-        ]:
-            assert f'"{label}"' in jql, f"JQL must exclude {label} but it's missing from: {jql}"
-
-    def test_jql_excludes_all_completion_labels(self):
-        """JQL must exclude completion labels or primaries wait forever for completed siblings.
-
-        Regression test for RHEL-248139 where ymir_backported was not excluded.
-        """
-        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
-
-        # These were the missing labels that caused RHEL-248139
-        for label in [
-            JiraLabels.BACKPORTED.value,
-            JiraLabels.REBASED.value,
-            JiraLabels.REBUILT.value,
-        ]:
-            assert f'"{label}"' in jql, f"JQL must exclude {label} but it's missing from: {jql}"
-
-    def test_jql_excludes_errored_labels(self):
-        """JQL must exclude ERRORED labels which block retry.
-
-        Per jira_label_workflow_routing.md: ERRORED labels (triage/backport/rebase_errored)
-        block retry and need human attention, so they're terminal for sibling queueing.
-        """
-        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
-
-        # ERRORED labels block retry → must exclude
-        for label in [
-            JiraLabels.TRIAGE_ERRORED.value,
-            JiraLabels.BACKPORT_ERRORED.value,
-            JiraLabels.REBASE_ERRORED.value,
-            JiraLabels.REBUILD_ERRORED.value,
-        ]:
-            assert f'"{label}"' in jql, (
-                f"JQL must exclude {label} (blocks retry) but it's missing from: {jql}"
-            )
-
-    def test_jql_includes_failed_labels(self):
-        """JQL must NOT exclude FAILED labels which may auto-retry.
-
-        Per jira_label_workflow_routing.md: FAILED labels (backport/rebase_failed)
-        "May auto-retry", so excluding them breaks the retry mechanism where a new
-        sibling triggers re-queueing of failed issues.
-        """
-        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
-
-        # FAILED labels may auto-retry → must NOT exclude
-        for label in [
-            JiraLabels.BACKPORT_FAILED.value,
-            JiraLabels.REBASE_FAILED.value,
-            JiraLabels.REBUILD_FAILED.value,
-        ]:
-            assert f'"{label}"' not in jql, (
-                f"JQL must NOT exclude {label} (may auto-retry) but it's excluded in: {jql}"
-            )
-
-    def test_jql_does_not_exclude_sibling_marker(self):
-        """JQL must NOT exclude ymir_rebase_sibling - it's a queueing state, not terminal.
-
-        Regression test: check_and_queue_primary_if_ready() needs to find queued siblings
-        that haven't started triage yet (have ymir_rebase_sibling label). If we excluded
-        this label, the primary would be released early while siblings are still pending.
-        """
-        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
-
-        assert f'"{JiraLabels.REBASE_SIBLING.value}"' not in jql, (
-            f"JQL must NOT exclude {JiraLabels.REBASE_SIBLING.value} (queueing state, not terminal)"
-        )
-
-    def test_jql_exclusion_applies_before_50_result_limit(self):
-        """Terminal labels must be excluded in JQL, not post-query, to avoid missing pending siblings.
-
-        If there are 60 siblings where 40 have terminal labels and 20 are pending:
-        - Correct: JQL excludes 40 terminal, returns 20 pending
-        - Bug: JQL returns first 50 (35 terminal + 15 pending), post-filter → miss 5 pending
-
-        This test verifies the exclusion is in the JQL string (server-side filtering).
-        """
-        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
-
-        # Critical: the exclusion MUST be in the JQL query string itself
-        assert "labels not in" in jql, "JQL must have 'labels not in' clause for server-side filtering"
-
-        # Spot-check a few terminal labels to ensure they're in the JQL, not filtered post-query
-        critical_labels = [
-            JiraLabels.BACKPORTED.value,  # Caused RHEL-248139
-            JiraLabels.BACKPORT_ERRORED.value,  # ERRORED blocks retry, must exclude
-            JiraLabels.TRIAGE_ERRORED.value,  # ERRORED blocks retry, must exclude
-        ]
-        for label in critical_labels:
-            assert f'"{label}"' in jql, (
-                f"Critical terminal label {label} must be in JQL for server-side filtering"
-            )
-
-        # FAILED labels must NOT be in JQL (they're retriable)
-        retriable_labels = [
-            JiraLabels.BACKPORT_FAILED.value,
-            JiraLabels.REBASE_FAILED.value,
-        ]
-        for label in retriable_labels:
-            assert f'"{label}"' not in jql, f"Retriable label {label} must NOT be excluded in JQL"
-
-    def test_queued_sibling_blocks_primary(self):
-        """Regression: Queued siblings with ymir_rebase_sibling must be found as pending.
-
-        Before fix: build_rebase_siblings_jql() excluded ymir_rebase_sibling, then
-        check_and_queue_primary_if_ready() added AND labels = "ymir_rebase_sibling",
-        resulting in zero matches. Primary was released while queued siblings were pending.
-
-        After fix: ymir_rebase_sibling is NOT excluded in JQL, so the pending query
-        correctly finds queued-but-not-started siblings.
-        """
-
-        # Simulate the pending-sibling query in check_and_queue_primary_if_ready()
-        jql = build_rebase_siblings_jql("RHEL-100", "postgresql", "rhel-9.8")
-
-        # The query should be able to find siblings with ymir_rebase_sibling
-        # This is the key fix: if ymir_rebase_sibling were excluded from JQL,
-        # then check_and_queue_primary_if_ready() adding:
-        #   AND (labels = "ymir_rebase_sibling" OR labels = "ymir_triage_in_progress")
-        # would return zero results (contradictory query: exclude X AND require X)
-
-        # The key assertion: ymir_rebase_sibling must NOT appear in the exclusion list
-        assert '"ymir_rebase_sibling"' not in jql, (
-            "ymir_rebase_sibling in exclusion list would make pending query contradictory"
-        )
-
-
 @pytest.mark.asyncio
 async def test_find_triaged_rebase_siblings_no_unbound_error_on_jira_failure():
     """Regression: primary_details must be initialised before try/except.
@@ -672,126 +466,3 @@ async def test_find_triaged_rebase_siblings_requires_exact_primary_key(monkeypat
         available_tools=[],
     )
     assert siblings == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("status", "labels", "expected"),
-    [
-        ("Closed", [], True),
-        ("New", [JiraLabels.REBASED.value], True),
-        ("New", [JiraLabels.TRIAGED_DEFERRED_REBASE.value], True),
-        # A primary that stopped without producing a rebase will never collect
-        # its siblings either.
-        ("New", [JiraLabels.TRIAGE_ERRORED.value], True),
-        ("New", [JiraLabels.TRIAGED.value], True),
-        ("New", [JiraLabels.TRIAGED_BACKPORT.value], True),
-        ("New", [JiraLabels.TRIAGED_REBUILD.value], True),
-        ("New", [JiraLabels.WAITING_FOR_SIBLINGS.value], False),
-    ],
-)
-async def test_sibling_link_is_stale_follows_primary_state(monkeypatch, status, labels, expected):
-    async def run_tool(name, **kwargs):
-        assert name == "get_jira_details"
-        assert kwargs["issue_key"] == "RHEL-100"
-        return {"fields": {"status": {"name": status}, "labels": labels}}
-
-    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
-    assert await sibling_link_is_stale("RHEL-100", []) is expected
-
-
-@pytest.mark.asyncio
-async def test_sibling_link_is_stale_propagates_lookup_errors(monkeypatch):
-    """The caller decides whether an unreadable primary defers or fails the run."""
-
-    async def run_tool(*_args, **_kwargs):
-        raise Exception("MCP Gateway unreachable")
-
-    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
-    with pytest.raises(Exception, match="MCP Gateway unreachable"):
-        await sibling_link_is_stale("RHEL-100", [])
-
-
-@pytest.mark.asyncio
-async def test_primary_requeue_preserves_triage_only_intent(monkeypatch):
-    """A waiting primary re-queued by its last sibling must keep its own intent.
-
-    Siblings inherit ``user_triggered`` from the run that queued them, so without
-    reading the primary's labels the re-triage would silently drop a
-    per-issue triage-only request and start the fix.
-    """
-    pushed = []
-
-    async def run_tool(name, **kwargs):
-        if name == "search_jira_issues":
-            # An unrelated in-progress issue must neither block nor shadow the
-            # primary's labels (the pending-sibling scan reuses local names).
-            return [
-                {
-                    "key": "RHEL-300",
-                    "fields": {
-                        "labels": [JiraLabels.TRIAGE_IN_PROGRESS.value],
-                        "comment": {"comments": []},
-                    },
-                }
-            ]
-        if kwargs["issue_key"] == "RHEL-200":
-            return {
-                "fields": {
-                    "comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-100"}]}
-                }
-            }
-        return {
-            "fields": {
-                "labels": [
-                    JiraLabels.WAITING_FOR_SIBLINGS.value,
-                    JiraLabels.TRIAGE_ONLY.value,
-                ],
-                "components": [{"name": "bash"}],
-                "fixVersions": [{"name": "rhel-10.3.z"}],
-            }
-        }
-
-    async def record(*_args, **_kwargs):
-        return None
-
-    async def connect():
-        return object()
-
-    async def submit(client, intent):
-        pushed.append(intent)
-
-    monkeypatch.setattr(rebase_consolidation, "run_tool", run_tool)
-    monkeypatch.setattr(rebase_consolidation.tasks, "set_jira_labels", record)
-    monkeypatch.setattr(rebase_consolidation.tasks, "comment_in_jira", record)
-    monkeypatch.setattr(rebase_consolidation, "connect_triage_ingress", connect)
-    monkeypatch.setattr(rebase_consolidation, "submit_triage_intent", submit)
-
-    await check_and_queue_primary_if_ready(
-        sibling_issue="RHEL-200", available_tools=[], dry_run=False, user_triggered=True
-    )
-
-    assert len(pushed) == 1
-    [intent] = pushed
-    assert intent.retry_label == JiraLabels.WAITING_FOR_SIBLINGS.value
-    assert intent.triggered_by == "user_retry"
-    assert intent.triage_only is True
-
-
-def test_rebase_cluster_lock_key_mirrors_sibling_cluster_identity():
-    """The lock key must separate clusters exactly like the sibling JQL does."""
-    # Y-stream and Z-stream spellings of one release lock the same cluster,
-    # because the sibling discovery JQL matches both variants.
-    assert rebase_consolidation.rebase_cluster_lock_key("bash", "rhel-10.3") == "bash:rhel-10.3"
-    assert rebase_consolidation.rebase_cluster_lock_key("bash", "rhel-10.3.z") == "bash:rhel-10.3"
-    # Unparsable versions fall back to the raw spelling on both sides.
-    assert rebase_consolidation.rebase_cluster_lock_key("bash", "future") == "bash:future"
-    # Modular streams lock independently of each other.
-    assert (
-        rebase_consolidation.rebase_cluster_lock_key("postgis", "rhel-10.3.z", "postgresql:16/postgis")
-        == "postgresql:16/postgis/postgis:rhel-10.3"
-    )
-    assert (
-        rebase_consolidation.rebase_cluster_lock_key("postgis", "rhel-10.3", "postgresql:12/postgis")
-        == "postgresql:12/postgis/postgis:rhel-10.3"
-    )

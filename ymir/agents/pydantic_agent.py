@@ -7,16 +7,15 @@ from typing import Any
 import anthropic
 from beeai_framework.tools import Tool as YmirTool
 from beeai_framework.tools import ToolError
-from pydantic_ai import Agent, ModelRetry, Tool
+from pydantic_ai import ModelRetry, Tool
 from pydantic_ai.models import infer_model
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google_cloud import GoogleCloudProvider
 from pydantic_ai.settings import ModelSettings
-from pydantic_ai.usage import UsageLimits
 
-from ymir.agents.utils import get_agent_execution_config, run_tool, unsupported_model_params
+from ymir.agents.utils import run_tool, unsupported_model_params
 
 
 @asynccontextmanager
@@ -60,18 +59,6 @@ def pydantic_model_settings(model_id: str) -> ModelSettings:
         settings["anthropic_cache_tool_definitions"] = True
         settings["anthropic_cache_messages"] = True
     return settings
-
-
-async def run_pydantic_agent(agent: Agent, prompt: str, **kwargs):
-    settings = pydantic_model_settings(os.environ["CHAT_MODEL"])
-    async with configured_model() as model:
-        return await agent.run(
-            prompt,
-            model=model,
-            model_settings=settings,
-            usage_limits=UsageLimits(request_limit=get_agent_execution_config()["max_iterations"]),
-            **kwargs,
-        )
 
 
 async def invoke_pydantic_tool(tool: str | YmirTool, **arguments: Any) -> Any:

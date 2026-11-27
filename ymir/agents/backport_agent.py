@@ -835,6 +835,7 @@ async def run_workflow(
     workspace_id: UUID | None = None,
     is_modular_issue=False,
     module_stream=None,
+    defer_failure_comment=False,
 ):
     if max_incremental_fix_attempts is None:
         max_incremental_fix_attempts = max_build_attempts
@@ -2063,33 +2064,38 @@ async def run_workflow(
             return "comment_in_jira"
 
         async def comment_in_jira(state):
+            """Publish successful results; queue retries own terminal failures.
+
+            A failed state is not necessarily terminal: the outer queue retry
+            budget is authoritative, so graceful failures are reported by
+            ``retry()`` only after that budget is exhausted.
+            """
             if dry_run:
                 return Workflow.END
-            if state.backport_result.success:
-                if checkpoint := state.inherited_publication_checkpoint:
-                    comment_text = (
-                        f"Inherited and validated the fix from "
-                        f"{checkpoint.source_issue_key} "
-                        f"({checkpoint.source_nvr}, commit "
-                        f"{checkpoint.source_commit}): "
-                        f"{state.merge_request_url or state.backport_result.status}"
-                    )
-                elif state.inherit_candidate and state.inherit_source and state.inherit_change:
-                    comment_text = (
-                        f"Inherited and validated the fix from "
-                        f"{state.inherit_candidate.issue_key} "
-                        f"({state.inherit_source.nvr}, commit "
-                        f"{state.inherit_change.commit_sha}): "
-                        f"{state.merge_request_url or state.backport_result.status}"
-                    )
-                else:
-                    comment_text = (
-                        state.merge_request_url if state.merge_request_url else state.backport_result.status
-                    )
-                is_error = False
-            else:
+            if not state.backport_result.success and defer_failure_comment:
+                return Workflow.END
+            is_error = False
+            if not state.backport_result.success:
                 comment_text = f"Agent failed to perform a backport: {state.backport_result.error}"
                 is_error = True
+            elif checkpoint := state.inherited_publication_checkpoint:
+                comment_text = (
+                    f"Inherited and validated the fix from "
+                    f"{checkpoint.source_issue_key} "
+                    f"({checkpoint.source_nvr}, commit "
+                    f"{checkpoint.source_commit}): "
+                    f"{state.merge_request_url or state.backport_result.status}"
+                )
+            elif state.inherit_candidate and state.inherit_source and state.inherit_change:
+                comment_text = (
+                    f"Inherited and validated the fix from "
+                    f"{state.inherit_candidate.issue_key} "
+                    f"({state.inherit_source.nvr}, commit "
+                    f"{state.inherit_change.commit_sha}): "
+                    f"{state.merge_request_url or state.backport_result.status}"
+                )
+            else:
+                comment_text = state.merge_request_url or state.backport_result.status
             logger.info(f"Result to be put in Jira comment: {comment_text}")
             try:
                 await tasks.comment_in_jira(
@@ -2328,6 +2334,10 @@ async def main() -> None:
             ) -> tuple[str, str] | None:
                 """Handle a failed task by re-queuing or finalizing.
 
+                ``comment_text`` is intentionally consumed only by the
+                terminal branch. Queue-level retries are the authority for
+                failure notification, not the workflow's retry mode.
+
                 Returns ``(queue, payload)`` when the task should be
                 re-queued for another attempt.  The caller is responsible
                 for pushing the payload **after** releasing the issue
@@ -2375,6 +2385,7 @@ async def main() -> None:
                         workspace_id=task.execution_id,
                         is_modular_issue=_modular,
                         module_stream=_module_stream,
+                        defer_failure_comment=True,
                     )
                     logger.info(
                         f"Backport processing completed for {backport_data.jira_issue}, "
@@ -2443,10 +2454,14 @@ async def main() -> None:
                         details=getattr(state.backport_result, "error", None) or "Unknown backport error",
                         jira_issue=backport_data.jira_issue,
                     )
+                    comment_text = f"Agent failed to perform a backport: {failure.details}"
                     if not _configure_task_retry(task, state):
-                        retry_queue = backport_queue_todo if task.user_triggered else backport_queue
-                        await finalize_failure(failure, retry_queue, task)
-                        return None
+                        return await retry(
+                            task,
+                            failure,
+                            comment_text=comment_text,
+                            retryable=False,
+                        )
                     await tasks.set_jira_labels(
                         jira_issue=backport_data.jira_issue,
                         labels_to_add=[JiraLabels.BACKPORT_FAILED.value],
@@ -2454,13 +2469,10 @@ async def main() -> None:
                         dry_run=dry_run,
                         user_triggered=user_triggered,
                     )
-                    # No comment_text here: the in-workflow comment_in_jira step has
-                    # already posted the failure feedback for this graceful path.
-                    # Only the crash path (which never reaches that step) passes
-                    # comment_text, so we never double-comment.
                     return await retry(
                         task,
                         failure,
+                        comment_text=comment_text,
                     )
 
         shutdown_event = asyncio.Event()

@@ -53,6 +53,7 @@ from ymir.common.utils import get_all_sources, get_latest_candidate_build, get_l
 from ymir.common.version_utils import (
     construct_internal_branch_name,
     is_older_zstream,
+    parse_module_stream,
     parse_rhel_version,
     parse_zstream_branch_name,
 )
@@ -1449,6 +1450,19 @@ def ensure_canonical_changelog_title(
     raise RuntimeError(f"New changelog entry for {package} has no descriptive line")
 
 
+def _module_stream_identity(package: str, jira_summary: str) -> str:
+    """Return ``module:stream`` when the summary names one, otherwise empty.
+
+    Non-modular ``postgresql`` and modular ``postgresql:12/postgresql`` share a
+    package name but are different components. Their titles must not collide.
+    """
+    parsed = parse_module_stream(jira_summary, package)
+    if parsed is None:
+        return ""
+    module, stream = parsed
+    return f"{module}:{stream}"
+
+
 def _canonical_mr_title_key(
     package: str,
     jira_summary: str,
@@ -1456,7 +1470,12 @@ def _canonical_mr_title_key(
     jira_issue: str,
     clone_root: str | None = None,
 ) -> str:
-    """Return the stable cross-stream key for an issue family."""
+    """Return the title key for one package component across RHEL versions.
+
+    RHEL suffixes such as ``[rhel-9.9.z]`` still share a title. Module streams
+    do not: ``postgresql:12`` and non-modular ``postgresql`` are separate keys.
+    ``v3`` drops ``v2`` records that mixed those streams into one title.
+    """
     cve_ids = _cve_ids(cve_id, jira_summary)
     if cve_ids:
         issue_identity = "cve:" + ",".join(cve_ids)
@@ -1464,7 +1483,8 @@ def _canonical_mr_title_key(
         issue_identity = "jira:" + (clone_root or jira_issue).strip().upper()
 
     identity_digest = hashlib.sha256(issue_identity.encode()).hexdigest()[:16]
-    return f"mr_metadata:v2:{package}:{identity_digest}"
+    stream_identity = _module_stream_identity(package, jira_summary)
+    return f"mr_metadata:v3:{package}:{stream_identity}:{identity_digest}"
 
 
 async def resolve_canonical_mr_title(
@@ -1481,10 +1501,11 @@ async def resolve_canonical_mr_title(
 ) -> str:
     """Read or atomically publish the canonical title for one issue family.
 
-    The Redis key is stable for the package/family. A matching summary digest
+    The Redis key is stable for one package component. RHEL version suffixes
+    share a record; different module streams do not. A matching summary digest
     reuses the record; only a newer ``summary_updated`` value from its source
     Jira issue compare-and-swaps a replacement. CVE families use the Jira
-    summary with its stream-specific suffix removed; non-CVE families require
+    summary with its ``[rhel-…]`` suffix removed; non-CVE families require
     a validated generated title.
     """
     jira_summary = _validate_canonical_title(jira_summary, jira_issue)

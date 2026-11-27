@@ -327,7 +327,9 @@ async def run_temporal_cases(cases: list[TriageAgentTestCase], address: str) -> 
         trace_context = baggage.set_baggage("workflow.name", "TriageWorkflow", context=trace_context)
         trace_token = context.attach(trace_context)
         try:
-            intent = TriageIntent(case.input, queue, "cli", dry_run=True, config_override=override or None)
+            intent = TriageIntent(
+                case.input, queue, "operator", dry_run=True, config_override=override or None
+            )
             workflow_id = triage_issue_workflow_id(case.input)
             with tracer.start_as_current_span(
                 "TriageWorkflow",

@@ -82,7 +82,7 @@ def check_credentials(mock_jira: bool = False) -> None:
 
 async def _submit_triage(intent: TriageIntent, *, wait: bool) -> str | dict:
     client = await connect_triage_ingress()
-    return await submit_triage_intent(client, intent, wait=wait)
+    return await submit_triage_intent(client, intent, wait=wait, retain_result=True)
 
 
 @app.command()
@@ -130,9 +130,8 @@ def triage(
         intent = TriageIntent(
             issue.strip().upper(),
             f"cli:{request_id or uuid4()}",
-            "cli",
+            "user",
             dry_run=dry_run,
-            user_triggered=True,
             triage_only=not full,
             force_cve_triage=force_cve_triage,
         )

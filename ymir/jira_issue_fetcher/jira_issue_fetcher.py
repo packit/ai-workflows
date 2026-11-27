@@ -578,7 +578,7 @@ class JiraIssueFetcher:
                 intent = self._temporal_intent(issue)
                 if intent is None:
                     continue
-                if intent.source == "discovery" or (
+                if intent.triggered_by == "discovery" or (
                     intent.retry_label and intent.retry_label != JiraLabels.RETRY_NEEDED.value
                 ):
                     if queued_keys is None:
@@ -621,9 +621,8 @@ class JiraIssueFetcher:
             return TriageIntent(
                 key,
                 f"jira:{primary}:{triggers[primary]}",
-                "jira",
+                "user",
                 dry_run=self.dry_run,
-                user_triggered=True,
                 triage_only=JiraLabels.TODO.value not in triggers,
                 triggers=triggers,
             )

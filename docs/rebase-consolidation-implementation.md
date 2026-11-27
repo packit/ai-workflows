@@ -1,5 +1,9 @@
 # Rebase MR Consolidation
 
+This document records the legacy Redis-based design. Temporal now submits
+sibling triage and coordinates rebase handoffs. See
+[Temporal package-stream coordination](../README-agents.md#coordinate-a-package-stream-in-temporal).
+
 **Jira Issue**: [PACKIT-5186](https://redhat.atlassian.net/browse/PACKIT-5186)
 
 **Objective**: Group rebase merge requests by stream instead of creating one MR per Jira issue.
@@ -61,8 +65,6 @@ When primary issue triages as REBASE:
 4. If no siblings queued:
    - Add `ymir_triaged_rebase` label immediately
    - Queue primary for rebase
-
-**Function**: `queue_siblings_for_triage()` in `rebase_consolidation.py`
 
 **Comment format**:
 ```
@@ -136,41 +138,6 @@ Phase 3 uses comment checking instead of version comparison because:
 - `ymir/common/models.py`: RebaseData fields (already existed)
 
 ### Code Flow
-
-**Triage Agent**:
-```python
-# Phase 1: Queue siblings
-consolidate_rebase_siblings():
-    sibling_count = await queue_siblings_for_triage(...)
-    if sibling_count > 0:
-        state.rebase_waiting_for_siblings = True
-        # Skip adding ymir_triaged_rebase (added during re-triage)
-        # Clear consolidated_issues - populated in Phase 3
-        # Primary waits
-    else:
-        state.rebase_waiting_for_siblings = False
-        # Add ymir_triaged_rebase immediately
-        # Queue primary for rebase
-
-# Phase 2: Check if ready (after triage completes)
-if ymir_rebase_sibling in labels:
-    remove ymir_rebase_sibling label
-    await check_and_queue_primary_if_ready(...)
-        # If all siblings done: re-queues primary to triage
-
-# Skip terminal label if waiting for siblings
-if not (state.rebase_waiting_for_siblings or ymir_rebase_waiting_for_siblings in labels):
-    add resolution_label  # e.g., ymir_triaged_rebase
-
-# Skip rebase queue if waiting for siblings
-if state.rebase_waiting_for_siblings or ymir_rebase_waiting_for_siblings in labels:
-    skip queueing to rebase
-
-# Remove ymir_rebase_waiting_for_siblings during re-triage
-if ymir_rebase_waiting_for_siblings in labels and not waiting_for_any_siblings:
-    remove ymir_rebase_waiting_for_siblings label
-    # This happens during re-triage after all siblings finish
-```
 
 **Rebase Agent**:
 ```python

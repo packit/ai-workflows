@@ -641,7 +641,8 @@ def test_cli_waits_for_the_temporal_request_and_prints_json(monkeypatch, tmp_pat
 
     async def submit(intent, *, wait):
         assert intent.issue == "RHEL-99999" and intent.request_id == "cli:test-retry"
-        assert intent.user_triggered and intent.triage_only
+        assert intent.triggered_by == "user"
+        assert intent.triage_only
         assert intent.dry_run and intent.force_cve_triage and wait
         return {"status": "completed", "detail": None, "output": {"resolution": "backport"}}
 

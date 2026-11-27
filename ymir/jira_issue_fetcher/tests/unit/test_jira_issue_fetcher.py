@@ -716,4 +716,5 @@ async def test_fetcher_uses_temporal_for_all_eligible_issues(fetcher, mock_redis
     discovery, manual = submitted
     assert discovery.issue == "RHEL-1" and discovery.request_id == "discovery:2026-10-01"
     assert manual.issue == "RHEL-2" and manual.request_id == f"jira:{trigger}:67"
-    assert manual.user_triggered and manual.triage_only and manual.triggers == {trigger: "67"}
+    assert discovery.triggered_by == "discovery" and manual.triggered_by == "user"
+    assert manual.triage_only and manual.triggers == {trigger: "67"}

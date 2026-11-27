@@ -20,6 +20,7 @@ from temporalio.client import Client, WorkflowFailureError
 from temporalio.exceptions import ApplicationError
 
 from ymir.agents import temporal_package_coordination as coordination
+from ymir.agents import temporal_triage_ingress as ingress
 from ymir.agents import temporal_triage_publication as publication
 from ymir.agents.temporal_triage_ingress import TriageIngressWorkflow, prepare_triage_intent
 from ymir.agents.temporal_triage_worker import create_analysis_worker, create_triage_control_worker
@@ -182,6 +183,14 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
     flexmock(publication).should_receive("_enqueue_with_receipt").replace_with(enqueue_then_lose_response)
     flexmock(coordination).should_receive("jira_api_get").replace_with(jira_get)
     flexmock(coordination).should_receive("jira_api_post").replace_with(jira_search)
+    trigger_events = {JiraLabels.TODO_TRIAGE.value: "triage-event", JiraLabels.TODO.value: "full-event"}
+
+    def authorized_trigger_event(issue, label):
+        assert issue == ISSUE
+        return trigger_events[label]
+
+    fetcher = flexmock(authorized_trigger_event=authorized_trigger_event)
+    flexmock(ingress).should_receive("JiraIssueFetcher").and_return(fetcher)
     client = await Client.connect(ADDRESS, plugins=[PydanticAIPlugin()])
     actual_start = client.start_workflow
 
@@ -196,10 +205,16 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
     flexmock(client).should_receive("start_workflow").replace_with(start_coordinator)
     queue = f"triage-publication-test-{uuid4().hex}"
     issue_handle = client.get_workflow_handle_for(TriageIngressWorkflow.run, triage_issue_workflow_id(ISSUE))
-    first = TriageIntent(ISSUE, uuid4().hex, "cli", dry_run=False, user_triggered=True)
-    preview = TriageIntent(ISSUE, uuid4().hex, "cli", dry_run=True, user_triggered=True)
+    first = TriageIntent(ISSUE, uuid4().hex, "user", dry_run=False)
+    preview = TriageIntent(ISSUE, uuid4().hex, "user", dry_run=True)
+    triage_trigger = JiraLabels.TODO_TRIAGE.value
     triage_only = TriageIntent(
-        ISSUE, uuid4().hex, "jira", dry_run=False, user_triggered=True, triage_only=True
+        ISSUE,
+        uuid4().hex,
+        "user",
+        dry_run=False,
+        triage_only=True,
+        triggers={triage_trigger: trigger_events[triage_trigger]},
     )
     first_request = await prepare_triage_intent(first)
     triage_only_request = await prepare_triage_intent(triage_only)
@@ -221,7 +236,9 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
                 await worker.__aexit__(None, None, None)
 
     async def submit(intent, *, wait=True):
-        return await asyncio.wait_for(submit_triage_intent(client, intent, task_queue=queue, wait=wait), 25)
+        return await asyncio.wait_for(
+            submit_triage_intent(client, intent, task_queue=queue, wait=wait, retain_result=True), 25
+        )
 
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -277,6 +294,7 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
                 assert len(comments) == 2 and len(popped) == 1
                 assert attempts["fields"] == 2 and attempts["labels"] == 4
 
+                labels.add(triage_trigger)
                 later_result = await submit(triage_only)
                 assert later_result["status"] == "completed"
                 await asyncio.wait_for(issue_handle.result(), timeout=20)
@@ -294,7 +312,15 @@ async def test_publication_recovers_accepted_writes(monkeypatch, tmp_path):
                 await asyncio.wait_for(issue_handle.result(), timeout=20)
                 assert len(model_calls) == 6
 
-                blocked = TriageIntent(ISSUE, uuid4().hex, "jira", dry_run=False, user_triggered=True)
+                full_trigger = JiraLabels.TODO.value
+                labels.add(full_trigger)
+                blocked = TriageIntent(
+                    ISSUE,
+                    uuid4().hex,
+                    "user",
+                    dry_run=False,
+                    triggers={full_trigger: trigger_events[full_trigger]},
+                )
                 blocked_request = await prepare_triage_intent(blocked)
                 operation = blocked_request.operation_id("package-stream")
                 blocked_requests.add(blocked.request_id)

@@ -51,7 +51,7 @@ async def prepare_triage_intent(intent: TriageIntent) -> TriagePublicationReques
             request_limit=get_agent_execution_config()["max_iterations"],
             force_cve_triage=intent.force_cve_triage,
             config_override=intent.config_override,
-            user_triggered=intent.user_triggered,
+            user_triggered=intent.is_user_triggered,
             triage_only_requested=intent.triage_only,
             follow_up_requested=not intent.triage_only and os.getenv("AUTO_CHAIN", "true").lower() == "true",
         ),
@@ -68,7 +68,7 @@ async def check_triage_intent(request: TriagePublicationRequest, intent: TriageI
         raise ApplicationError("Triage controller has Jira writes disabled", non_retryable=True)
     if inputs.status in {IssueStatus.CLOSED.value, IssueStatus.DONE.value}:
         return f"Issue is already {inputs.status}. Skipping processing."
-    if intent.source == "discovery" and any(label.startswith("ymir_") for label in inputs.labels):
+    if intent.triggered_by == "discovery" and any(label.startswith("ymir_") for label in inputs.labels):
         return "Issue has entered a Ymir workflow since discovery."
     if intent.retry_label and intent.retry_label not in inputs.labels:
         return "Issue no longer has the retry or stale work label."
@@ -92,7 +92,8 @@ async def begin_triage_intent(request: TriagePublicationRequest, intent: TriageI
             await _post_comment(request, "retry-reason", intent.retry_comment)
         remove.extend([intent.retry_label, JiraLabels.RETRY_NEEDED.value])
     add = [] if skipped else [JiraLabels.TRIAGE_IN_PROGRESS.value]
-    if intent.user_triggered and not skipped and intent.source != "cli":
+    # A user submission without a Jira trigger applies its mode to this run.
+    if intent.is_user_triggered and not skipped and (intent.triggers or intent.triggered_by == "user_retry"):
         marker = JiraLabels.TRIAGE_ONLY.value
         (add if intent.triage_only else remove).append(marker)
     await apply_triage_labels(request, add, [label for label in remove if label not in add])
@@ -143,7 +144,7 @@ class TriageIngressWorkflow:
 
     @workflow.update
     def enqueue(self, intent: TriageIntent) -> str:
-        if intent.source == "discovery" and self.pending:
+        if intent.triggered_by == "discovery" and self.pending:
             return "coalesced"
         self.pending.append(intent)
         return "accepted"
@@ -177,8 +178,8 @@ class TriageIngressWorkflow:
             raise ApplicationError("Triage intent belongs to a different issue", non_retryable=True)
         if not intent.request_id.strip() or len(intent.request_id) > 200:
             raise ApplicationError("Expected a request ID of 1 to 200 characters", non_retryable=True)
-        if intent.source not in {"cli", "jira", "discovery", "retry"}:
-            raise ApplicationError("Unknown triage submission source", non_retryable=True)
+        if intent.triggered_by not in {"user", "user_retry", "operator", "discovery", "retry"}:
+            raise ApplicationError("Unknown triage trigger", non_retryable=True)
 
     @workflow.run
     async def run(self, issue: str) -> list[TriageIntentOutcome]:
@@ -202,7 +203,7 @@ class TriageIngressWorkflow:
                 await claim_triage_request(request)
                 skipped = await _run_activity(check_triage_intent, request, intent)
                 if not request.dry_run:
-                    if intent.user_triggered:
+                    if intent.is_user_triggered:
                         await _run_activity(
                             acknowledge_triage_request,
                             request,

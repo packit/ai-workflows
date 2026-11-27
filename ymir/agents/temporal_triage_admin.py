@@ -27,13 +27,12 @@ async def main(args: argparse.Namespace) -> None:
     intent = TriageIntent(
         args.issue,
         args.request_id or f"manual:{uuid4()}",
-        "cli",
+        "user" if args.user_triggered else "operator",
         dry_run=args.dry_run,
-        user_triggered=args.user_triggered,
         force_cve_triage=args.force_cve_triage,
         triage_only=args.triage_only,
     )
-    result = await submit_triage_intent(client, intent, wait=args.wait)
+    result = await submit_triage_intent(client, intent, wait=args.wait, retain_result=True)
     if isinstance(result, str):
         print(f"{result} {intent.request_id} in {triage_issue_workflow_id(intent.issue)}")
     else:

@@ -271,7 +271,8 @@ async def test_recovery_resumes_waiting_intent_and_preserves_manual_override():
     assert "Jira and GitLab" in result["RHEL-2"]
     [(intent, queue)] = accepted
     assert queue == "control"
-    assert intent.user_triggered and intent.retry_label == WAITING and not intent.dry_run
+    assert intent.triggered_by == "user_retry" and intent.retry_label == WAITING and not intent.dry_run
+    assert intent.is_user_triggered
 
 
 @pytest.mark.asyncio

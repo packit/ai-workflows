@@ -20,15 +20,18 @@ def triage_issue_workflow_id(issue: str) -> str:
 class TriageIntent:
     issue: str
     request_id: str
-    source: str
+    triggered_by: str
     dry_run: bool = True
-    user_triggered: bool = False
     triage_only: bool = False
     force_cve_triage: bool = False
     triggers: dict[str, str] = field(default_factory=dict)
     retry_label: str | None = None
     retry_comment: str | None = None
     config_override: dict[str, Any] | None = None
+
+    @property
+    def is_user_triggered(self) -> bool:
+        return self.triggered_by in {"user", "user_retry"}
 
     @property
     def update_id(self) -> str:
@@ -41,10 +44,18 @@ async def connect_triage_ingress():
 
 
 async def submit_triage_intent(
-    client, intent: TriageIntent, *, task_queue: str | None = None, wait: bool = False
+    client,
+    intent: TriageIntent,
+    *,
+    task_queue: str | None = None,
+    wait: bool = False,
+    retain_result: bool = False,
 ) -> str | dict:
-    """Durably enqueue an intent and optionally wait for that request's result."""
-    returns_result = wait or intent.source == "cli"
+    """Submit an intent and await triage when wait is true.
+
+    Set retain_result to enable later retrieval for a detached submission.
+    """
+    returns_result = wait or retain_result
     handle = await client.start_update_with_start_workflow(
         "enqueue_and_wait" if returns_result else "enqueue",
         intent,
@@ -64,4 +75,4 @@ async def submit_triage_intent(
         result_type=dict if returns_result else str,
         rpc_timeout=timedelta(seconds=20),
     )
-    return "accepted" if returns_result and not wait else await handle.result()
+    return "accepted" if retain_result and not wait else await handle.result()

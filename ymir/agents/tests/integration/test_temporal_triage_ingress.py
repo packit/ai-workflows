@@ -42,14 +42,14 @@ async def test_ingress_serializes_requests_and_reports_failure(monkeypatch):
     async def prepare(intent: TriageIntent) -> TriagePublicationRequest:
         steps.append(("prepare", intent.request_id))
         return TriagePublicationRequest(
-            TriageAnalysisRequest(issue, {}, 1, user_triggered=intent.user_triggered),
+            TriageAnalysisRequest(issue, {}, 1, user_triggered=intent.is_user_triggered),
             intent.request_id,
             dry_run=intent.dry_run,
         )
 
     @activity.defn(name="check_triage_intent")
     async def check(request: TriagePublicationRequest, intent: TriageIntent) -> str | None:
-        if intent.source == "jira":
+        if intent.triggers:
             return "Fixture manual triage needs no analysis."
         return None
 
@@ -91,9 +91,15 @@ async def test_ingress_serializes_requests_and_reports_failure(monkeypatch):
     flexmock(ingress).should_receive("_post_comment").replace_with(post_comment).once()
     flexmock(ingress).should_receive("apply_triage_labels").replace_with(apply_labels).once()
 
-    first = TriageIntent(issue, "cli:request", "cli", dry_run=False, user_triggered=True)
+    first = TriageIntent(issue, "cli:request", "user", dry_run=False)
     automatic = TriageIntent(issue.lower(), "discovery:fixture", "discovery", dry_run=False)
-    manual = TriageIntent(issue, "jira:event-1", "jira", dry_run=False, user_triggered=True)
+    manual = TriageIntent(
+        issue,
+        "jira:event-1",
+        "user",
+        dry_run=False,
+        triggers={JiraLabels.TODO.value: "1"},
+    )
     handle = publisher.get_workflow_handle(triage_issue_workflow_id(issue))
     async with Worker(
         client,
@@ -110,6 +116,15 @@ async def test_ingress_serializes_requests_and_reports_failure(monkeypatch):
         await asyncio.wait_for(first_provisioned.wait(), timeout=15)
         active = await handle.describe()
         assert active.status == WorkflowExecutionStatus.RUNNING
+        history = await handle.fetch_history()
+        first_update = next(
+            event.workflow_execution_update_accepted_event_attributes
+            for event in history.events
+            if event.HasField("workflow_execution_update_accepted_event_attributes")
+            and event.workflow_execution_update_accepted_event_attributes.protocol_instance_id
+            == first.update_id
+        )
+        assert first_update.accepted_request.input.name == "enqueue"
         assert await submit_triage_intent(publisher, automatic) == "coalesced"
         manual_result = asyncio.create_task(submit_triage_intent(publisher, manual, wait=True))
         async with asyncio.timeout(10):
@@ -158,7 +173,13 @@ async def test_ingress_serializes_requests_and_reports_failure(monkeypatch):
             assert await retry_handle.result() == [
                 {"request_id": manual.request_id, "status": "duplicate", "detail": None, "preview": None}
             ]
-        follow_up = TriageIntent(issue, "jira:event-2", "jira", dry_run=False, user_triggered=True)
+        follow_up = TriageIntent(
+            issue,
+            "jira:event-2",
+            "user",
+            dry_run=False,
+            triggers={JiraLabels.TODO.value: "2"},
+        )
         assert await submit_triage_intent(publisher, follow_up) == "accepted"
         latest = await handle.describe()
         assert latest.run_id != active.run_id

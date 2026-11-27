@@ -124,8 +124,7 @@ async def _run_git_cmd(
                     await asyncio.to_thread(_remove_existing_clone_path, retry_cleanup_path)
                 delay = GIT_SUBPROCESS_RETRY_BACKOFF_BASE * (2**attempt) + random.uniform(0, 1)  # noqa: S311
                 logger.warning(
-                    "%s failed (exit_code=%d, elapsed=%.1fs), "
-                    "retrying in %.1fs (attempt %d/%d)",
+                    "%s failed (exit_code=%d, elapsed=%.1fs), retrying in %.1fs (attempt %d/%d)",
                     label,
                     returncode,
                     elapsed,

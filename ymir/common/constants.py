@@ -302,6 +302,10 @@ class JiraLabels(Enum):
     # which is the explicit request for the full pipeline.
     TRIAGE_ONLY = "ymir_triage_only"
 
+    # Maintainer-facing trigger: re-run only the reproducer on an already-triaged
+    # issue. The fetcher removes it once the reproducer task is queued.
+    TODO_REPRODUCER = "ymir_todo_reproducer"
+
     # When issue has been postponed too many times it must be marked as abandoned
     ABANDONED = "ymir_abandoned"
 

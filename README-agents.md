@@ -528,9 +528,10 @@ TEMPORAL_TEST_ADDRESS=127.0.0.1:7233 TEMPORAL_TEST_REDIS_URL=redis://127.0.0.1:6
 
 Jira discovery, sweeps, the CLI, and retries submit directly to the issue
 workflow `triage/<JIRA-KEY>`. Triage uses `triggered_by` to select user priority.
-`user` covers CLI and authorized Jira requests, and `user_retry` carries that
-priority into dependent or recovered work. Admin submissions use `operator`
-and follow the standard package policy unless `--user-triggered` is passed.
+`user` covers CLI and authorized Jira requests and preserves that priority
+when recovering a user request. Admin submissions use `retry` without a Jira
+retry label and follow the standard package policy unless `--user-triggered`
+is passed.
 The shared worker runs Temporal task queues.
 OpenShift and local Compose provision a dedicated worker and gateway pod for
 each request. The local Compose pipeline, standalone Make target, and

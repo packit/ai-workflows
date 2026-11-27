@@ -30,10 +30,6 @@ class TriageIntent:
     config_override: dict[str, Any] | None = None
 
     @property
-    def is_user_triggered(self) -> bool:
-        return self.triggered_by in {"user", "user_retry"}
-
-    @property
     def update_id(self) -> str:
         return f"{'preview' if self.dry_run else 'publish'}:{self.request_id}"
 

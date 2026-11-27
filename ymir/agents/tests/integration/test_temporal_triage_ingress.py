@@ -42,7 +42,7 @@ async def test_ingress_serializes_requests_and_reports_failure(monkeypatch):
     async def prepare(intent: TriageIntent) -> TriagePublicationRequest:
         steps.append(("prepare", intent.request_id))
         return TriagePublicationRequest(
-            TriageAnalysisRequest(issue, {}, 1, user_triggered=intent.is_user_triggered),
+            TriageAnalysisRequest(issue, {}, 1, user_triggered=intent.triggered_by == "user"),
             intent.request_id,
             dry_run=intent.dry_run,
         )

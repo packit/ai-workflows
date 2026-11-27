@@ -14,6 +14,7 @@ from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
 
 from ymir.agents import temporal_package_coordination as coordination
+from ymir.agents import temporal_triage_ingress as ingress
 from ymir.agents import temporal_triage_publication as publication
 from ymir.agents.temporal_package_coordination import (
     WAITING,
@@ -236,7 +237,8 @@ async def test_rebuild_dependency_is_checked_only_in_shared_planner():
 
 
 @pytest.mark.asyncio
-async def test_recovery_resumes_waiting_intent_and_preserves_manual_override():
+@pytest.mark.parametrize(("user_triggered", "triggered_by"), [(True, "user"), (False, "retry")])
+async def test_recovery_resumes_waiting_intent_and_preserves_manual_override(user_triggered, triggered_by):
     accepted = []
 
     async def jira(path, params=None):
@@ -249,7 +251,7 @@ async def test_recovery_resumes_waiting_intent_and_preserves_manual_override():
 
     async def findings(issue, account):
         assert issue == "RHEL-1" and account == "bot"
-        return [{"coordination_workflow_id": "package-stream/fixture", "user_triggered": True}]
+        return [{"coordination_workflow_id": "package-stream/fixture", "user_triggered": user_triggered}]
 
     async def submit(_client, intent, *, task_queue):
         accepted.append((intent, task_queue))
@@ -271,8 +273,19 @@ async def test_recovery_resumes_waiting_intent_and_preserves_manual_override():
     assert "Jira and GitLab" in result["RHEL-2"]
     [(intent, queue)] = accepted
     assert queue == "control"
-    assert intent.triggered_by == "user_retry" and intent.retry_label == WAITING and not intent.dry_run
-    assert intent.is_user_triggered
+    assert intent.triggered_by == triggered_by and intent.retry_label == WAITING and not intent.dry_run
+
+    request = TriagePublicationRequest(
+        TriageAnalysisRequest(intent.issue, {}, 1), intent.request_id, dry_run=intent.dry_run
+    )
+
+    async def apply_labels(publication_request, add, remove):
+        assert publication_request is request
+        assert add == [JiraLabels.TRIAGE_IN_PROGRESS.value]
+        assert remove == [WAITING, JiraLabels.RETRY_NEEDED.value]
+
+    flexmock(ingress).should_receive("apply_triage_labels").replace_with(apply_labels).once()
+    await ingress.begin_triage_intent(request, intent, skipped=False)
 
 
 @pytest.mark.asyncio

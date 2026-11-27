@@ -504,7 +504,7 @@ async def recover_package_coordination(client, queue: str) -> dict[str, str]:
             TriageIntent(
                 issue,
                 f"coordination-recovery:{fields['updated']}",
-                "user_retry" if findings[0].get("user_triggered") is True else "retry",
+                "user" if findings[0].get("user_triggered") is True else "retry",
                 dry_run=False,
                 force_cve_triage=findings[0].get("force_cve_triage") is True,
                 retry_label=WAITING,

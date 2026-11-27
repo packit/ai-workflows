@@ -10,7 +10,7 @@ from ymir.agents import temporal_triage_admin as admin
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("user_triggered", "triggered_by"), [(False, "operator"), (True, "user")])
+@pytest.mark.parametrize(("user_triggered", "triggered_by"), [(False, "retry"), (True, "user")])
 async def test_submit_uses_requested_triage_policy(user_triggered, triggered_by):
     client = object()
 
@@ -20,7 +20,7 @@ async def test_submit_uses_requested_triage_policy(user_triggered, triggered_by)
     async def submit(connection, intent, *, wait, retain_result):
         assert connection is client and wait and retain_result
         assert intent.triggered_by == triggered_by
-        assert intent.is_user_triggered is user_triggered
+        assert intent.retry_label is None
         return "accepted"
 
     flexmock(admin).should_receive("connect_triage_ingress").replace_with(connect).once()

@@ -27,7 +27,7 @@ async def main(args: argparse.Namespace) -> None:
     intent = TriageIntent(
         args.issue,
         args.request_id or f"manual:{uuid4()}",
-        "user" if args.user_triggered else "operator",
+        "user" if args.user_triggered else "retry",
         dry_run=args.dry_run,
         force_cve_triage=args.force_cve_triage,
         triage_only=args.triage_only,

@@ -51,7 +51,7 @@ async def prepare_triage_intent(intent: TriageIntent) -> TriagePublicationReques
             request_limit=get_agent_execution_config()["max_iterations"],
             force_cve_triage=intent.force_cve_triage,
             config_override=intent.config_override,
-            user_triggered=intent.is_user_triggered,
+            user_triggered=intent.triggered_by == "user",
             triage_only_requested=intent.triage_only,
             follow_up_requested=not intent.triage_only and os.getenv("AUTO_CHAIN", "true").lower() == "true",
         ),
@@ -92,8 +92,8 @@ async def begin_triage_intent(request: TriagePublicationRequest, intent: TriageI
             await _post_comment(request, "retry-reason", intent.retry_comment)
         remove.extend([intent.retry_label, JiraLabels.RETRY_NEEDED.value])
     add = [] if skipped else [JiraLabels.TRIAGE_IN_PROGRESS.value]
-    # A user submission without a Jira trigger applies its mode to this run.
-    if intent.is_user_triggered and not skipped and (intent.triggers or intent.triggered_by == "user_retry"):
+    # A Jira label trigger carries a choice to persist the triage mode.
+    if intent.triggered_by == "user" and not skipped and intent.triggers:
         marker = JiraLabels.TRIAGE_ONLY.value
         (add if intent.triage_only else remove).append(marker)
     await apply_triage_labels(request, add, [label for label in remove if label not in add])
@@ -178,7 +178,7 @@ class TriageIngressWorkflow:
             raise ApplicationError("Triage intent belongs to a different issue", non_retryable=True)
         if not intent.request_id.strip() or len(intent.request_id) > 200:
             raise ApplicationError("Expected a request ID of 1 to 200 characters", non_retryable=True)
-        if intent.triggered_by not in {"user", "user_retry", "operator", "discovery", "retry"}:
+        if intent.triggered_by not in {"user", "discovery", "retry"}:
             raise ApplicationError("Unknown triage trigger", non_retryable=True)
 
     @workflow.run
@@ -203,7 +203,7 @@ class TriageIngressWorkflow:
                 await claim_triage_request(request)
                 skipped = await _run_activity(check_triage_intent, request, intent)
                 if not request.dry_run:
-                    if intent.is_user_triggered:
+                    if intent.triggered_by == "user":
                         await _run_activity(
                             acknowledge_triage_request,
                             request,

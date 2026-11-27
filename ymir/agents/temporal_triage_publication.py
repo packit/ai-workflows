@@ -376,7 +376,7 @@ def _task_handoff(
 
 
 def _downstream_handoff(
-    request: TriagePublicationRequest, result: TriageAnalysisResult, labels: list[str]
+    request: TriagePublicationRequest, result: TriageAnalysisResult
 ) -> RedisHandoff | None:
     state = result.state
     output = state.triage_result
@@ -401,13 +401,6 @@ def _downstream_handoff(
     if resolution == Resolution.CLARIFICATION_NEEDED:
         queue = RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
     elif state.target_branch and not state.hold_for_manual_branch_creation and resolution in FIX_RESOLUTIONS:
-        if resolution == Resolution.REBASE and (
-            state.is_rebase_sibling
-            or JiraLabels.REBASE_SIBLING.value in labels
-            or state.rebase_waiting_for_siblings
-            or JiraLabels.WAITING_FOR_SIBLINGS.value in labels
-        ):
-            return None
         queue_for_branch = {
             Resolution.BACKPORT: RedisQueues.get_backport_queue_for_branch,
             Resolution.REBASE: RedisQueues.get_rebase_queue_for_branch,
@@ -419,7 +412,7 @@ def _downstream_handoff(
     return _task_handoff(request, queue, state.model_dump(mode="json"), resolution.value)
 
 
-def _terminal_labels(result: TriageAnalysisResult, labels: list[str]) -> tuple[list[str], list[str]]:
+def _terminal_labels(result: TriageAnalysisResult) -> tuple[list[str], list[str]]:
     state = result.state
     output = state.triage_result
     remove = {
@@ -430,12 +423,9 @@ def _terminal_labels(result: TriageAnalysisResult, labels: list[str]) -> tuple[l
         *(label.value for label in triage._CONFIDENCE_TO_LABEL.values()),
     }
     add = set()
-    waiting = state.rebase_waiting_for_siblings or JiraLabels.WAITING_FOR_SIBLINGS.value in labels
     if state.hold_for_manual_branch_creation:
         add.add(JiraLabels.MANUAL_BRANCH_NEEDED.value)
-    elif not triage._should_defer_terminal_label(output.resolution, state.triage_only, waiting) and (
-        label := triage._resolution_label(output.resolution, state.triage_only)
-    ):
+    elif label := triage._resolution_label(output.resolution, state.triage_only):
         add.add(label.value)
     if output.confidence and (label := triage._CONFIDENCE_TO_LABEL.get(output.confidence.level)):
         add.add(label.value)
@@ -528,7 +518,7 @@ async def _run_request(
         )
 
     handoffs = []
-    if handoff := _downstream_handoff(request, result, inputs.labels):
+    if handoff := _downstream_handoff(request, result):
         handoffs.append(handoff)
     if (
         request.enqueue_reproducer
@@ -581,7 +571,7 @@ async def _run_request(
             handoffs,
             operation_id=request.operation_id("finding"),
         )
-        add, remove = _terminal_labels(result, inputs.labels)
+        add, remove = _terminal_labels(result)
         waiting = JiraLabels.TRIAGE_COORDINATION_WAITING.value
         if held:
             label = triage._resolution_label(state.triage_result.resolution, state.triage_only)

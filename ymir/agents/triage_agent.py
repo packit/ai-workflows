@@ -12,7 +12,6 @@ from pydantic_ai.capabilities import Instrumentation
 import ymir.agents.tasks as tasks
 from ymir.agents.cve_applicability_agent import build_applicability_prompt
 from ymir.agents.pydantic_agent import adapt_tool
-from ymir.agents.rebase_consolidation import get_rebase_primary_issue
 from ymir.agents.utils import (
     get_agent_execution_config,
     mcp_tools,
@@ -114,18 +113,6 @@ def _defers_fix(resolution: Resolution, triage_only: bool) -> bool:
     actually deferred.
     """
     return triage_only and resolution in _DEFERRED_LABEL_BY_RESOLUTION
-
-
-def _should_defer_terminal_label(
-    resolution: Resolution, triage_only: bool, waiting_for_siblings: bool
-) -> bool:
-    """Whether the terminal label must wait for pending rebase siblings.
-
-    A triage-only run is an explicit stop, so it writes the deferred label and
-    ends the sibling wait instead of leaving the issue waiting for a re-triage
-    that would inherit the triage-only intent anyway.
-    """
-    return resolution == Resolution.REBASE and waiting_for_siblings and not triage_only
 
 
 _REPRODUCER_ELIGIBLE_RESOLUTIONS = frozenset(
@@ -423,21 +410,6 @@ class TriageState(BaseModel):
     applicability_unpacked_sources: Path | None = Field(default=None)
     applicability_used_fallback: bool = Field(default=False)
     applicability_check_skipped: bool = Field(default=False)
-    rebase_waiting_for_siblings: bool = Field(
-        default=False,
-        description=(
-            "Set to True when siblings are queued and this issue should wait for them to finish triaging."
-        ),
-    )
-    waiting_marker_cleared: bool = Field(
-        default=False,
-        description=(
-            "Set to True when a stale sibling link was ignored and this issue's own "
-            "ymir_rebase_waiting_for_siblings was removed: the marker captured at task "
-            "start must no longer defer the terminal label or the rebase dispatch."
-        ),
-    )
-    is_rebase_sibling: bool = False
     automatic_branch_creation_disabled: bool | None = Field(
         default=None,
         description=(
@@ -464,10 +436,6 @@ class TriageState(BaseModel):
             and self.target_branch_exists is False
             and self.triage_result is not None
             and self.triage_result.resolution in (Resolution.REBASE, Resolution.BACKPORT, Resolution.REBUILD)
-            and not (
-                self.triage_result.resolution == Resolution.REBASE
-                and (self.is_rebase_sibling or self.rebase_waiting_for_siblings)
-            )
         )
 
 
@@ -722,6 +690,9 @@ def validate_triage_output(
     data = payload.get("data")
     if not isinstance(data, dict):
         raise ValueError("`data` must be a JSON object, not a string or any other type.")
+    if resolution == Resolution.REBASE:
+        # The package-stream workflow assigns rebase siblings after triage.
+        data.pop("consolidated_issues", None)
 
     data_model = _RESOLUTION_DATA_MODELS[resolution]
     known_values = {
@@ -914,10 +885,6 @@ async def prepare_triage_analysis(state: TriageState, gateway_tools) -> tuple[st
     fix_version_name = fix_versions[0].get("name") if fix_versions else None
 
     input_data = InputSchema(issue=state.jira_issue)
-    state.is_rebase_sibling = state.is_rebase_sibling or get_rebase_primary_issue(jira_details) is not None
-    state.rebase_waiting_for_siblings = state.rebase_waiting_for_siblings or (
-        JiraLabels.WAITING_FOR_SIBLINGS.value in (fields.get("labels") or [])
-    )
     state.jira_summary = fields.get("summary")
     raw_component = fields.get(DOWNSTREAM_COMPONENT_CUSTOM_FIELD)
     state.raw_downstream_component = raw_component or None
@@ -1060,8 +1027,6 @@ def next_after_triage_target(state: TriageState) -> str:
 
     if state.triage_result.resolution == Resolution.REBUILD:
         return "consolidate_rebuild_siblings"
-    if state.triage_result.resolution == Resolution.REBASE:
-        return "consolidate_rebase_siblings"
     return "comment_in_jira"
 
 
@@ -1179,8 +1144,6 @@ async def prepare_cve_applicability(
                 state.applicability_check_skipped = True
                 if state.triage_result.resolution == Resolution.REBUILD:
                     return None, "consolidate_rebuild_siblings"
-                if state.triage_result.resolution == Resolution.REBASE:
-                    return None, "consolidate_rebase_siblings"
                 return None, "comment_in_jira"
         elif older_zstream is False:
             clone_branch = f"c{major_version}s"
@@ -1204,8 +1167,6 @@ async def prepare_cve_applicability(
         state.applicability_check_skipped = True
         if state.triage_result.resolution == Resolution.REBUILD:
             return None, "verify_rebuild_buildroot"
-        if state.triage_result.resolution == Resolution.REBASE:
-            return None, "consolidate_rebase_siblings"
         return None, "comment_in_jira"
 
     if not prep_ok:
@@ -1287,8 +1248,6 @@ def apply_cve_applicability(state: TriageState, applicability: AssessedApplicabi
 def next_after_cve_applicability(state: TriageState) -> str:
     if state.triage_result.resolution == Resolution.REBUILD:
         return "verify_rebuild_buildroot"
-    if state.triage_result.resolution == Resolution.REBASE:
-        return "consolidate_rebase_siblings"
     return "comment_in_jira"
 
 

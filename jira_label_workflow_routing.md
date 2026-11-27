@@ -178,7 +178,11 @@ These labels are applied to GitLab merge requests (not Jira issues):
 
 ## Deduplication Logic
 
-**Trigger labels are consumed by the fetcher, all other labels by the agent.** The fetcher atomically removes `ymir_todo` and `ymir_retry_needed` before pushing to Redis, replacing them with `ymir_triage_in_progress` so the very next sweep sees the in-progress marker and skips. The triage agent cleans up old `ymir_*` labels when it pops the task, preserving `ymir_rebase_waiting_for_siblings` until the sibling coordination completes. If the fetcher's atomic flip fails after retries, the Redis push is **skipped** — the issue stays eligible for the next sweep with its trigger label intact, rather than being enqueued without a dedup anchor.
+Temporal serializes triage requests under one workflow ID per Jira issue. The
+issue workflow consumes trigger labels and applies `ymir_triage_in_progress`.
+Issues awaiting a downstream fix handoff carry `ymir_triage_waiting_for_coordination`
+until the package-stream workflow delivers it. The diagram below shows the
+legacy Redis admission flow. [Temporal package-stream coordination](README-agents.md#coordinate-a-package-stream-in-temporal)
 
 ```mermaid
 flowchart TD

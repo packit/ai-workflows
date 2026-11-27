@@ -32,8 +32,6 @@ from ymir.agents.reasoning_agent import ReasoningAgent
 from ymir.agents.rebase_consolidation import (
     add_jira_tickets_to_latest_changelog_entry,
     changelog_entry_headers,
-    find_triaged_rebase_siblings,
-    get_rebase_primary_issue,
     has_new_latest_changelog_entry,
     uses_autochangelog,
 )
@@ -49,7 +47,6 @@ from ymir.agents.utils import (
     mcp_tools,
     render_template,
     resolve_chat_model_override,
-    run_tool,
     wrap_details,
 )
 from ymir.common.base_utils import fix_await, install_shutdown_handler, redis_client, run_task_loop
@@ -158,7 +155,6 @@ class State(PackageUpdateState):
     justification: str | None = Field(default=None)
     triage_summary: str | None = Field(default=None)
     consolidated_issues: list[ConsolidatedIssue] = Field(default_factory=list)
-    consolidation_summary: str | None = Field(default=None)
     fedora_clone: Path | None = Field(default=None)
     leading_zstream_branch: str | None = Field(default=None)
     rebase_log: list[str] = Field(default_factory=list)
@@ -281,7 +277,6 @@ async def run_workflow(
     justification=None,
     triage_summary=None,
     consolidated_issues=None,
-    consolidation_summary=None,
     redis_conn=None,
     user_triggered=False,
     dist_git_namespace=None,
@@ -305,31 +300,10 @@ async def run_workflow(
 
         workflow = Workflow(State, name="RebaseWorkflow")
 
-        async def check_if_sibling(state):
-            """Check if this issue is a sibling - siblings should not create their own MR."""
-            # Check comments for "Queued for triage as potential sibling" marker
-            # (ymir_rebase_sibling label was already removed by triage cleanup)
-            try:
-                details = await run_tool(
-                    "get_jira_details",
-                    issue_key=state.jira_issue,
-                    available_tools=gateway_tools,
-                )
-                if get_rebase_primary_issue(details) is not None:
-                    logger.info(
-                        f"Issue {state.jira_issue} is a sibling (found sibling comment). "
-                        "Siblings do not create their own MR - the primary will consolidate them. "
-                        "Exiting without processing."
-                    )
-                    return Workflow.END
-            except Exception as e:
-                logger.warning(f"Failed to check if {state.jira_issue} is a sibling: {e}, proceeding")
-            return "change_jira_status"
-
         async def change_jira_status(state):
             if dry_run:
                 logger.info(f"Dry run: skipping Jira status change of {state.jira_issue} to In Progress")
-                return "find_consolidated_siblings"
+                return "fork_and_prepare_dist_git"
             # tasks.change_jira_status further gates the write on
             # JIRA_ALLOW_STATUS_CHANGES; nothing else to check here.
             try:
@@ -340,39 +314,6 @@ async def run_workflow(
                 )
             except Exception as status_error:
                 logger.warning(f"Failed to change status for {state.jira_issue}: {status_error}")
-            return "find_consolidated_siblings"
-
-        async def find_consolidated_siblings(state):
-            """Find siblings that have been triaged as REBASE to the same version."""
-            if not state.consolidated_issues:
-                # consolidated_issues is empty when using wait-for-siblings approach
-                # Find siblings that triaged as REBASE
-                rebase_data = RebaseData(
-                    jira_issue=state.jira_issue,
-                    package=state.package,
-                    version=state.version,
-                    fix_version=state.fix_version,
-                )
-                logger.info(f"Finding triaged siblings for {state.jira_issue}")
-                try:
-                    included, summary = await find_triaged_rebase_siblings(
-                        jira_issue=state.jira_issue,
-                        rebase_data=rebase_data,
-                        available_tools=gateway_tools,
-                    )
-                    state.consolidated_issues = included
-                    state.consolidation_summary = summary or None
-                    if included:
-                        logger.info(
-                            f"Found {len(included)} triaged siblings for consolidation "
-                            f"with {state.jira_issue}"
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to find triaged siblings for {state.jira_issue}: {e}")
-            else:
-                logger.info(
-                    f"Using {len(state.consolidated_issues)} consolidated siblings from triage result"
-                )
             return "fork_and_prepare_dist_git"
 
         async def fork_and_prepare_dist_git(state):
@@ -652,11 +593,6 @@ async def run_workflow(
                 branch_note = format_zstream_branch_note(
                     state.zstream_branch_created, state.zstream_branch_warning
                 )
-                consolidation_text = (
-                    f"\n\n{wrap_details('Consolidated issues', state.consolidation_summary)}"
-                    if state.consolidation_summary
-                    else ""
-                )
                 build_section = build_mr_note(
                     build_url=state.build_url,
                     is_modular_issue=is_modular_issue,
@@ -684,7 +620,6 @@ async def run_workflow(
                         f"{triage_details_text}"
                         f"{format_jira_links_for_mr(all_issues)}\n"
                         f"{wrap_details('Rebase status', state.rebase_log[-1])}"
-                        f"{consolidation_text}"
                         f"\n\n{branch_note}"
                         f"{build_section_block}"
                         f"{mr_description_footer(state.package, all_issues)}"
@@ -744,9 +679,7 @@ async def run_workflow(
                 )
             return Workflow.END
 
-        workflow.add_step("check_if_sibling", check_if_sibling)
         workflow.add_step("change_jira_status", change_jira_status)
-        workflow.add_step("find_consolidated_siblings", find_consolidated_siblings)
         workflow.add_step("fork_and_prepare_dist_git", fork_and_prepare_dist_git)
         workflow.add_step("run_rebase_agent", run_rebase_agent)
         workflow.add_step("run_build_agent", run_build_agent)
@@ -770,7 +703,6 @@ async def run_workflow(
                     justification=justification,
                     triage_summary=triage_summary,
                     consolidated_issues=consolidated_issues or [],
-                    consolidation_summary=consolidation_summary,
                     attempts_remaining=max_build_attempts,
                 ),
             )
@@ -972,7 +904,6 @@ async def main() -> None:
                         justification=rebase_data.justification,
                         triage_summary=rebase_data.triage_summary,
                         consolidated_issues=rebase_data.consolidated_issues,
-                        consolidation_summary=rebase_data.consolidation_summary,
                         redis_conn=redis,
                         user_triggered=user_triggered,
                         dist_git_namespace=dist_git_namespace,

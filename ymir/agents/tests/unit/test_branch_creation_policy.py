@@ -13,71 +13,11 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from pydantic import BaseModel
 
 from ymir.agents import tasks
-from ymir.agents.rebase_consolidation import get_rebase_primary_issue
 from ymir.common.constants import JiraLabels, RedisQueues
 from ymir.common.models import BackportData, RebaseData, RebuildData, Task
 from ymir.tools.base import make_additional_context
 from ymir.tools.constants import ZSTREAM_BRANCH_POLICY_REJECTED
 from ymir.tools.errors import ToolErrorWithContext
-
-
-@pytest.mark.parametrize(
-    "reference",
-    [
-        "RHEL-200",
-        "https://redhat.atlassian.net/browse/RHEL-200#icft=RHEL-200",
-        '<custom data-type="smartlink">https://redhat.atlassian.net/browse/RHEL-200</custom>',
-    ],
-)
-def test_primary_reference_is_read_after_marker(reference):
-    details = {
-        "fields": {
-            "comment": {
-                "comments": [{"body": f"RHEL-100: Queued for triage as potential sibling of {reference}"}]
-            }
-        }
-    }
-    assert get_rebase_primary_issue(details) == "RHEL-200"
-
-
-def test_primary_reference_supports_jira_inline_card():
-    details = {
-        "fields": {
-            "comment": {
-                "comments": [
-                    {
-                        "body": {
-                            "type": "doc",
-                            "version": 1,
-                            "content": [
-                                {
-                                    "type": "paragraph",
-                                    "content": [
-                                        {
-                                            "type": "text",
-                                            "text": "Queued for triage as potential sibling of ",
-                                        },
-                                        {
-                                            "type": "inlineCard",
-                                            "attrs": {"url": "https://example.com/browse/RHEL-200"},
-                                        },
-                                    ],
-                                }
-                            ],
-                        }
-                    }
-                ]
-            }
-        }
-    }
-    assert get_rebase_primary_issue(details) == "RHEL-200"
-
-
-def test_primary_reference_keeps_full_issue_key():
-    details = {
-        "fields": {"comment": {"comments": [{"body": "Queued for triage as potential sibling of RHEL-2001"}]}}
-    }
-    assert get_rebase_primary_issue(details) == "RHEL-2001"
 
 
 def _policy_tool_error(message: str, raw_stderr: str = "") -> ToolError:
@@ -281,13 +221,6 @@ async def _run_policy_process_task(agent_module, payload, monkeypatch):
             return flexmock()
 
         flexmock(agent_module).should_receive("create_backport_agent").replace_with(_create_backport_agent)
-    if hasattr(agent_module, "find_triaged_rebase_siblings"):
-
-        async def _no_siblings(*_args, **_kwargs):
-            return [], None
-
-        flexmock(agent_module).should_receive("find_triaged_rebase_siblings").replace_with(_no_siblings)
-
     labels = []
     comments = []
 

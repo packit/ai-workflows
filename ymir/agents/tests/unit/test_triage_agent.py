@@ -23,7 +23,6 @@ from ymir.agents.triage_agent import (
     _map_version_to_module_branch,
     _record_auto_processing_policy,
     _resolution_label,
-    _should_defer_terminal_label,
     determine_target_branch,
     render_prompt,
     validate_triage_output,
@@ -837,6 +836,26 @@ def test_apply_triage_output_rejects_pr_pending_without_blocker_reference():
         t_agent.apply_triage_output(state, output)
 
 
+def test_rebase_triage_ignores_model_proposed_siblings():
+    normalized = validate_triage_output(
+        json.dumps(
+            {
+                "resolution": "rebase",
+                "data": {
+                    "package": "bash",
+                    "version": "5.3",
+                    "consolidated_issues": [{"issue_key": "RHEL-2"}],
+                },
+            }
+        ),
+        jira_issue="RHEL-1",
+    )
+
+    data = TriageOutputSchema.model_validate_json(normalized).data
+    assert isinstance(data, RebaseData)
+    assert data.all_jira_issues == ["RHEL-1"]
+
+
 def test_ymir_comment_marker_triage():
     """The shared marker template renders the exact string the sweep matches."""
     assert YMIR_COMMENT_MARKER.substitute(AGENT_TYPE="Triage") == "Output from Ymir Triage Agent"
@@ -1035,12 +1054,3 @@ def test_validate_triage_output_pr_pending_requires_blocker_references():
         TriageOutputSchema.model_validate_json(normalized).data.blocker_references
         == data["blocker_references"]
     )
-
-
-@pytest.mark.parametrize(
-    ("triage_only", "expected"),
-    [(False, True), (True, False)],
-)
-def test_terminal_label_wait_is_ended_by_triage_only(triage_only, expected):
-    """A triage-only run is an explicit stop, so it must not leave the wait dangling."""
-    assert _should_defer_terminal_label(Resolution.REBASE, triage_only, waiting_for_siblings=True) is expected

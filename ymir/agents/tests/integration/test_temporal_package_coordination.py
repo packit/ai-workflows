@@ -276,8 +276,16 @@ async def test_recovery_resumes_waiting_intent_and_preserves_manual_override():
 
 
 @pytest.mark.asyncio
-async def test_publication_records_the_handoff_for_the_coordinator_without_dispatch():
+@pytest.mark.parametrize("resolution", [Resolution.BACKPORT, Resolution.REBASE])
+async def test_publication_records_the_handoff_for_the_coordinator_without_dispatch(resolution):
     work = make_work("RHEL-1")
+    labels = []
+    if resolution == Resolution.REBASE:
+        work.state.triage_result = TriageOutputSchema(
+            resolution=resolution,
+            data=RebaseData(package="sample", version="2.0", jira_issue=work.issue, fix_version="rhel-9.8.z"),
+        )
+        labels = ["ymir_rebase_sibling", "ymir_rebase_waiting_for_siblings"]
     work.request.analysis.follow_up_requested = True
     result = TriageAnalysisResult(work.state, follow_up_requested=True)
     written = []
@@ -288,7 +296,7 @@ async def test_publication_records_the_handoff_for_the_coordinator_without_dispa
     async def execute(fn, *args, **_kwargs):
         written.append((fn.__name__, args))
         if fn == publication.read_publication_inputs:
-            return PublicationInputs([], "New", False)
+            return PublicationInputs(labels, "New", False)
         return None
 
     flexmock(publication.workflow).should_receive("info").and_return(flexmock(workflow_id="triage/RHEL-1"))
@@ -297,7 +305,7 @@ async def test_publication_records_the_handoff_for_the_coordinator_without_dispa
 
     result = await publication._run_request(work.request, "fixture", task_queue="fixture-pod")
     assert result.destinations == []
-    assert [handoff.purpose for handoff in result.coordinated_handoffs] == ["backport"]
+    assert [handoff.purpose for handoff in result.coordinated_handoffs] == [resolution.value]
     assert [name for name, _ in written] == [
         "read_publication_inputs",
         "publish_triage_finding",
@@ -319,7 +327,7 @@ def test_publication_replaces_previous_confidence_label(level):
     }
     expected = {f"ymir_applicability_confidence_{level}"} if level else set()
 
-    add, remove = publication._terminal_labels(TriageAnalysisResult(work.state, True), [])
+    add, remove = publication._terminal_labels(TriageAnalysisResult(work.state, True))
 
     assert set(add) & confidence_labels == expected
     assert set(remove) & confidence_labels == confidence_labels - expected
@@ -342,10 +350,10 @@ async def test_publication_reports_manual_branch_hold(branch_exists):
         assert ("`ymir_todo` label to RHEL-1" in body) is waiting
 
     flexmock(publication).should_receive("_post_comment").replace_with(post_comment).once()
-    handoff = publication._downstream_handoff(work.request, result, [])
+    handoff = publication._downstream_handoff(work.request, result)
     assert (handoff is None) is waiting
     await publication.publish_triage_finding(work.request, result, [handoff] if handoff else [])
-    add, _ = publication._terminal_labels(result, [])
+    add, _ = publication._terminal_labels(result)
     assert (JiraLabels.MANUAL_BRANCH_NEEDED.value in add) is waiting
 
 

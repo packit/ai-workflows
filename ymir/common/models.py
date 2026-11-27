@@ -357,10 +357,6 @@ class RebaseData(BaseModel):
         default_factory=list,
         description="Sibling issues consolidated into this rebase task",
     )
-    consolidation_summary: str | None = Field(
-        default=None,
-        description="Summary of sibling consolidation analysis",
-    )
 
     @property
     def all_jira_issues(self) -> list[str]:

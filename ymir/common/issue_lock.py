@@ -14,6 +14,17 @@ from ymir.common.base_utils import fix_await
 logger = logging.getLogger(__name__)
 
 LOCK_KEY_PREFIX = "lock:triage:"
+BACKPORT_LOCK_KEY_PREFIX = "lock:backport:"
+REBASE_LOCK_KEY_PREFIX = "lock:rebase:"
+REBUILD_LOCK_KEY_PREFIX = "lock:rebuild:"
+# Issue-scoped locks used to prevent duplicate queue scheduling. Keep cluster
+# coordination locks out of this collection: they do not identify an issue.
+WORKFLOW_LOCK_PREFIXES = (
+    LOCK_KEY_PREFIX,
+    BACKPORT_LOCK_KEY_PREFIX,
+    REBASE_LOCK_KEY_PREFIX,
+    REBUILD_LOCK_KEY_PREFIX,
+)
 DEFAULT_LOCK_TTL_MS = 300_000  # 5 minutes
 
 

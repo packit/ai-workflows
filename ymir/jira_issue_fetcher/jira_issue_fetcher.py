@@ -33,7 +33,7 @@ import requests
 
 from ymir.common.base_utils import fix_await, get_jira_auth_headers, redis_client
 from ymir.common.constants import JIRA_SEARCH_PATH, JiraLabels, RedisQueues
-from ymir.common.issue_lock import LOCK_KEY_PREFIX
+from ymir.common.issue_lock import WORKFLOW_LOCK_PREFIXES
 from ymir.common.logging_setup import configure_logging
 from ymir.common.merge_queue import SubmitResult, submit_merge_job
 from ymir.common.models import (
@@ -578,17 +578,22 @@ class JiraIssueFetcher:
             logger.error(f"Error checking existing queue items: {e}")
             return set()
 
-    async def _get_locked_issue_keys(self, redis_conn: redis.Redis) -> set[str]:
-        """Return issue keys that currently have an active triage lock.
-
-        Scans Redis for lock:triage:* keys, indicating an issue is being
-        actively processed by a triage agent pod.
-        """
+    async def _get_active_workflow_issue_keys(self, redis_conn: redis.Redis) -> set[str] | None:
+        """Return active issue workflow locks, or ``None`` if Redis scan fails."""
         locked_keys: set[str] = set()
-        async for key in redis_conn.scan_iter(match=f"{LOCK_KEY_PREFIX}*", count=100):
-            issue_key = key.decode().removeprefix(LOCK_KEY_PREFIX).upper()
-            locked_keys.add(issue_key)
-        return locked_keys
+        try:
+            for prefix in WORKFLOW_LOCK_PREFIXES:
+                async for key in redis_conn.scan_iter(match=f"{prefix}*", count=100):
+                    if isinstance(key, bytes):
+                        key = key.decode(errors="replace")
+                    if key.startswith(prefix):
+                        locked_keys.add(key[len(prefix) :].upper())
+            return locked_keys
+        except Exception:
+            logger.warning(
+                "Failed to inspect active workflow locks; skipping this enqueue sweep", exc_info=True
+            )
+            return None
 
     async def _get_queue_depth(self, redis_conn: redis.Redis) -> int:
         """Return the combined depth of the two queues this fetcher pushes to."""
@@ -598,9 +603,12 @@ class JiraIssueFetcher:
 
     async def push_issues_to_queue(
         self, issues: list[dict[str, Any]], max_issues_override: int | None = None
-    ) -> int:
+    ) -> int | None:
         """
-        Push each issue to the Redis triage_queue, but only if it doesn't already exist
+        Push each issue to the Redis triage_queue, but only if it doesn't already exist.
+
+        Returns None when active workflow locks could not be inspected. This lets
+        the caller fail the fetcher after other work in the sweep is complete.
         """
         if not issues:
             logger.info("No issues to push to queue")
@@ -609,9 +617,11 @@ class JiraIssueFetcher:
         async with redis_client(self.redis_url) as redis_conn:
             # Get existing issue keys to avoid duplicates
             existing_keys = await self._get_existing_issue_keys(redis_conn)
-            locked_keys = await self._get_locked_issue_keys(redis_conn)
+            locked_keys = await self._get_active_workflow_issue_keys(redis_conn)
+            if locked_keys is None:
+                return None
             if locked_keys:
-                logger.info("Found %d locked issues, will skip enqueue for them", len(locked_keys))
+                logger.info("Found %d active workflow locks, will skip enqueue for them", len(locked_keys))
 
             remove_issues_for_retry = set()
             user_triggered_keys = set()
@@ -628,6 +638,14 @@ class JiraIssueFetcher:
                 labels = fields.get("labels", [])
                 ymir_labels = [label for label in labels if label.startswith("ymir_")]
                 has_in_progress = any(label.endswith("_in_progress") for label in ymir_labels)
+                normalized_issue_key = issue_key.upper()
+
+                # Check this before author verification or any Jira mutation so
+                # the maintainer trigger remains available for the next sweep.
+                if normalized_issue_key in locked_keys:
+                    existing_keys.add(issue_key)
+                    logger.info("Issue %s has an active workflow lock - skipping", issue_key)
+                    continue
 
                 # ymir_todo is the maintainer-facing trigger; ymir_todo_triage asks
                 # for the same run but stops after triage. A run already in progress
@@ -861,14 +879,6 @@ class JiraIssueFetcher:
                                     f"after retries; skipping enqueue to avoid duplicate processing: {e}"
                                 )
                                 continue
-
-                    if issue_key in locked_keys:
-                        logger.info(
-                            "Issue %s is currently locked - trigger label consumed but skipping enqueue",
-                            issue_key,
-                        )
-                        skipped_count += 1
-                        continue
 
                     # Create task using shared Pydantic model
                     task = Task.from_issue(issue_key, user_triggered=user_triggered, triage_only=triage_only)
@@ -1161,15 +1171,23 @@ class JiraIssueFetcher:
                 logger.info(f"Triage queue depth: {depth} (threshold: {self.queue_depth_threshold})")
                 push_cap = max(0, self.queue_depth_threshold - depth)
 
+            lock_scan_failed = False
             if push_cap != 0:
                 pushed_count = await self.push_issues_to_queue(issues, max_issues_override=push_cap)
-                logger.info(f"Completed: {pushed_count} issues added to triage_queue")
+                if pushed_count is None:
+                    lock_scan_failed = True
+                    logger.warning("Workflow lock inspection failed; no triage issues were enqueued")
+                else:
+                    logger.info(f"Completed: {pushed_count} issues added to triage_queue")
             else:
                 logger.info("Queue depth at/above threshold - skipping triage push this cycle")
 
             consolidation_count = await self._process_consolidation_labels(issues)
             if consolidation_count:
                 logger.info(f"Submitted {consolidation_count} MR consolidation job(s)")
+
+            if lock_scan_failed:
+                raise RuntimeError("Workflow lock inspection failed; fetcher sweep must be retried")
 
         except Exception as e:
             logger.error(f"Fatal error in issue fetcher: {e}")

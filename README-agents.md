@@ -458,6 +458,7 @@ make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone
 make PACKAGE=httpd VERSION=2.4.62 JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-rebase-agent-standalone
 make PACKAGE=httpd UPSTREAM_PATCHES=https://github.com/... JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-backport-agent-standalone
 make PACKAGE=httpd JIRA_ISSUE=RHEL-12345 BRANCH=c10s run-rebuild-agent-standalone
+DRY_RUN=true make MR_URL=https://gitlab.com/redhat/rhel/rpms/expat/-/merge_requests/108 run-mr-testing-analyst-agent-standalone
 
 # Or with dry-run
 DRY_RUN=true make JIRA_ISSUE=RHEL-12345 run-triage-agent-standalone
@@ -467,6 +468,11 @@ make JIRA_ISSUE=RHEL-12345 FORCE_CVE_TRIAGE=true run-triage-agent-standalone
 ```
 
 Use commas to delimit multiple patch/commit URLs in `UPSTREAM_PATCHES`.
+
+The MR testing analyst agent finds the Jira issues an MR resolves from the `Resolves: RHEL-XXXXX` footers in
+its commit messages (and, as a fallback, its description). Without `MR_URL` it runs in queue mode, consuming
+`Task`s from `mr_testing_queue` whose metadata is `{"mr_url": "...", "gating": false}`; nothing enqueues them
+yet, so push them by hand when testing (`gating: true` analyzes the OSCI gating pipeline instead of anewa/NEWA).
 
 ### CLI
 

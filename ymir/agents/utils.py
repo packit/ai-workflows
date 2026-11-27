@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import litellm
 from beeai_framework.agents.tool_calling.utils import ToolCallCheckerConfig
 from beeai_framework.backend import ChatModel, ChatModelParameters
 from jinja2 import Environment, FileSystemLoader
+from litellm.integrations.custom_logger import CustomLogger
 from pydantic import BaseModel
 
 from ymir.common.base_utils import check_subprocess, run_subprocess  # noqa: F401 — re-exported
@@ -75,7 +77,47 @@ def is_reasoning_enabled() -> bool:
     return "claude" in chat_model and bool(os.getenv("REASONING_EFFORT"))
 
 
+class _EmptyReplyLogger(CustomLogger):
+    """Logs model replies that have no text and no tool call, with the parts the model returned.
+    beeai then fails the step with EmptyChatModelResponseError and the trace has no reply to inspect.
+    Logs part types, lengths, and the finish reason, never the text."""
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        _log_if_empty_reply(response_obj)
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        _log_if_empty_reply(response_obj)
+
+
+def _log_if_empty_reply(response: Any) -> None:
+    try:
+        choice = response.choices[0]
+    except (AttributeError, IndexError, TypeError):
+        return
+    message = choice.message
+    if getattr(message, "content", None) or getattr(message, "tool_calls", None):
+        return
+    thinking_parts = [
+        (block.get("type"), len(block.get("thinking") or block.get("data") or ""))
+        for block in (getattr(message, "thinking_blocks", None) or [])
+        if isinstance(block, dict)
+    ]
+    logger.warning(
+        "Empty model reply: finish_reason=%s, thinking_parts=%s, reasoning_chars=%d, usage=%s",
+        choice.finish_reason,
+        thinking_parts,
+        len(getattr(message, "reasoning_content", None) or ""),
+        getattr(response, "usage", None),
+    )
+
+
+def _enable_empty_reply_logging() -> None:
+    if not any(isinstance(callback, _EmptyReplyLogger) for callback in litellm.callbacks):
+        litellm.callbacks.append(_EmptyReplyLogger())
+
+
 def get_chat_model() -> ChatModel:
+    _enable_empty_reply_logging()
     chat_model = os.environ["CHAT_MODEL"]
     # lowering the temperature makes the model stop backporting too soon
     # but should yield more predictable results, similar for top_p (tried 0.5)

@@ -99,6 +99,10 @@ class RedisQueues(Enum):
     # Redis Hash for MR consolidation queue (not a list — uses hash fields
     # with at-most-one-active/one-pending semantics per package-branch pair).
     MERGE_CONSOLIDATION_QUEUE = "merge_consolidation_queue"
+    # MR testing analyst input: Task objects whose metadata is
+    # {"mr_url": ..., "gating": bool}. Deliberately not in input_queues() --
+    # its tasks carry no Jira issue key for the issue fetcher to dedup on.
+    MR_TESTING_QUEUE = "mr_testing_queue"
     REPRODUCER_QUEUE = "reproducer_queue"
     REPRODUCER_QUEUE_TODO = "reproducer_queue_todo"
     COMPLETED_REPRODUCER_LIST = "completed_reproducer_list"

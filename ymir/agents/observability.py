@@ -20,6 +20,10 @@ from ymir.common.logging_setup import current_jira_issue, current_workflow
 
 logger = logging.getLogger(__name__)
 
+# The MrTestingAnalystWorkflow root span copies the whole workflow state onto itself at every step
+# (openinference's workflow processor), which overflowed 1024 attributes on a real MR.
+SPAN_ATTRIBUTE_LIMIT = 8192
+
 
 class AgentSpanProcessor(SpanProcessor):
     def __init__(self) -> None:
@@ -44,9 +48,8 @@ class AgentSpanProcessor(SpanProcessor):
         jira_issue: str | None,
         workflow: str | None,
     ):
-        with sentry_sdk.start_transaction(
-            op=f"agent.{workflow}", name=f"{workflow} for {jira_issue}"
-        ) as transaction:
+        name = f"{workflow} for {jira_issue}" if jira_issue else f"{workflow}"
+        with sentry_sdk.start_transaction(op=f"agent.{workflow}", name=name) as transaction:
             transaction.set_data("workflow", workflow)
             transaction.set_data("jira_issue", jira_issue)
 
@@ -107,7 +110,10 @@ def _setup_tool_error_logging() -> None:
 
 def setup_observability(endpoint: str) -> AgentSpanProcessor:
     resource = Resource(attributes={})
-    tracer_provider = trace_sdk.TracerProvider(resource=resource)
+    # LLM spans flatten every message and tool schema into attributes, and workflow root spans hold the full
+    # state per step; the SDK default of 128 drops the oldest ones (including jira.issue).
+    span_limits = trace_sdk.SpanLimits(max_span_attributes=SPAN_ATTRIBUTE_LIMIT)
+    tracer_provider = trace_sdk.TracerProvider(resource=resource, span_limits=span_limits)
     processor = AgentSpanProcessor()
     tracer_provider.add_span_processor(processor)
     tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint)))

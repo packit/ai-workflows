@@ -77,7 +77,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from google.protobuf.json_format import MessageToDict
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
@@ -928,7 +928,8 @@ class TraceHandler(BaseHTTPRequestHandler):
             logger.debug("Listed %d issues", len(issues))
             self._send_json(200, {"issues": issues})
         elif path.startswith("/traces/"):
-            issue = path[len("/traces/") :]
+            # The UI percent-encodes the issue key, so decode it before matching stored keys.
+            issue = unquote(path[len("/traces/") :])
             try:
                 spans = query_spans(issue, params)
             except Exception as e:

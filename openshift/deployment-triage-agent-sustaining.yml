@@ -45,6 +45,8 @@ spec:
         - configMapRef:
             name: agents-env
         - configMapRef:
+            name: agents-env-sustaining
+        - configMapRef:
             name: chat-env
         # Overrides chat-env: sustaining Vertex credential and GCP project.
         - configMapRef:

@@ -71,6 +71,7 @@ apply configmap-service-ca.yml
 
 # Shared ConfigMaps
 apply configmap-agents-env.yml
+apply configmap-agents-env-sustaining.yml
 apply configmap-chat-env.yml
 apply configmap-chat-env-sustaining.yml
 apply configmap-endpoints-env.yml

@@ -1,0 +1,11 @@
+apiVersion: v1
+data:
+  # Component owners for sustaining streams are mailing lists, which GitLab
+  # cannot assign, so reviewer assignment stays off for this bucket.
+  ASSIGN_MR_REVIEWERS: "false"
+  # The SE deployment runs with Jira status transitions enabled.
+  JIRA_ALLOW_STATUS_CHANGES: "true"
+immutable: false
+kind: ConfigMap
+metadata:
+  name: agents-env-sustaining

@@ -78,10 +78,10 @@ spec:
           protocol: TCP
         resources:
           limits:
-            cpu: "200m"
+            cpu: "1"
             memory: 2Gi
           requests:
-            cpu: "20m"
+            cpu: 100m
             memory: 1Gi
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File

@@ -1074,6 +1074,78 @@ def test_canonical_mr_title_key_normalizes_cve_order():
     assert first == second
 
 
+def test_canonical_mr_title_key_separates_postgresql_module_streams():
+    """postgresql:12, postgresql:16, and non-modular postgresql are different components."""
+    cve = "CVE-2026-6460"
+    modular_12 = _canonical_mr_title_key(
+        package="postgresql",
+        jira_summary=f"{cve} postgresql:12/postgresql: type confusion [rhel-8.10.z]",
+        cve_id=cve,
+        jira_issue="RHEL-309099",
+    )
+    modular_16 = _canonical_mr_title_key(
+        package="postgresql",
+        jira_summary=f"{cve} postgresql:16/postgresql: type confusion [rhel-9.9.z]",
+        cve_id=cve,
+        jira_issue="RHEL-309159",
+    )
+    non_modular = _canonical_mr_title_key(
+        package="postgresql",
+        jira_summary=f"{cve} postgresql: type confusion [rhel-9.9.z]",
+        cve_id=cve,
+        jira_issue="RHEL-309121",
+    )
+
+    assert len({modular_12, modular_16, non_modular}) == 3
+    assert "mr_metadata:v3:postgresql:postgresql:12:" in modular_12
+    assert "mr_metadata:v3:postgresql:postgresql:16:" in modular_16
+    assert "mr_metadata:v3:postgresql::" in non_modular
+
+
+def test_canonical_mr_title_key_shares_one_module_stream_across_rhel_versions():
+    cve = "CVE-2026-6460"
+    rhel_8 = _canonical_mr_title_key(
+        package="postgresql",
+        jira_summary=f"{cve} postgresql:12/postgresql: type confusion [rhel-8.10.z]",
+        cve_id=cve,
+        jira_issue="RHEL-309099",
+    )
+    rhel_9 = _canonical_mr_title_key(
+        package="postgresql",
+        jira_summary=f"{cve} postgresql:12/postgresql: type confusion [rhel-9.2.z]",
+        cve_id=cve,
+        jira_issue="RHEL-400000",
+    )
+
+    assert rhel_8 == rhel_9
+
+
+@pytest.mark.asyncio
+async def test_module_streams_do_not_reuse_each_others_titles():
+    redis = CanonicalTitleRedis()
+    cve = "CVE-2026-6460"
+    modular = await resolve_canonical_mr_title(
+        redis,
+        package="postgresql",
+        jira_issue="RHEL-309099",
+        jira_summary=f"{cve} postgresql:12/postgresql: type confusion [rhel-8.10.z]",
+        cve_id=cve,
+        summary_updated="2026-11-18T00:00:00.000+0000",
+    )
+    non_modular = await resolve_canonical_mr_title(
+        redis,
+        package="postgresql",
+        jira_issue="RHEL-309121",
+        jira_summary=f"{cve} postgresql: type confusion [rhel-9.9.z]",
+        cve_id=cve,
+        summary_updated="2026-11-26T00:00:00.000+0000",
+    )
+
+    assert modular == f"{cve} postgresql:12/postgresql: type confusion"
+    assert non_modular == f"{cve} postgresql: type confusion"
+    assert len(redis.store) == 2
+
+
 def test_canonical_mr_title_key_groups_non_cve_siblings_by_clone_root():
     first = _canonical_mr_title_key(
         package="curl",

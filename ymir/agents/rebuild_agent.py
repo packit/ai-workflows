@@ -516,11 +516,7 @@ async def main() -> None:
     async with redis_client(os.environ["REDIS_URL"]) as redis:
         max_retries = int(os.getenv("MAX_RETRIES", 3))
         container_version = os.getenv("CONTAINER_VERSION", "c10s")
-        rebuild_queue = (
-            RedisQueues.REBUILD_QUEUE_C9S.value
-            if container_version == "c9s"
-            else RedisQueues.REBUILD_QUEUE_C10S.value
-        )
+        rebuild_queue = RedisQueues.get_rebuild_queue_for_container(container_version)
         # Priority twin: ymir_todo-triggered tasks are served before normal ones.
         rebuild_queue_todo = RedisQueues.priority_twin(rebuild_queue)
         redis_logger.info(

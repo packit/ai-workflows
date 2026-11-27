@@ -872,11 +872,7 @@ async def main() -> None:
         max_retries = int(os.getenv("MAX_RETRIES", 3))
         # Determine which rebase queue to listen to based on container version
         container_version = os.getenv("CONTAINER_VERSION", "c10s")
-        rebase_queue = (
-            RedisQueues.REBASE_QUEUE_C9S.value
-            if container_version == "c9s"
-            else RedisQueues.REBASE_QUEUE_C10S.value
-        )
+        rebase_queue = RedisQueues.get_rebase_queue_for_container(container_version)
         # Priority twin: ymir_todo-triggered tasks are served before normal ones.
         rebase_queue_todo = RedisQueues.priority_twin(rebase_queue)
         redis_logger.info(

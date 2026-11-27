@@ -2216,11 +2216,7 @@ async def main() -> None:
         max_retries = int(os.getenv("MAX_RETRIES", 3))
         # Determine which backport queue to listen to based on container version
         container_version = os.getenv("CONTAINER_VERSION", "c10s")
-        backport_queue = (
-            RedisQueues.BACKPORT_QUEUE_C9S.value
-            if container_version == "c9s"
-            else RedisQueues.BACKPORT_QUEUE_C10S.value
-        )
+        backport_queue = RedisQueues.get_backport_queue_for_container(container_version)
         # Priority twin: ymir_todo-triggered tasks are served before normal ones.
         backport_queue_todo = RedisQueues.priority_twin(backport_queue)
         redis_logger.info(

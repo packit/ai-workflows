@@ -1,0 +1,11 @@
+apiVersion: v1
+data:
+  # Exact complement of jira-issue-fetcher-todo-env: sustaining issues only.
+  # The sustaining label is authoritative for SE scope at ingestion time; after
+  # that, routing follows the deployment and queue, not the label. Change this
+  # together with the current todo query so no issue is fetched twice or lost.
+  QUERY: 'project = RHEL AND (labels IN ("ymir_todo", "ymir_todo_triage") OR labels IN ("ymir_consolidate_base", "ymir_consolidate_next")) AND labels = "sustaining"'
+immutable: false
+kind: ConfigMap
+metadata:
+  name: jira-issue-fetcher-todo-env-sustaining

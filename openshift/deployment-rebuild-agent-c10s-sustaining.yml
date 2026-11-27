@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rebuild-agent-c10s-sustaining
+spec:
+  progressDeadlineSeconds: 600
+  # Target replicas when enabling the SE merge: 1.
+  replicas: 0
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: rebuild-agent-c10s-sustaining
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: rebuild-agent-c10s-sustaining
+        deployment: rebuild-agent-c10s-sustaining
+        billing-bucket: sustaining
+        workload: rebuild
+        rhel-major: "10"
+    spec:
+      containers:
+      - args:
+        - /usr/bin/python3
+        - -m
+        - ymir.agents.rebuild_agent
+        env:
+        - name: CONTAINER_VERSION
+          value: "c10s"
+        # Deployment-scoped bucket: consumes rebuild_queue_c10s_sustaining and
+        # dispatches to the *_sustaining downstream queues.
+        - name: SUSTAINING
+          value: "true"
+        - name: REQUESTS_CA_BUNDLE
+          value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+        - name: OPENINFERENCE_HIDE_INPUT_MESSAGES
+          value: "true"
+        envFrom:
+        - configMapRef:
+            name: agents-env
+        - configMapRef:
+            name: agents-env-sustaining
+        - configMapRef:
+            name: chat-env
+        # Overrides chat-env: sustaining Vertex credential and GCP project.
+        - configMapRef:
+            name: chat-env-sustaining
+        - configMapRef:
+            name: endpoints-env
+        - secretRef:
+            name: sentry-env
+        image: 'beeai-agent:c10s'
+        imagePullPolicy: IfNotPresent
+        name: rebuild-agent-c10s-sustaining
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 600m
+            memory: 1Gi
+          requests:
+            cpu: 60m
+            memory: 512Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /git-repos  # NOTE: This path must match GIT_REPO_BASEPATH in configmap/agents-env
+          name: mcp-server-git-repos
+        - mountPath: /home/beeai/rhel-config.json
+          name: rhel-config
+          subPath: rhel-config.json
+        - mountPath: /etc/secrets/jotnar-vertex-sustaining.json
+          name: vertex-key-sustaining
+          subPath: jotnar-vertex-sustaining.json
+        - mountPath: /etc/pki/service-ca
+          name: service-ca
+          readOnly: true
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        runAsNonRoot: true
+        supplementalGroups:
+        - 99
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 90
+      volumes:
+      - name: mcp-server-git-repos
+        persistentVolumeClaim:
+          claimName: mcp-server-git-repos
+      - name: rhel-config
+        configMap:
+          name: rhel-config
+      - name: vertex-key-sustaining
+        secret:
+          secretName: vertex-key-sustaining #pragma: allowlist secret
+      - name: service-ca
+        configMap:
+          name: service-ca-bundle

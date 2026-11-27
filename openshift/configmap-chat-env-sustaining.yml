@@ -1,0 +1,15 @@
+apiVersion: v1
+data:
+  # Overrides chat-env for the sustaining bucket: same models, different Vertex
+  # credential file and GCP project, so every LLM call from a sustaining pod
+  # bills to the sustaining project. Later envFrom sources win, so this
+  # ConfigMap is listed after chat-env in the sustaining deployments.
+  #
+  # TODO: verify this is the sustaining GCP project (it must match the
+  # project_id of the service-account key) before enabling the deployments.
+  GOOGLE_APPLICATION_CREDENTIALS: /etc/secrets/jotnar-vertex-sustaining.json
+  GOOGLE_VERTEX_PROJECT: rhel-se-jotnar
+immutable: false
+kind: ConfigMap
+metadata:
+  name: chat-env-sustaining

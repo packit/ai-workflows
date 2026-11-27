@@ -54,6 +54,14 @@ suspend-jira-issue-fetcher-todo:
 unsuspend-jira-issue-fetcher-todo:
 	oc patch cronjob jira-issue-fetcher-todo --type merge -p '{"spec":{"suspend":false}}'
 
+suspend-jira-issue-fetcher-sustaining:
+	oc patch cronjob jira-issue-fetcher-sustaining --type merge -p '{"spec":{"suspend":true}}'
+	oc patch cronjob jira-issue-fetcher-todo-sustaining --type merge -p '{"spec":{"suspend":true}}'
+
+unsuspend-jira-issue-fetcher-sustaining:
+	oc patch cronjob jira-issue-fetcher-sustaining --type merge -p '{"spec":{"suspend":false}}'
+	oc patch cronjob jira-issue-fetcher-todo-sustaining --type merge -p '{"spec":{"suspend":false}}'
+
 show-triage-queue:
 	$(call show_queue,triage_queue)
 
@@ -78,6 +86,27 @@ show-rebuild-queue-c10s:
 show-clarification-queue:
 	$(call show_single_queue,clarification_needed_queue)
 
+show-triage-queue-sustaining:
+	$(call show_queue,triage_queue_sustaining)
+
+show-backport-queue-c9s-sustaining:
+	$(call show_queue,backport_queue_c9s_sustaining)
+
+show-backport-queue-c10s-sustaining:
+	$(call show_queue,backport_queue_c10s_sustaining)
+
+show-rebase-queue-c9s-sustaining:
+	$(call show_queue,rebase_queue_c9s_sustaining)
+
+show-rebase-queue-c10s-sustaining:
+	$(call show_queue,rebase_queue_c10s_sustaining)
+
+show-rebuild-queue-c9s-sustaining:
+	$(call show_queue,rebuild_queue_c9s_sustaining)
+
+show-rebuild-queue-c10s-sustaining:
+	$(call show_queue,rebuild_queue_c10s_sustaining)
+
 show-reproducer-queue:
 	$(call show_queue,reproducer_queue)
 
@@ -99,23 +128,44 @@ requeue-error:
 logs-triage:
 	oc logs -f deployment/triage-agent
 
+logs-triage-sustaining:
+	oc logs -f deployment/triage-agent-sustaining
+
 logs-backport-c9s:
 	oc logs -f deployment/backport-agent-c9s
+
+logs-backport-c9s-sustaining:
+	oc logs -f deployment/backport-agent-c9s-sustaining
 
 logs-backport-c10s:
 	oc logs -f deployment/backport-agent-c10s
 
+logs-backport-c10s-sustaining:
+	oc logs -f deployment/backport-agent-c10s-sustaining
+
 logs-rebase-c9s:
 	oc logs -f deployment/rebase-agent-c9s
+
+logs-rebase-c9s-sustaining:
+	oc logs -f deployment/rebase-agent-c9s-sustaining
 
 logs-rebase-c10s:
 	oc logs -f deployment/rebase-agent-c10s
 
+logs-rebase-c10s-sustaining:
+	oc logs -f deployment/rebase-agent-c10s-sustaining
+
 logs-rebuild-c9s:
 	oc logs -f deployment/rebuild-agent-c9s
 
+logs-rebuild-c9s-sustaining:
+	oc logs -f deployment/rebuild-agent-c9s-sustaining
+
 logs-rebuild-c10s:
 	oc logs -f deployment/rebuild-agent-c10s
+
+logs-rebuild-c10s-sustaining:
+	oc logs -f deployment/rebuild-agent-c10s-sustaining
 
 logs-reproducer:
 	oc logs -f deployment/reproducer-agent
@@ -135,15 +185,19 @@ logs-redis-commander:
 logs-otel-collector:
 	oc logs -f deployment/otel-collector
 
+# `SUSTAINING=true` routes the task to the sustaining triage queue (only the
+# sustaining triage deployments consume it).
+TRIAGE_QUEUE_NAME := $(if $(filter true TRUE 1 yes YES,$(SUSTAINING)),triage_queue_sustaining,triage_queue)
+
 process:
 	@if [ -z "$(ISSUE)" ]; then \
-		echo "ERROR: ISSUE parameter is required. Usage: make process ISSUE=RHEL-XXXX"; \
+		echo "ERROR: ISSUE parameter is required. Usage: make process ISSUE=RHEL-XXXX [SUSTAINING=true]"; \
 		exit 1; \
 	fi
-	@echo "Pushing $(ISSUE) to triage_queue..."
-	@oc exec deployment/valkey -- valkey-cli --tls --cert /tls/tls.crt --key /tls/tls.key --cacert /etc/pki/service-ca/service-ca.crt LPUSH triage_queue \
+	@echo "Pushing $(ISSUE) to $(TRIAGE_QUEUE_NAME)..."
+	@oc exec deployment/valkey -- valkey-cli --tls --cert /tls/tls.crt --key /tls/tls.key --cacert /etc/pki/service-ca/service-ca.crt LPUSH $(TRIAGE_QUEUE_NAME) \
 		'{"metadata":{"issue":"$(ISSUE)"},"attempts":0,"user_triggered":false}'
-	@echo "✓ Task queued successfully. View queue with: make show-triage-queue"
+	@echo "✓ Task queued successfully. View queue with: make show-triage-queue$(if $(filter true TRUE 1 yes YES,$(SUSTAINING)),-sustaining,)"
 
 # Manually enqueue a reproducer job (also when TRIAGE_ENQUEUE_REPRODUCER=false).
 # Same interface as the local `make trigger-reproducer` target.
@@ -214,12 +268,21 @@ unsuspend-sweeps:
 .PHONY: deploy changelog run-jira-issue-fetcher run-jira-issue-fetcher-todo \
 	suspend-jira-issue-fetcher unsuspend-jira-issue-fetcher \
 	suspend-jira-issue-fetcher-todo unsuspend-jira-issue-fetcher-todo \
+	suspend-jira-issue-fetcher-sustaining unsuspend-jira-issue-fetcher-sustaining \
 	show-triage-queue show-rebase-queue-c9s show-rebase-queue-c10s \
 	show-backport-queue-c9s show-backport-queue-c10s \
 	show-rebuild-queue-c9s show-rebuild-queue-c10s \
+	show-triage-queue-sustaining \
+	show-rebase-queue-c9s-sustaining show-rebase-queue-c10s-sustaining \
+	show-backport-queue-c9s-sustaining show-backport-queue-c10s-sustaining \
+	show-rebuild-queue-c9s-sustaining show-rebuild-queue-c10s-sustaining \
 	show-clarification-queue show-reproducer-queue show-error-list requeue-error \
 	logs-triage logs-backport-c9s logs-backport-c10s \
 	logs-rebase-c9s logs-rebase-c10s logs-rebuild-c9s logs-rebuild-c10s \
+	logs-triage-sustaining \
+	logs-backport-c9s-sustaining logs-backport-c10s-sustaining \
+	logs-rebase-c9s-sustaining logs-rebase-c10s-sustaining \
+	logs-rebuild-c9s-sustaining logs-rebuild-c10s-sustaining \
 	logs-reproducer logs-mcp logs-valkey logs-phoenix \
 	logs-redis-commander logs-otel-collector process trigger-reproducer \
 	run-sweep-dependency run-sweep-y-stream run-sweep-pr-pending run-sweep-no-patch \

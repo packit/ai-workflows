@@ -32,7 +32,13 @@ import redis.asyncio as redis
 import requests
 
 from ymir.common.base_utils import fix_await, get_jira_auth_headers, redis_client
-from ymir.common.constants import JIRA_SEARCH_PATH, JiraLabels, RedisQueues
+from ymir.common.constants import (
+    JIRA_SEARCH_PATH,
+    JiraLabels,
+    RedisQueues,
+    is_sustaining_deployment,
+    is_sustaining_issue,
+)
 from ymir.common.issue_lock import LOCK_KEY_PREFIX
 from ymir.common.logging_setup import configure_logging
 from ymir.common.merge_queue import SubmitResult, submit_merge_job
@@ -499,6 +505,8 @@ class JiraIssueFetcher:
                                         case (
                                             RedisQueues.TRIAGE_QUEUE.value
                                             | RedisQueues.TRIAGE_QUEUE_TODO.value
+                                            | RedisQueues.TRIAGE_QUEUE_SUSTAINING.value
+                                            | RedisQueues.TRIAGE_QUEUE_SUSTAINING_TODO.value
                                         ):
                                             schema = TriageInputSchema.model_validate(task.metadata)
                                             issue_key = schema.issue.upper()
@@ -515,6 +523,18 @@ class JiraIssueFetcher:
                                             | RedisQueues.BACKPORT_QUEUE_C10S_TODO.value
                                             | RedisQueues.REBUILD_QUEUE_C9S_TODO.value
                                             | RedisQueues.REBUILD_QUEUE_C10S_TODO.value
+                                            | RedisQueues.REBASE_QUEUE_C9S_SUSTAINING.value
+                                            | RedisQueues.REBASE_QUEUE_C10S_SUSTAINING.value
+                                            | RedisQueues.BACKPORT_QUEUE_C9S_SUSTAINING.value
+                                            | RedisQueues.BACKPORT_QUEUE_C10S_SUSTAINING.value
+                                            | RedisQueues.REBUILD_QUEUE_C9S_SUSTAINING.value
+                                            | RedisQueues.REBUILD_QUEUE_C10S_SUSTAINING.value
+                                            | RedisQueues.REBASE_QUEUE_C9S_SUSTAINING_TODO.value
+                                            | RedisQueues.REBASE_QUEUE_C10S_SUSTAINING_TODO.value
+                                            | RedisQueues.BACKPORT_QUEUE_C9S_SUSTAINING_TODO.value
+                                            | RedisQueues.BACKPORT_QUEUE_C10S_SUSTAINING_TODO.value
+                                            | RedisQueues.REBUILD_QUEUE_C9S_SUSTAINING_TODO.value
+                                            | RedisQueues.REBUILD_QUEUE_C10S_SUSTAINING_TODO.value
                                             | RedisQueues.CLARIFICATION_NEEDED_QUEUE.value
                                             | RedisQueues.BACKPORT_QUEUE.value
                                             | RedisQueues.REBASE_QUEUE.value
@@ -592,8 +612,8 @@ class JiraIssueFetcher:
 
     async def _get_queue_depth(self, redis_conn: redis.Redis) -> int:
         """Return the combined depth of the two queues this fetcher pushes to."""
-        triage_depth = await fix_await(redis_conn.llen(RedisQueues.TRIAGE_QUEUE.value))
-        todo_depth = await fix_await(redis_conn.llen(RedisQueues.TRIAGE_QUEUE_TODO.value))
+        triage_depth = await fix_await(redis_conn.llen(RedisQueues.triage_queue()))
+        todo_depth = await fix_await(redis_conn.llen(RedisQueues.triage_queue(user_triggered=True)))
         return triage_depth + todo_depth
 
     async def push_issues_to_queue(
@@ -781,6 +801,7 @@ class JiraIssueFetcher:
             skipped_count = 0
             modular_count = 0
 
+            deployment_sustaining = is_sustaining_deployment()
             for issue in issues:
                 try:
                     if effective_max_issues is not None and pushed_count >= effective_max_issues:
@@ -789,6 +810,18 @@ class JiraIssueFetcher:
 
                     issue_key = issue["key"]
                     fields = issue.get("fields") or {}
+
+                    issue_labels = fields.get("labels", [])
+                    if deployment_sustaining != is_sustaining_issue(issue_labels):
+                        logger.info(
+                            "Skipping issue %s - bucket mismatch (deployment sustaining=%s, "
+                            "issue sustaining=%s)",
+                            issue_key,
+                            deployment_sustaining,
+                            is_sustaining_issue(issue_labels),
+                        )
+                        skipped_count += 1
+                        continue
 
                     downstream_component = fields.get("customfield_10669") or ""
                     if (
@@ -875,11 +908,7 @@ class JiraIssueFetcher:
 
                     # ymir_todo-triggered tasks go to the priority queue so the
                     # triage agent pops them before normal-flow tasks.
-                    target_queue = (
-                        RedisQueues.TRIAGE_QUEUE_TODO.value
-                        if user_triggered
-                        else RedisQueues.TRIAGE_QUEUE.value
-                    )
+                    target_queue = RedisQueues.triage_queue(user_triggered=user_triggered)
                     await fix_await(redis_conn.lpush(target_queue, task.to_json()))
                     pushed_count += 1
 

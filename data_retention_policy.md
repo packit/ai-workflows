@@ -62,6 +62,7 @@ env:
 
 **Queues:**
 - Input: `triage_queue`, `rebase_queue_c9s`, `rebase_queue_c10s`, `backport_queue_c9s`, `backport_queue_c10s`, `clarification_needed_queue`
+- Input (sustaining bucket, only used when the sustaining deployments are enabled): `triage_queue_sustaining`, `rebase_queue_{c9s,c10s}_sustaining`, `backport_queue_{c9s,c10s}_sustaining`, `rebuild_queue_{c9s,c10s}_sustaining`, each with its `_todo` priority twin
 - Results: `error_list`, `open_ended_analysis_list`, `completed_rebase_list`, `completed_backport_list`
 **Recommendation:** Configure eviction policy and set TTL on completed task lists
 

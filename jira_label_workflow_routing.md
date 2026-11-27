@@ -168,6 +168,15 @@ These labels are applied to GitLab merge requests (not Jira issues):
 | `completed_backport_list` | Output | Backport success | `ymir_backported` | Active |
 | `completed_reproducer_list` | Output | Reproducer success/failure (non-retry) | `ymir_reproducer_*` | Active |
 
+**Sustaining bucket.** Deployments running with `SUSTAINING=true` (the
+sustaining Jotnar pool) use a parallel family of the input queues —
+`triage_queue_sustaining`, `{rebase,backport,rebuild}_queue_{c9s,c10s}_sustaining`
+and their `_todo` priority twins — with the same triggers, labels and
+transitions. The bucket is a property of the deployment and of the queue the
+task came from, not of the issue: the fetcher routes sustaining issues into
+these lists, the sustaining agents consume them, and retries replay onto the
+source queue.
+
 ## Deduplication Logic
 
 **Trigger labels are consumed by the fetcher, all other labels by the agent.** The fetcher atomically removes `ymir_todo` and `ymir_retry_needed` before pushing to Redis, replacing them with `ymir_triage_in_progress` so the very next sweep sees the in-progress marker and skips. The triage agent cleans up old `ymir_*` labels when it pops the task, preserving `ymir_rebase_waiting_for_siblings` until the sibling coordination completes. If the fetcher's atomic flip fails after retries, the Redis push is **skipped** — the issue stays eligible for the next sweep with its trigger label intact, rather than being enqueued without a dedup anchor.

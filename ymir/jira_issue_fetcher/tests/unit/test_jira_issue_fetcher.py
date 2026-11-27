@@ -2085,3 +2085,38 @@ async def test_process_consolidation_labels_skips_modular_next_issue(fetcher, mo
     submitted = await fetcher._process_consolidation_labels(issues)
 
     assert submitted == 0
+
+
+@pytest.mark.asyncio
+async def test_push_issues_to_queue_skips_bucket_mismatch(fetcher, mock_redis_context, monkeypatch):
+    """A sustaining deployment must not enqueue issues outside its bucket."""
+    mock_redis, _ = mock_redis_context
+    monkeypatch.setenv("SUSTAINING", "true")
+    mock_redis.should_receive("lpush").never()
+
+    issues = [{"key": "NEW-1", "fields": {"labels": []}}]
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    assert await fetcher.push_issues_to_queue(issues) == 0
+
+
+@pytest.mark.asyncio
+async def test_push_issues_to_queue_accepts_matching_sustaining_bucket(
+    fetcher, mock_redis_context, monkeypatch
+):
+    mock_redis, _ = mock_redis_context
+    monkeypatch.setenv("SUSTAINING", "true")
+
+    task = Task.from_issue("NEW-1")
+    mock_redis.should_receive("lpush").with_args(
+        RedisQueues.TRIAGE_QUEUE_SUSTAINING.value, task.to_json()
+    ).and_return(create_async_mock_return_value(1)).once()
+
+    issues = [{"key": "NEW-1", "fields": {"labels": ["sustaining"]}}]
+    flexmock(fetcher).should_receive("_get_existing_issue_keys").and_return(
+        create_async_mock_return_value(set())
+    )
+
+    assert await fetcher.push_issues_to_queue(issues) == 1

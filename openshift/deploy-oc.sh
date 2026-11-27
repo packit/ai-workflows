@@ -71,7 +71,9 @@ apply configmap-service-ca.yml
 
 # Shared ConfigMaps
 apply configmap-agents-env.yml
+apply configmap-agents-env-sustaining.yml
 apply configmap-chat-env.yml
+apply configmap-chat-env-sustaining.yml
 apply configmap-endpoints-env.yml
 apply configmap-jira-env.yml
 apply configmap-kerberos-env.yml
@@ -146,6 +148,16 @@ apply deployment-reproducer-agent.yml
 apply deployment-mr-consolidation-agent-c9s.yml
 apply deployment-mr-consolidation-agent-c10s.yml
 
+# Sustaining bucket (SUSTAINING=true). Created at 0 replicas: scale them up
+# when enabling sustaining routing.
+apply deployment-triage-agent-sustaining.yml
+apply deployment-backport-agent-c9s-sustaining.yml
+apply deployment-backport-agent-c10s-sustaining.yml
+apply deployment-rebase-agent-c9s-sustaining.yml
+apply deployment-rebase-agent-c10s-sustaining.yml
+apply deployment-rebuild-agent-c9s-sustaining.yml
+apply deployment-rebuild-agent-c10s-sustaining.yml
+
 # Jira Issue Fetcher
 apply imagestream-jira-issue-fetcher.yml
 import_image jira-issue-fetcher
@@ -154,6 +166,12 @@ apply configmap-jira-issue-fetcher-filter-env.yml
 apply configmap-jira-issue-fetcher-todo-env.yml
 apply cronjob-jira-issue-fetcher.yml
 apply cronjob-jira-issue-fetcher-todo.yml
+
+# Sustaining fetchers (suspended until sustaining routing is enabled).
+apply configmap-jira-issue-fetcher-filter-env-sustaining.yml
+apply configmap-jira-issue-fetcher-todo-env-sustaining.yml
+apply cronjob-jira-issue-fetcher-sustaining.yml
+apply cronjob-jira-issue-fetcher-todo-sustaining.yml
 
 # MR Cleanup
 apply imagestream-mr-cleanup.yml
